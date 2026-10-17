@@ -1,0 +1,6 @@
+{
+  "name": "GrandStay - Hybrid Hostel & Hotel Enterprise Management System",
+  "description": "Production-grade multi-property management platform supporting unified administrative operations, distinct hostel and hotel business workflows, and property-isolated security.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
