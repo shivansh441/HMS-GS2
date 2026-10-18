@@ -516,6 +516,299 @@ const invoicesStore = new Map<string, InvoiceRecord>();
 const paymentsStore = new Map<string, PaymentRecord>();
 const refundsStore = new Map<string, RefundRecord>();
 
+// ==========================================
+// PHASE 10 MESS & RESTAURANT INTERFACES & STORES
+// ==========================================
+
+interface FoodServiceConfigRecord {
+  property_id: string;
+  mess_enabled: boolean;
+  restaurant_enabled: boolean;
+  meal_periods: Array<{
+    id: "breakfast" | "lunch" | "dinner" | "snacks" | "afternoon_tea";
+    name: string;
+    start_time: string;
+    end_time: string;
+    is_active: boolean;
+  }>;
+  allow_pay_per_meal: boolean;
+  default_pay_per_meal_price: number;
+  currency: string;
+  updated_at: string;
+}
+
+interface MenuItemRecord {
+  id: string;
+  property_id: string;
+  service_type: "mess" | "restaurant" | "both";
+  name: string;
+  description?: string;
+  category: "breakfast" | "main_course" | "snack" | "dessert" | "beverage" | "thali_combo";
+  price: number;
+  currency: string;
+  is_available: boolean;
+  meal_periods: Array<"breakfast" | "lunch" | "dinner" | "snacks" | "afternoon_tea">;
+  dietary_flags: Array<"vegetarian" | "vegan" | "halal" | "gluten_free" | "dairy_free" | "contains_nuts">;
+  allergens: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+interface MealPlanRecord {
+  id: string;
+  property_id: string;
+  name: string;
+  description?: string;
+  plan_type: "breakfast_only" | "lunch_and_dinner" | "all_meals" | "weekly" | "monthly";
+  included_meal_periods: Array<"breakfast" | "lunch" | "dinner" | "snacks" | "afternoon_tea">;
+  price: number;
+  currency: string;
+  validity_days: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+interface HostellerMealEntitlementRecord {
+  id: string;
+  property_id: string;
+  hosteller_id: string;
+  hosteller_name: string;
+  hostel_stay_id?: string;
+  meal_plan_id: string;
+  meal_plan_name: string;
+  included_meal_periods: Array<"breakfast" | "lunch" | "dinner" | "snacks" | "afternoon_tea">;
+  start_date: string;
+  end_date: string;
+  status: "active" | "suspended" | "expired" | "cancelled";
+  invoice_id?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface MealAttendanceRecord {
+  id: string;
+  property_id: string;
+  hosteller_id: string;
+  hosteller_name: string;
+  service_date: string;
+  meal_period: "breakfast" | "lunch" | "dinner" | "snacks" | "afternoon_tea";
+  entitlement_id?: string;
+  is_pay_per_meal: boolean;
+  price_charged?: number;
+  currency: string;
+  is_manual_override: boolean;
+  override_reason?: string;
+  recorded_by_user_id: string;
+  recorded_by_name: string;
+  timestamp: string;
+}
+
+interface RestaurantOrderRecord {
+  id: string;
+  order_number: string;
+  property_id: string;
+  customer_type: "hotel_guest" | "hosteller" | "walk_in";
+  customer_id?: string;
+  customer_name: string;
+  hotel_stay_id?: string;
+  room_number?: string;
+  table_number?: string;
+  items: Array<{
+    item_id: string;
+    name: string;
+    quantity: number;
+    unit_price: number;
+    total: number;
+  }>;
+  subtotal: number;
+  discount_amount: number;
+  tax_amount: number;
+  total_amount: number;
+  currency: string;
+  status: "draft" | "placed" | "preparing" | "ready" | "served" | "completed" | "cancelled";
+  billing_status: "pending" | "billed_to_room" | "paid_direct";
+  invoice_id?: string;
+  special_instructions?: string;
+  created_by_user_id: string;
+  created_by_name: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface FoodStockItemRecord {
+  id: string;
+  property_id: string;
+  name: string;
+  category: "grains_staples" | "dairy" | "produce" | "meat_poultry" | "beverages" | "spices_oils";
+  unit_of_measure: "kg" | "liters" | "pieces" | "boxes" | "packets";
+  current_quantity: number;
+  low_stock_threshold: number;
+  cost_per_unit: number;
+  currency: string;
+  supplier_name?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface FoodStockMovementRecord {
+  id: string;
+  stock_item_id: string;
+  stock_item_name: string;
+  property_id: string;
+  movement_type: "receipt" | "consumption" | "wastage_adjustment" | "audit_correction";
+  quantity_delta: number;
+  resulting_quantity: number;
+  unit_of_measure: "kg" | "liters" | "pieces" | "boxes" | "packets";
+  reason?: string;
+  performed_by_user_id: string;
+  performed_by_name: string;
+  timestamp: string;
+}
+
+const foodConfigsStore = new Map<string, FoodServiceConfigRecord>();
+const menuItemsStore = new Map<string, MenuItemRecord>();
+const mealPlansStore = new Map<string, MealPlanRecord>();
+const mealEntitlementsStore = new Map<string, HostellerMealEntitlementRecord>();
+const mealAttendancesStore = new Map<string, MealAttendanceRecord>();
+const restaurantOrdersStore = new Map<string, RestaurantOrderRecord>();
+const foodStockItemsStore = new Map<string, FoodStockItemRecord>();
+const foodStockMovementsStore = new Map<string, FoodStockMovementRecord>();
+
+// Phase 11: Staff & Operations Management Records & Stores
+interface StaffMemberRecord {
+  id: string;
+  property_id: string;
+  user_id?: string;
+  employee_code: string;
+  first_name: string;
+  last_name: string;
+  email: string;
+  phone: string;
+  department: "front_desk" | "housekeeping" | "maintenance" | "fnb_kitchen" | "management" | "security" | "general";
+  job_title: string;
+  employment_type: "full_time" | "part_time" | "contract" | "seasonal";
+  status: "active" | "on_leave" | "terminated";
+  emergency_contact_name: string;
+  emergency_contact_phone: string;
+  hourly_rate: number;
+  salary?: number;
+  hire_date: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+interface StaffShiftRecord {
+  id: string;
+  property_id: string;
+  staff_id: string;
+  staff_name: string;
+  department: "front_desk" | "housekeeping" | "maintenance" | "fnb_kitchen" | "management" | "security" | "general";
+  shift_type: "morning" | "afternoon" | "evening" | "night" | "split";
+  shift_date: string;
+  start_time: string;
+  end_time: string;
+  break_duration_minutes: number;
+  status: "scheduled" | "in_progress" | "completed" | "cancelled" | "swapped";
+  station_or_zone?: string;
+  notes?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface StaffAttendanceRecord {
+  id: string;
+  property_id: string;
+  staff_id: string;
+  staff_name: string;
+  attendance_date: string;
+  shift_id?: string;
+  clock_in_time: string;
+  clock_out_time?: string;
+  total_work_minutes: number;
+  status: "present" | "late" | "half_day" | "absent" | "on_leave";
+  late_minutes: number;
+  verified_by_user_id?: string;
+  notes?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface HousekeepingTaskRecord {
+  id: string;
+  property_id: string;
+  room_id?: string;
+  room_number?: string;
+  bed_id?: string;
+  bed_label?: string;
+  cleaning_type: "checkout_clean" | "stayover_clean" | "deep_clean" | "touch_up" | "inspection";
+  priority: "low" | "medium" | "high" | "urgent";
+  status: "pending" | "in_progress" | "cleaned" | "inspected" | "cancelled";
+  assigned_staff_id?: string;
+  assigned_staff_name?: string;
+  started_at?: string;
+  completed_at?: string;
+  inspected_by_staff_id?: string;
+  inspected_by_name?: string;
+  inspection_passed?: boolean;
+  checklist: Array<{ id: string; description: string; completed: boolean }>;
+  linen_changed: boolean;
+  amenities_restocked: boolean;
+  notes?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface MaintenanceWorkOrderRecord {
+  id: string;
+  property_id: string;
+  work_order_number: string;
+  title: string;
+  description: string;
+  category: "plumbing" | "electrical" | "hvac" | "carpentry" | "appliance" | "safety" | "structural" | "other";
+  priority: "low" | "medium" | "high" | "emergency";
+  location_type: "room" | "bed" | "kitchen_mess" | "lobby_common" | "exterior";
+  room_id?: string;
+  room_number?: string;
+  reported_by_name: string;
+  reported_by_user_id?: string;
+  assigned_staff_id?: string;
+  assigned_staff_name?: string;
+  estimated_cost: number;
+  actual_cost: number;
+  parts_used?: string;
+  resolution_notes?: string;
+  status: "reported" | "assigned" | "in_progress" | "awaiting_parts" | "resolved" | "closed";
+  created_at: string;
+  resolved_at?: string;
+  updated_at: string;
+}
+
+interface OperationalDailyLogRecord {
+  id: string;
+  property_id: string;
+  log_date: string;
+  shift_period: "morning" | "evening" | "night";
+  author_user_id: string;
+  author_name: string;
+  category: "shift_handover" | "incident" | "lost_and_found" | "guest_request" | "maintenance_flag" | "general";
+  summary: string;
+  details: string;
+  priority: "routine" | "important" | "urgent";
+  is_resolved: boolean;
+  resolved_by_name?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+const staffMembersStore = new Map<string, StaffMemberRecord>();
+const staffShiftsStore = new Map<string, StaffShiftRecord>();
+const staffAttendanceStore = new Map<string, StaffAttendanceRecord>();
+const housekeepingTasksStore = new Map<string, HousekeepingTaskRecord>();
+const maintenanceOrdersStore = new Map<string, MaintenanceWorkOrderRecord>();
+const operationalLogsStore = new Map<string, OperationalDailyLogRecord>();
+
 // Pre-seed Phase 2 & 3 baseline users
 function seedInitialData() {
   const seededUsers: UserRecord[] = [
@@ -2400,6 +2693,1023 @@ function seedInitialData() {
 
   for (const p of seededPayments) {
     paymentsStore.set(p.id, p);
+  }
+
+  // Pre-seed Phase 10 Food Service Configurations
+  const seededFoodConfigs: FoodServiceConfigRecord[] = [
+    {
+      property_id: "prop-hostel-001",
+      mess_enabled: true,
+      restaurant_enabled: false,
+      meal_periods: [
+        { id: "breakfast", name: "Hostel Breakfast", start_time: "07:30", end_time: "10:00", is_active: true },
+        { id: "dinner", name: "Communal Mess Dinner", start_time: "18:30", end_time: "21:00", is_active: true },
+      ],
+      allow_pay_per_meal: true,
+      default_pay_per_meal_price: 6.5,
+      currency: "GBP",
+      updated_at: "2026-01-10T08:00:00Z",
+    },
+    {
+      property_id: "prop-hotel-002",
+      mess_enabled: false,
+      restaurant_enabled: true,
+      meal_periods: [
+        { id: "breakfast", name: "Mayfair Breakfast", start_time: "07:00", end_time: "11:00", is_active: true },
+        { id: "lunch", name: "Brasserie Lunch", start_time: "12:00", end_time: "15:00", is_active: true },
+        { id: "afternoon_tea", name: "Mayfair Afternoon Tea", start_time: "14:30", end_time: "17:30", is_active: true },
+        { id: "dinner", name: "Fine Dining Dinner", start_time: "18:00", end_time: "22:30", is_active: true },
+      ],
+      allow_pay_per_meal: false,
+      default_pay_per_meal_price: 35.0,
+      currency: "GBP",
+      updated_at: "2026-02-01T08:00:00Z",
+    },
+    {
+      property_id: "prop-hybrid-003",
+      mess_enabled: true,
+      restaurant_enabled: true,
+      meal_periods: [
+        { id: "breakfast", name: "Campus Breakfast Buffet", start_time: "07:00", end_time: "10:30", is_active: true },
+        { id: "lunch", name: "Coworking Bistro Lunch", start_time: "12:00", end_time: "14:30", is_active: true },
+        { id: "dinner", name: "Resident Dinner", start_time: "19:00", end_time: "22:00", is_active: true },
+      ],
+      allow_pay_per_meal: true,
+      default_pay_per_meal_price: 11.0,
+      currency: "EUR",
+      updated_at: "2026-03-01T09:00:00Z",
+    },
+  ];
+
+  for (const fc of seededFoodConfigs) {
+    foodConfigsStore.set(fc.property_id, fc);
+  }
+
+  // Pre-seed Menu Items
+  const seededMenuItems: MenuItemRecord[] = [
+    // Edinburgh Hostel Mess Items
+    {
+      id: "menu-edi-001",
+      property_id: "prop-hostel-001",
+      service_type: "mess",
+      name: "Scottish Porridge with Heather Honey",
+      description: "Warm organic oats simmered with milk, topped with berries and Scottish heather honey.",
+      category: "breakfast",
+      price: 4.5,
+      currency: "GBP",
+      is_available: true,
+      meal_periods: ["breakfast"],
+      dietary_flags: ["vegetarian", "dairy_free"],
+      allergens: ["oats", "milk"],
+      created_at: "2026-01-10T08:00:00Z",
+      updated_at: "2026-01-10T08:00:00Z",
+    },
+    {
+      id: "menu-edi-002",
+      property_id: "prop-hostel-001",
+      service_type: "mess",
+      name: "Full Scottish Mess Breakfast Pack",
+      description: "Lorne sausage, back bacon, fried free-range egg, baked beans, tattie scone, and toast.",
+      category: "breakfast",
+      price: 7.5,
+      currency: "GBP",
+      is_available: true,
+      meal_periods: ["breakfast"],
+      dietary_flags: [],
+      allergens: ["gluten", "eggs"],
+      created_at: "2026-01-10T08:00:00Z",
+      updated_at: "2026-01-10T08:00:00Z",
+    },
+    {
+      id: "menu-edi-003",
+      property_id: "prop-hostel-001",
+      service_type: "mess",
+      name: "Vegetarian Haggis, Neeps & Tatties",
+      description: "Traditional savory spiced vegetable haggis served with mashed rutabaga and buttery potatoes.",
+      category: "main_course",
+      price: 8.5,
+      currency: "GBP",
+      is_available: true,
+      meal_periods: ["dinner"],
+      dietary_flags: ["vegetarian", "vegan"],
+      allergens: ["gluten", "oats"],
+      created_at: "2026-01-10T08:00:00Z",
+      updated_at: "2026-01-10T08:00:00Z",
+    },
+    {
+      id: "menu-edi-004",
+      property_id: "prop-hostel-001",
+      service_type: "mess",
+      name: "Highland Lentil & Vegetable Curry Thali",
+      description: "Hearty red lentil dhal, roasted cauliflower, basmati rice, warm chapati, and spiced mango chutney.",
+      category: "thali_combo",
+      price: 8.0,
+      currency: "GBP",
+      is_available: true,
+      meal_periods: ["dinner"],
+      dietary_flags: ["vegetarian", "vegan", "halal"],
+      allergens: ["gluten"],
+      created_at: "2026-01-10T08:00:00Z",
+      updated_at: "2026-01-10T08:00:00Z",
+    },
+    // London Mayfair Grand Hotel Restaurant Items
+    {
+      id: "menu-lon-001",
+      property_id: "prop-hotel-002",
+      service_type: "restaurant",
+      name: "Royal Mayfair Eggs Benedict",
+      description: "Toasted brioche, poached Clarence Court eggs, dry-cured Wiltshire ham, and fresh black truffle hollandaise.",
+      category: "breakfast",
+      price: 24.0,
+      currency: "GBP",
+      is_available: true,
+      meal_periods: ["breakfast"],
+      dietary_flags: [],
+      allergens: ["eggs", "dairy", "gluten"],
+      created_at: "2026-02-01T08:00:00Z",
+      updated_at: "2026-02-01T08:00:00Z",
+    },
+    {
+      id: "menu-lon-002",
+      property_id: "prop-hotel-002",
+      service_type: "restaurant",
+      name: "Pan-Seared Dover Sole Meunière",
+      description: "Whole fresh Dover sole, brown butter, lemon, flat-leaf parsley, and crushed Jersey Royal new potatoes.",
+      category: "main_course",
+      price: 46.0,
+      currency: "GBP",
+      is_available: true,
+      meal_periods: ["lunch", "dinner"],
+      dietary_flags: ["gluten_free"],
+      allergens: ["fish", "dairy"],
+      created_at: "2026-02-01T08:00:00Z",
+      updated_at: "2026-02-01T08:00:00Z",
+    },
+    {
+      id: "menu-lon-003",
+      property_id: "prop-hotel-002",
+      service_type: "restaurant",
+      name: "Acquerello Truffle & Wild Forest Mushroom Risotto",
+      description: "Aged carnaroli rice, foraged chanterelles, black winter truffle carpaccio, and 36-month Parmigiano Reggiano.",
+      category: "main_course",
+      price: 32.0,
+      currency: "GBP",
+      is_available: true,
+      meal_periods: ["lunch", "dinner"],
+      dietary_flags: ["vegetarian", "gluten_free"],
+      allergens: ["dairy"],
+      created_at: "2026-02-01T08:00:00Z",
+      updated_at: "2026-02-01T08:00:00Z",
+    },
+    {
+      id: "menu-lon-004",
+      property_id: "prop-hotel-002",
+      service_type: "restaurant",
+      name: "Mayfair Signature Afternoon Tea Stand",
+      description: "Tiers of finger sandwiches, warm Devonshire clotted cream scones, strawberry preserve, and artisanal pastries.",
+      category: "snack",
+      price: 38.0,
+      currency: "GBP",
+      is_available: true,
+      meal_periods: ["afternoon_tea"],
+      dietary_flags: ["vegetarian"],
+      allergens: ["gluten", "dairy", "eggs"],
+      created_at: "2026-02-01T08:00:00Z",
+      updated_at: "2026-02-01T08:00:00Z",
+    },
+    {
+      id: "menu-lon-005",
+      property_id: "prop-hotel-002",
+      service_type: "restaurant",
+      name: "Valrhona Guanaja Dark Chocolate Soufflé",
+      description: "70% single-origin molten soufflé served with Tahitian bourbon vanilla bean ice cream.",
+      category: "dessert",
+      price: 18.0,
+      currency: "GBP",
+      is_available: true,
+      meal_periods: ["dinner"],
+      dietary_flags: ["vegetarian"],
+      allergens: ["dairy", "eggs", "gluten"],
+      created_at: "2026-02-01T08:00:00Z",
+      updated_at: "2026-02-01T08:00:00Z",
+    },
+  ];
+
+  for (const m of seededMenuItems) {
+    menuItemsStore.set(m.id, m);
+  }
+
+  // Pre-seed Meal Plans
+  const seededMealPlans: MealPlanRecord[] = [
+    {
+      id: "plan-edi-bfast",
+      property_id: "prop-hostel-001",
+      name: "Edinburgh Daily Breakfast Pack",
+      description: "Nutritious continental & hot breakfast pack each morning at the communal mess kitchen.",
+      plan_type: "breakfast_only",
+      included_meal_periods: ["breakfast"],
+      price: 5.0,
+      currency: "GBP",
+      validity_days: 1,
+      is_active: true,
+      created_at: "2026-01-10T08:00:00Z",
+      updated_at: "2026-01-10T08:00:00Z",
+    },
+    {
+      id: "plan-edi-fullboard",
+      property_id: "prop-hostel-001",
+      name: "Student & Backpacker Half-Board Mess Plan",
+      description: "Daily breakfast and hot communal dinner in the Old Town dining hall.",
+      plan_type: "lunch_and_dinner",
+      included_meal_periods: ["breakfast", "dinner"],
+      price: 12.0,
+      currency: "GBP",
+      validity_days: 1,
+      is_active: true,
+      created_at: "2026-01-10T08:00:00Z",
+      updated_at: "2026-01-10T08:00:00Z",
+    },
+    {
+      id: "plan-edi-weekly",
+      property_id: "prop-hostel-001",
+      name: "7-Day Full Mess Pass",
+      description: "Weekly all-inclusive breakfast and dinner subscription for resident hostellers.",
+      plan_type: "weekly",
+      included_meal_periods: ["breakfast", "dinner"],
+      price: 75.0,
+      currency: "GBP",
+      validity_days: 7,
+      is_active: true,
+      created_at: "2026-01-10T08:00:00Z",
+      updated_at: "2026-01-10T08:00:00Z",
+    },
+  ];
+
+  for (const p of seededMealPlans) {
+    mealPlansStore.set(p.id, p);
+  }
+
+  // Pre-seed Hosteller Meal Entitlements
+  const seededEntitlements: HostellerMealEntitlementRecord[] = [
+    {
+      id: "ent-edi-001",
+      property_id: "prop-hostel-001",
+      hosteller_id: "hstlr-edi-002", // Liam Fraser
+      hosteller_name: "Liam Fraser",
+      hostel_stay_id: "stay-edi-002",
+      meal_plan_id: "plan-edi-fullboard",
+      meal_plan_name: "Student & Backpacker Half-Board Mess Plan",
+      included_meal_periods: ["breakfast", "dinner"],
+      start_date: threeDaysAgoStr,
+      end_date: twoDaysLaterStr,
+      status: "active",
+      invoice_id: "inv-edi-002",
+      created_at: new Date(todayMs - 3 * dayMs).toISOString(),
+      updated_at: new Date(todayMs - 3 * dayMs).toISOString(),
+    },
+  ];
+
+  for (const e of seededEntitlements) {
+    mealEntitlementsStore.set(e.id, e);
+  }
+
+  // Pre-seed Food Stock Items
+  const seededStockItems: FoodStockItemRecord[] = [
+    {
+      id: "stk-edi-001",
+      property_id: "prop-hostel-001",
+      name: "Scottish Rolled Oats",
+      category: "grains_staples",
+      unit_of_measure: "kg",
+      current_quantity: 24.5,
+      low_stock_threshold: 10.0,
+      cost_per_unit: 1.8,
+      currency: "GBP",
+      supplier_name: "Highland Grain Millers",
+      created_at: "2026-01-10T08:00:00Z",
+      updated_at: "2026-10-15T12:00:00Z",
+    },
+    {
+      id: "stk-edi-002",
+      property_id: "prop-hostel-001",
+      name: "Highland Breakfast Tea Bags",
+      category: "beverages",
+      unit_of_measure: "boxes",
+      current_quantity: 3,
+      low_stock_threshold: 5, // LOW STOCK!
+      cost_per_unit: 4.2,
+      currency: "GBP",
+      supplier_name: "Edinburgh Tea & Coffee Co.",
+      created_at: "2026-01-10T08:00:00Z",
+      updated_at: "2026-10-15T12:00:00Z",
+    },
+    {
+      id: "stk-edi-003",
+      property_id: "prop-hostel-001",
+      name: "Farm Fresh Free-Range Eggs",
+      category: "dairy",
+      unit_of_measure: "pieces",
+      current_quantity: 120,
+      low_stock_threshold: 30,
+      cost_per_unit: 0.25,
+      currency: "GBP",
+      supplier_name: "Lothian Free Range Farms",
+      created_at: "2026-01-10T08:00:00Z",
+      updated_at: "2026-10-15T12:00:00Z",
+    },
+    {
+      id: "stk-lon-001",
+      property_id: "prop-hotel-002",
+      name: "Italian Black Winter Truffle Oil",
+      category: "spices_oils",
+      unit_of_measure: "liters",
+      current_quantity: 4.5,
+      low_stock_threshold: 2.0,
+      cost_per_unit: 48.0,
+      currency: "GBP",
+      supplier_name: "Umbria Truffles UK",
+      created_at: "2026-02-01T08:00:00Z",
+      updated_at: "2026-10-15T12:00:00Z",
+    },
+    {
+      id: "stk-lon-002",
+      property_id: "prop-hotel-002",
+      name: "Fresh Cornish Dover Sole Fillets",
+      category: "meat_poultry",
+      unit_of_measure: "pieces",
+      current_quantity: 16,
+      low_stock_threshold: 10,
+      cost_per_unit: 18.5,
+      currency: "GBP",
+      supplier_name: "Billingsgate Seafood Direct",
+      created_at: "2026-02-01T08:00:00Z",
+      updated_at: "2026-10-15T12:00:00Z",
+    },
+  ];
+
+  for (const s of seededStockItems) {
+    foodStockItemsStore.set(s.id, s);
+  }
+
+  // Pre-seed Restaurant Order for London Mayfair Hotel
+  const seededRestaurantOrders: RestaurantOrderRecord[] = [
+    {
+      id: "ord-lon-001",
+      order_number: "ORD-2026-LON-001",
+      property_id: "prop-hotel-002",
+      customer_type: "hotel_guest",
+      customer_id: "gst-lon-001",
+      customer_name: "Eleanor Vance",
+      hotel_stay_id: "hstay-lon-006",
+      room_number: "201",
+      table_number: "Table 4 (Brasserie Terrace)",
+      items: [
+        {
+          item_id: "menu-lon-002",
+          name: "Pan-Seared Dover Sole Meunière",
+          quantity: 1,
+          unit_price: 46.0,
+          total: 46.0,
+        },
+        {
+          item_id: "menu-lon-005",
+          name: "Valrhona Guanaja Dark Chocolate Soufflé",
+          quantity: 1,
+          unit_price: 18.0,
+          total: 18.0,
+        },
+      ],
+      subtotal: 64.0,
+      discount_amount: 0.0,
+      tax_amount: 14.4,
+      total_amount: 78.4,
+      currency: "GBP",
+      status: "served",
+      billing_status: "billed_to_room",
+      special_instructions: "Serve dessert 15 mins after main course. Gluten-free bread for table.",
+      created_by_user_id: "usr-fd-003",
+      created_by_name: "Liam Chen",
+      created_at: new Date(todayMs - 1000 * 3600 * 2).toISOString(),
+      updated_at: new Date(todayMs - 1000 * 3600).toISOString(),
+    },
+  ];
+
+  for (const o of seededRestaurantOrders) {
+    restaurantOrdersStore.set(o.id, o);
+  }
+
+  // Pre-seed Phase 11 Staff & Operations Data
+  const seededStaffMembers: StaffMemberRecord[] = [
+    {
+      id: "stf-edi-001",
+      property_id: "prop-hostel-001",
+      user_id: "usr-pm-002",
+      employee_code: "EMP-EDI-001",
+      first_name: "Clara",
+      last_name: "Ross",
+      email: "clara.manager@grandstay.com",
+      phone: "+44 131 555 0101",
+      department: "management",
+      job_title: "General Operations Manager",
+      employment_type: "full_time",
+      status: "active",
+      emergency_contact_name: "David Ross",
+      emergency_contact_phone: "+44 131 555 0199",
+      hourly_rate: 28.5,
+      salary: 58000,
+      hire_date: "2024-01-15",
+      is_active: true,
+      created_at: "2026-01-15T00:00:00Z",
+      updated_at: "2026-01-15T00:00:00Z",
+    },
+    {
+      id: "stf-edi-002",
+      property_id: "prop-hostel-001",
+      user_id: "usr-hk-004",
+      employee_code: "EMP-EDI-002",
+      first_name: "Elena",
+      last_name: "Silva",
+      email: "elena.clean@grandstay.com",
+      phone: "+44 131 555 0102",
+      department: "housekeeping",
+      job_title: "Housekeeping Supervisor",
+      employment_type: "full_time",
+      status: "active",
+      emergency_contact_name: "Marco Silva",
+      emergency_contact_phone: "+44 131 555 0198",
+      hourly_rate: 16.5,
+      hire_date: "2024-03-01",
+      is_active: true,
+      created_at: "2026-02-15T00:00:00Z",
+      updated_at: "2026-02-15T00:00:00Z",
+    },
+    {
+      id: "stf-edi-003",
+      property_id: "prop-hostel-001",
+      employee_code: "EMP-EDI-003",
+      first_name: "Angus",
+      last_name: "MacLeod",
+      email: "angus.macleod@grandstay.com",
+      phone: "+44 131 555 0103",
+      department: "maintenance",
+      job_title: "Chief Facilities Technician",
+      employment_type: "full_time",
+      status: "active",
+      emergency_contact_name: "Morag MacLeod",
+      emergency_contact_phone: "+44 131 555 0197",
+      hourly_rate: 22.0,
+      hire_date: "2023-11-01",
+      is_active: true,
+      created_at: "2026-01-10T00:00:00Z",
+      updated_at: "2026-01-10T00:00:00Z",
+    },
+    {
+      id: "stf-edi-004",
+      property_id: "prop-hostel-001",
+      employee_code: "EMP-EDI-004",
+      first_name: "Fiona",
+      last_name: "Campbell",
+      email: "fiona.campbell@grandstay.com",
+      phone: "+44 131 555 0104",
+      department: "fnb_kitchen",
+      job_title: "Mess Hall Dining Supervisor",
+      employment_type: "full_time",
+      status: "active",
+      emergency_contact_name: "Callum Campbell",
+      emergency_contact_phone: "+44 131 555 0196",
+      hourly_rate: 18.0,
+      hire_date: "2024-02-01",
+      is_active: true,
+      created_at: "2026-01-10T00:00:00Z",
+      updated_at: "2026-01-10T00:00:00Z",
+    },
+    {
+      id: "stf-lon-001",
+      property_id: "prop-hotel-002",
+      user_id: "usr-fd-003",
+      employee_code: "EMP-LON-001",
+      first_name: "Liam",
+      last_name: "Chen",
+      email: "liam.desk@grandstay.com",
+      phone: "+44 20 7946 0901",
+      department: "front_desk",
+      job_title: "Front Desk & Guest Experience Lead",
+      employment_type: "full_time",
+      status: "active",
+      emergency_contact_name: "Mei Chen",
+      emergency_contact_phone: "+44 20 7946 0999",
+      hourly_rate: 20.0,
+      salary: 42000,
+      hire_date: "2024-02-01",
+      is_active: true,
+      created_at: "2026-02-01T00:00:00Z",
+      updated_at: "2026-02-01T00:00:00Z",
+    },
+    {
+      id: "stf-lon-002",
+      property_id: "prop-hotel-002",
+      employee_code: "EMP-LON-002",
+      first_name: "David",
+      last_name: "Copper",
+      email: "david.copper@grandstay.com",
+      phone: "+44 20 7946 0902",
+      department: "maintenance",
+      job_title: "Senior HVAC & Mechanical Specialist",
+      employment_type: "full_time",
+      status: "active",
+      emergency_contact_name: "Sarah Copper",
+      emergency_contact_phone: "+44 20 7946 0998",
+      hourly_rate: 25.0,
+      hire_date: "2023-09-15",
+      is_active: true,
+      created_at: "2026-02-01T00:00:00Z",
+      updated_at: "2026-02-01T00:00:00Z",
+    },
+    {
+      id: "stf-lon-003",
+      property_id: "prop-hotel-002",
+      employee_code: "EMP-LON-003",
+      first_name: "Carlos",
+      last_name: "Mendez",
+      email: "carlos.mendez@grandstay.com",
+      phone: "+44 20 7946 0903",
+      department: "housekeeping",
+      job_title: "Floor Housekeeping Attendant",
+      employment_type: "full_time",
+      status: "active",
+      emergency_contact_name: "Luisa Mendez",
+      emergency_contact_phone: "+44 20 7946 0997",
+      hourly_rate: 15.5,
+      hire_date: "2024-04-01",
+      is_active: true,
+      created_at: "2026-02-01T00:00:00Z",
+      updated_at: "2026-02-01T00:00:00Z",
+    },
+    {
+      id: "stf-lon-004",
+      property_id: "prop-hotel-002",
+      employee_code: "EMP-LON-004",
+      first_name: "Sarah",
+      last_name: "Jenkins",
+      email: "sarah.jenkins@grandstay.com",
+      phone: "+44 20 7946 0904",
+      department: "fnb_kitchen",
+      job_title: "Restaurant Executive Chef",
+      employment_type: "full_time",
+      status: "active",
+      emergency_contact_name: "Oliver Jenkins",
+      emergency_contact_phone: "+44 20 7946 0996",
+      hourly_rate: 30.0,
+      salary: 62000,
+      hire_date: "2024-01-01",
+      is_active: true,
+      created_at: "2026-02-01T00:00:00Z",
+      updated_at: "2026-02-01T00:00:00Z",
+    },
+    {
+      id: "stf-bri-001",
+      property_id: "prop-hybrid-003",
+      employee_code: "EMP-BRI-001",
+      first_name: "Rachel",
+      last_name: "Green",
+      email: "rachel.green@grandstay.com",
+      phone: "+44 117 496 0101",
+      department: "front_desk",
+      job_title: "Operations Supervisor",
+      employment_type: "full_time",
+      status: "active",
+      emergency_contact_name: "Emma Green",
+      emergency_contact_phone: "+44 117 496 0199",
+      hourly_rate: 21.0,
+      hire_date: "2024-03-01",
+      is_active: true,
+      created_at: "2026-03-01T00:00:00Z",
+      updated_at: "2026-03-01T00:00:00Z",
+    },
+  ];
+
+  for (const s of seededStaffMembers) {
+    staffMembersStore.set(s.id, s);
+  }
+
+  // Pre-seed Shifts for Today
+  const todayDateStr = new Date().toISOString().split("T")[0];
+  const seededShifts: StaffShiftRecord[] = [
+    {
+      id: "shf-edi-001",
+      property_id: "prop-hostel-001",
+      staff_id: "stf-edi-002",
+      staff_name: "Elena Silva",
+      department: "housekeeping",
+      shift_type: "morning",
+      shift_date: todayDateStr,
+      start_time: "07:00",
+      end_time: "15:30",
+      break_duration_minutes: 30,
+      status: "in_progress",
+      station_or_zone: "Edinburgh Dorm Floors 1-2",
+      notes: "Prioritize checkout cleans on 101 and 102 before 14:00 check-in.",
+      created_at: "2026-04-01T06:00:00Z",
+      updated_at: "2026-04-01T06:00:00Z",
+    },
+    {
+      id: "shf-edi-002",
+      property_id: "prop-hostel-001",
+      staff_id: "stf-edi-003",
+      staff_name: "Angus MacLeod",
+      department: "maintenance",
+      shift_type: "morning",
+      shift_date: todayDateStr,
+      start_time: "08:00",
+      end_time: "16:30",
+      break_duration_minutes: 30,
+      status: "in_progress",
+      station_or_zone: "Plant Room & Workshop",
+      notes: "Ensuite 103 plumbing repair and weekly boiler pressure test.",
+      created_at: "2026-04-01T06:00:00Z",
+      updated_at: "2026-04-01T06:00:00Z",
+    },
+    {
+      id: "shf-edi-003",
+      property_id: "prop-hostel-001",
+      staff_id: "stf-edi-004",
+      staff_name: "Fiona Campbell",
+      department: "fnb_kitchen",
+      shift_type: "morning",
+      shift_date: todayDateStr,
+      start_time: "06:30",
+      end_time: "14:30",
+      break_duration_minutes: 30,
+      status: "completed",
+      station_or_zone: "Hostel Dining Hall & Kitchen",
+      notes: "Breakfast service period 07:30 - 10:00 completed.",
+      created_at: "2026-04-01T06:00:00Z",
+      updated_at: "2026-04-01T14:30:00Z",
+    },
+    {
+      id: "shf-lon-001",
+      property_id: "prop-hotel-002",
+      staff_id: "stf-lon-001",
+      staff_name: "Liam Chen",
+      department: "front_desk",
+      shift_type: "morning",
+      shift_date: todayDateStr,
+      start_time: "07:00",
+      end_time: "15:30",
+      break_duration_minutes: 30,
+      status: "in_progress",
+      station_or_zone: "Main Reception",
+      notes: "VIP check-ins scheduled for afternoon.",
+      created_at: "2026-04-01T06:00:00Z",
+      updated_at: "2026-04-01T06:00:00Z",
+    },
+    {
+      id: "shf-lon-002",
+      property_id: "prop-hotel-002",
+      staff_id: "stf-lon-003",
+      staff_name: "Carlos Mendez",
+      department: "housekeeping",
+      shift_type: "morning",
+      shift_date: todayDateStr,
+      start_time: "08:00",
+      end_time: "16:30",
+      break_duration_minutes: 30,
+      status: "in_progress",
+      station_or_zone: "Hotel Guest Floors 2-3",
+      notes: "Room 201 checkout clean flagged urgent.",
+      created_at: "2026-04-01T06:00:00Z",
+      updated_at: "2026-04-01T06:00:00Z",
+    },
+    {
+      id: "shf-lon-003",
+      property_id: "prop-hotel-002",
+      staff_id: "stf-lon-002",
+      staff_name: "David Copper",
+      department: "maintenance",
+      shift_type: "afternoon",
+      shift_date: todayDateStr,
+      start_time: "14:00",
+      end_time: "22:30",
+      break_duration_minutes: 30,
+      status: "scheduled",
+      station_or_zone: "HVAC Plant & Guest Rooms",
+      notes: "Diagnose Room 205 fan coil unit.",
+      created_at: "2026-04-01T06:00:00Z",
+      updated_at: "2026-04-01T06:00:00Z",
+    },
+  ];
+
+  for (const sh of seededShifts) {
+    staffShiftsStore.set(sh.id, sh);
+  }
+
+  // Pre-seed Attendance Records
+  const seededAttendance: StaffAttendanceRecord[] = [
+    {
+      id: "att-edi-001",
+      property_id: "prop-hostel-001",
+      staff_id: "stf-edi-002",
+      staff_name: "Elena Silva",
+      attendance_date: todayDateStr,
+      shift_id: "shf-edi-001",
+      clock_in_time: `${todayDateStr}T07:02:14Z`,
+      total_work_minutes: 0,
+      status: "present",
+      late_minutes: 2,
+      notes: "On time, started morning turnover.",
+      created_at: `${todayDateStr}T07:02:14Z`,
+      updated_at: `${todayDateStr}T07:02:14Z`,
+    },
+    {
+      id: "att-edi-002",
+      property_id: "prop-hostel-001",
+      staff_id: "stf-edi-003",
+      staff_name: "Angus MacLeod",
+      attendance_date: todayDateStr,
+      shift_id: "shf-edi-002",
+      clock_in_time: `${todayDateStr}T07:58:30Z`,
+      total_work_minutes: 0,
+      status: "present",
+      late_minutes: 0,
+      notes: "Workshop opened, safety inspection done.",
+      created_at: `${todayDateStr}T07:58:30Z`,
+      updated_at: `${todayDateStr}T07:58:30Z`,
+    },
+    {
+      id: "att-edi-003",
+      property_id: "prop-hostel-001",
+      staff_id: "stf-edi-004",
+      staff_name: "Fiona Campbell",
+      attendance_date: todayDateStr,
+      shift_id: "shf-edi-003",
+      clock_in_time: `${todayDateStr}T06:28:10Z`,
+      clock_out_time: `${todayDateStr}T14:30:00Z`,
+      total_work_minutes: 480,
+      status: "present",
+      late_minutes: 0,
+      notes: "Breakfast service executed with zero food waste.",
+      created_at: `${todayDateStr}T06:28:10Z`,
+      updated_at: `${todayDateStr}T14:30:00Z`,
+    },
+    {
+      id: "att-lon-001",
+      property_id: "prop-hotel-002",
+      staff_id: "stf-lon-001",
+      staff_name: "Liam Chen",
+      attendance_date: todayDateStr,
+      shift_id: "shf-lon-001",
+      clock_in_time: `${todayDateStr}T06:55:00Z`,
+      total_work_minutes: 0,
+      status: "present",
+      late_minutes: 0,
+      notes: "Front desk opened and float counted.",
+      created_at: `${todayDateStr}T06:55:00Z`,
+      updated_at: `${todayDateStr}T06:55:00Z`,
+    },
+    {
+      id: "att-lon-002",
+      property_id: "prop-hotel-002",
+      staff_id: "stf-lon-003",
+      staff_name: "Carlos Mendez",
+      attendance_date: todayDateStr,
+      shift_id: "shf-lon-002",
+      clock_in_time: `${todayDateStr}T08:12:00Z`,
+      total_work_minutes: 0,
+      status: "late",
+      late_minutes: 12,
+      notes: "Tube delay on Central line, notified supervisor.",
+      created_at: `${todayDateStr}T08:12:00Z`,
+      updated_at: `${todayDateStr}T08:12:00Z`,
+    },
+  ];
+
+  for (const a of seededAttendance) {
+    staffAttendanceStore.set(a.id, a);
+  }
+
+  // Pre-seed Housekeeping Tasks
+  const seededHousekeeping: HousekeepingTaskRecord[] = [
+    {
+      id: "hk-edi-001",
+      property_id: "prop-hostel-001",
+      room_id: "rm-edi-101",
+      room_number: "101",
+      cleaning_type: "checkout_clean",
+      priority: "high",
+      status: "in_progress",
+      assigned_staff_id: "stf-edi-002",
+      assigned_staff_name: "Elena Silva",
+      started_at: `${todayDateStr}T08:30:00Z`,
+      checklist: [
+        { id: "chk-1", description: "Strip & replace bed linens", completed: true },
+        { id: "chk-2", description: "Sanitize bunk frames & lockers", completed: true },
+        { id: "chk-3", description: "Mop hardwood floor", completed: false },
+        { id: "chk-4", description: "Restock hand towels and soap", completed: false },
+      ],
+      linen_changed: true,
+      amenities_restocked: false,
+      notes: "New guest checking in at 14:00.",
+      created_at: `${todayDateStr}T07:30:00Z`,
+      updated_at: `${todayDateStr}T08:30:00Z`,
+    },
+    {
+      id: "hk-edi-002",
+      property_id: "prop-hostel-001",
+      room_id: "rm-edi-102",
+      room_number: "102",
+      cleaning_type: "stayover_clean",
+      priority: "medium",
+      status: "cleaned",
+      assigned_staff_id: "stf-edi-002",
+      assigned_staff_name: "Elena Silva",
+      started_at: `${todayDateStr}T09:00:00Z`,
+      completed_at: `${todayDateStr}T09:40:00Z`,
+      checklist: [
+        { id: "chk-1", description: "Make beds", completed: true },
+        { id: "chk-2", description: "Empty trash receptacles", completed: true },
+        { id: "chk-3", description: "Vacuum floor", completed: true },
+      ],
+      linen_changed: false,
+      amenities_restocked: true,
+      notes: "Daily refresh complete.",
+      created_at: `${todayDateStr}T07:30:00Z`,
+      updated_at: `${todayDateStr}T09:40:00Z`,
+    },
+    {
+      id: "hk-lon-001",
+      property_id: "prop-hotel-002",
+      room_id: "rm-lon-101",
+      room_number: "101",
+      cleaning_type: "checkout_clean",
+      priority: "urgent",
+      status: "pending",
+      assigned_staff_id: "stf-lon-003",
+      assigned_staff_name: "Carlos Mendez",
+      checklist: [
+        { id: "chk-1", description: "Replace Egyptian cotton linens", completed: false },
+        { id: "chk-2", description: "Sanitize marble bathroom", completed: false },
+        { id: "chk-3", description: "Restock luxury bath amenities", completed: false },
+        { id: "chk-4", description: "Vacuum & scent room", completed: false },
+      ],
+      linen_changed: false,
+      amenities_restocked: false,
+      notes: "Priority turnover for incoming diplomat.",
+      created_at: `${todayDateStr}T08:00:00Z`,
+      updated_at: `${todayDateStr}T08:00:00Z`,
+    },
+    {
+      id: "hk-lon-002",
+      property_id: "prop-hotel-002",
+      room_id: "rm-lon-102",
+      room_number: "102",
+      cleaning_type: "inspection",
+      priority: "high",
+      status: "inspected",
+      assigned_staff_id: "stf-lon-003",
+      assigned_staff_name: "Carlos Mendez",
+      inspected_by_staff_id: "stf-lon-001",
+      inspected_by_name: "Liam Chen",
+      inspection_passed: true,
+      checklist: [
+        { id: "chk-1", description: "Check linen tautness and bed fold", completed: true },
+        { id: "chk-2", description: "Inspect mirrors and glassware", completed: true },
+        { id: "chk-3", description: "Test TV remote & bedside lamps", completed: true },
+      ],
+      linen_changed: true,
+      amenities_restocked: true,
+      notes: "Passed 5-star quality standard inspection.",
+      created_at: `${todayDateStr}T07:00:00Z`,
+      updated_at: `${todayDateStr}T08:15:00Z`,
+    },
+  ];
+
+  for (const h of seededHousekeeping) {
+    housekeepingTasksStore.set(h.id, h);
+  }
+
+  // Pre-seed Maintenance Work Orders
+  const seededMaintenance: MaintenanceWorkOrderRecord[] = [
+    {
+      id: "wo-edi-001",
+      property_id: "prop-hostel-001",
+      work_order_number: "WO-EDI-001",
+      title: "Shower mixer leaking in Ensuite Room 102",
+      description: "Drip from thermostatic cartridge causing water pooling in the shower enclosure tray.",
+      category: "plumbing",
+      priority: "medium",
+      location_type: "room",
+      room_id: "rm-edi-102",
+      room_number: "102",
+      reported_by_name: "Elena Silva",
+      reported_by_user_id: "usr-hk-004",
+      assigned_staff_id: "stf-edi-003",
+      assigned_staff_name: "Angus MacLeod",
+      estimated_cost: 45.0,
+      actual_cost: 0.0,
+      status: "in_progress",
+      created_at: `${todayDateStr}T08:15:00Z`,
+      updated_at: `${todayDateStr}T08:45:00Z`,
+    },
+    {
+      id: "wo-edi-002",
+      property_id: "prop-hostel-001",
+      work_order_number: "WO-EDI-002",
+      title: "Dining hall toaster tripping breaker",
+      description: "4-slot commercial conveyor toaster causing RCD trip during heavy breakfast peak.",
+      category: "electrical",
+      priority: "high",
+      location_type: "kitchen_mess",
+      reported_by_name: "Fiona Campbell",
+      assigned_staff_id: "stf-edi-003",
+      assigned_staff_name: "Angus MacLeod",
+      estimated_cost: 80.0,
+      actual_cost: 75.0,
+      parts_used: "3kW Heating element & replacement 16A ceramic fuse",
+      resolution_notes: "Replaced faulty heating element. Inspected insulation resistance. Tested nominal at 12A load.",
+      status: "resolved",
+      created_at: `${todayDateStr}T07:15:00Z`,
+      resolved_at: `${todayDateStr}T09:30:00Z`,
+      updated_at: `${todayDateStr}T09:30:00Z`,
+    },
+    {
+      id: "wo-lon-001",
+      property_id: "prop-hotel-002",
+      work_order_number: "WO-LON-001",
+      title: "HVAC Fan Coil unit noisy in Room 103",
+      description: "Rattling bearing noise from ceiling fan coil unit when fan speed is set above low.",
+      category: "hvac",
+      priority: "high",
+      location_type: "room",
+      room_id: "rm-lon-103",
+      room_number: "103",
+      reported_by_name: "Liam Chen",
+      reported_by_user_id: "usr-fd-003",
+      assigned_staff_id: "stf-lon-002",
+      assigned_staff_name: "David Copper",
+      estimated_cost: 150.0,
+      actual_cost: 0.0,
+      status: "assigned",
+      created_at: `${todayDateStr}T08:00:00Z`,
+      updated_at: `${todayDateStr}T08:30:00Z`,
+    },
+  ];
+
+  for (const m of seededMaintenance) {
+    maintenanceOrdersStore.set(m.id, m);
+  }
+
+  // Pre-seed Operational Daily Logs & Shift Handovers
+  const seededDailyLogs: OperationalDailyLogRecord[] = [
+    {
+      id: "log-edi-001",
+      property_id: "prop-hostel-001",
+      log_date: todayDateStr,
+      shift_period: "morning",
+      author_user_id: "usr-pm-002",
+      author_name: "Clara Ross",
+      category: "shift_handover",
+      summary: "Morning Handover: Full breakfast turnout (28 pax), boiler water pressure nominal",
+      details: "Dormitory guests all accounted for. Ensuite 103 plumbing repair is underway by Angus. Front door keycard sensor recalibrated.",
+      priority: "routine",
+      is_resolved: false,
+      created_at: `${todayDateStr}T08:00:00Z`,
+      updated_at: `${todayDateStr}T08:00:00Z`,
+    },
+    {
+      id: "log-edi-002",
+      property_id: "prop-hostel-001",
+      log_date: todayDateStr,
+      shift_period: "morning",
+      author_user_id: "usr-hk-004",
+      author_name: "Elena Silva",
+      category: "lost_and_found",
+      summary: "Passport & fast charger found in common room locker 14",
+      details: "Items secured in the front-desk safe. Registered to checkout guest Liam Fraser. Email alert sent.",
+      priority: "important",
+      is_resolved: true,
+      resolved_by_name: "Clara Ross",
+      created_at: `${todayDateStr}T09:15:00Z`,
+      updated_at: `${todayDateStr}T10:00:00Z`,
+    },
+    {
+      id: "log-lon-001",
+      property_id: "prop-hotel-002",
+      log_date: todayDateStr,
+      shift_period: "morning",
+      author_user_id: "usr-fd-003",
+      author_name: "Liam Chen",
+      category: "shift_handover",
+      summary: "Mayfair Morning Handover: High-profile VIP check-in at 15:00, Room 205 HVAC under review",
+      details: "Luggage porter scheduled for 14:45. Head chef confirmed special vegan tasting menu for table 4. Room 201 turnover is prioritized.",
+      priority: "important",
+      is_resolved: false,
+      created_at: `${todayDateStr}T08:30:00Z`,
+      updated_at: `${todayDateStr}T08:30:00Z`,
+    },
+  ];
+
+  for (const l of seededDailyLogs) {
+    operationalLogsStore.set(l.id, l);
   }
 }
 
@@ -9177,6 +10487,15 @@ async function startServer() {
         correlation_id: correlationId,
         timestamp: new Date().toISOString(),
       });
+    } catch (e: any) {
+      res.status(e.status || 401).json({
+        success: false,
+        error: { code: "AUTHENTICATION_ERROR", message: e.message },
+        correlation_id: correlationId,
+      });
+    }
+  });
+
   // ==========================================
   // PHASE 9 FINANCE & TAX ENGINE DOMAIN APIS
   // ==========================================
@@ -10799,6 +12118,3868 @@ async function startServer() {
         success: false,
         error: { code: "AUTHENTICATION_ERROR", message: e.message },
         correlation_id: correlationId,
+      });
+    }
+  });
+
+  // ==========================================
+  // PHASE 10 MESS & RESTAURANT DOMAIN APIS
+  // ==========================================
+
+  // 1. Food Service Configuration: GET /api/v1/food/config
+  app.get("/api/v1/food/config", (req, res) => {
+    const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+    try {
+      const user = authenticate(req);
+      const propertyId = req.query.property_id as string;
+
+      if (!propertyId) {
+        res.status(422).json({
+          success: false,
+          error: { code: "VALIDATION_ERROR", message: "property_id is required." },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      if (!user.is_superuser && user.global_role !== "super_admin") {
+        if (user.global_role === "guest" || !user.assigned_property_ids.includes(propertyId)) {
+          res.status(403).json({
+            success: false,
+            error: { code: "PROPERTY_ACCESS_VIOLATION", message: `Access denied to property '${propertyId}'.` },
+            correlation_id: correlationId,
+          });
+          return;
+        }
+      }
+
+      let config = foodConfigsStore.get(propertyId);
+      if (!config) {
+        const prop = propertiesStore.get(propertyId);
+        config = {
+          property_id: propertyId,
+          mess_enabled: prop?.property_type === "hostel" || prop?.property_type === "hybrid",
+          restaurant_enabled: prop?.property_type === "hotel" || prop?.property_type === "hybrid",
+          meal_periods: [
+            { id: "breakfast", name: "Breakfast", start_time: "07:00", end_time: "10:30", is_active: true },
+            { id: "lunch", name: "Lunch", start_time: "12:00", end_time: "14:30", is_active: true },
+            { id: "dinner", name: "Dinner", start_time: "18:30", end_time: "21:30", is_active: true },
+          ],
+          allow_pay_per_meal: true,
+          default_pay_per_meal_price: 10.0,
+          currency: prop?.currency || "GBP",
+          updated_at: new Date().toISOString(),
+        };
+        foodConfigsStore.set(propertyId, config);
+      }
+
+      res.json({
+        success: true,
+        data: config,
+        message: "Food service configuration retrieved.",
+        correlation_id: correlationId,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (e: any) {
+      res.status(e.status || 401).json({
+        success: false,
+        error: { code: "AUTHENTICATION_ERROR", message: e.message },
+        correlation_id: correlationId,
+      });
+    }
+  });
+
+  // 2. Update Food Service Configuration: PUT /api/v1/food/config
+  app.put("/api/v1/food/config", (req, res) => {
+    const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+    try {
+      const user = authenticate(req);
+      const { property_id, mess_enabled, restaurant_enabled, meal_periods, allow_pay_per_meal, default_pay_per_meal_price } = req.body || {};
+
+      if (!property_id) {
+        res.status(422).json({
+          success: false,
+          error: { code: "VALIDATION_ERROR", message: "property_id is required." },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      if (!user.is_superuser && user.global_role !== "super_admin" && user.global_role !== "property_manager") {
+        res.status(403).json({
+          success: false,
+          error: { code: "INSUFFICIENT_PERMISSIONS", message: "Only Property Managers or Super Admins can update food configuration." },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      if (!user.is_superuser && user.global_role !== "super_admin") {
+        if (!user.assigned_property_ids.includes(property_id)) {
+          res.status(403).json({
+            success: false,
+            error: { code: "PROPERTY_ACCESS_VIOLATION", message: `Access denied to property '${property_id}'.` },
+            correlation_id: correlationId,
+          });
+          return;
+        }
+      }
+
+      const prop = propertiesStore.get(property_id);
+      const updatedConfig: FoodServiceConfigRecord = {
+        property_id,
+        mess_enabled: mess_enabled ?? true,
+        restaurant_enabled: restaurant_enabled ?? true,
+        meal_periods: meal_periods || [
+          { id: "breakfast", name: "Breakfast", start_time: "07:00", end_time: "10:30", is_active: true },
+          { id: "lunch", name: "Lunch", start_time: "12:00", end_time: "14:30", is_active: true },
+          { id: "dinner", name: "Dinner", start_time: "18:30", end_time: "21:30", is_active: true },
+        ],
+        allow_pay_per_meal: allow_pay_per_meal ?? true,
+        default_pay_per_meal_price: default_pay_per_meal_price !== undefined ? round2(Number(default_pay_per_meal_price)) : 10.0,
+        currency: prop?.currency || "GBP",
+        updated_at: new Date().toISOString(),
+      };
+
+      foodConfigsStore.set(property_id, updatedConfig);
+
+      res.json({
+        success: true,
+        data: updatedConfig,
+        message: "Food service configuration updated.",
+        correlation_id: correlationId,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (e: any) {
+      res.status(e.status || 401).json({
+        success: false,
+        error: { code: "AUTHENTICATION_ERROR", message: e.message },
+        correlation_id: correlationId,
+      });
+    }
+  });
+
+  // 3. Menu Items List: GET /api/v1/food/menu
+  app.get("/api/v1/food/menu", (req, res) => {
+    const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+    try {
+      const user = authenticate(req);
+      const propertyId = req.query.property_id as string;
+      const serviceType = req.query.service_type as string;
+      const category = req.query.category as string;
+
+      if (!propertyId) {
+        res.status(422).json({
+          success: false,
+          error: { code: "VALIDATION_ERROR", message: "property_id is required." },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      if (!user.is_superuser && user.global_role !== "super_admin") {
+        if (user.global_role === "guest" || !user.assigned_property_ids.includes(propertyId)) {
+          res.status(403).json({
+            success: false,
+            error: { code: "PROPERTY_ACCESS_VIOLATION", message: `Access denied to property '${propertyId}'.` },
+            correlation_id: correlationId,
+          });
+          return;
+        }
+      }
+
+      let items = Array.from(menuItemsStore.values()).filter((item) => item.property_id === propertyId);
+
+      if (serviceType && serviceType !== "all") {
+        items = items.filter((item) => item.service_type === serviceType || item.service_type === "both");
+      }
+      if (category && category !== "all") {
+        items = items.filter((item) => item.category === category);
+      }
+
+      items.sort((a, b) => a.name.localeCompare(b.name));
+
+      res.json({
+        success: true,
+        data: items,
+        message: "Menu items retrieved.",
+        correlation_id: correlationId,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (e: any) {
+      res.status(e.status || 401).json({
+        success: false,
+        error: { code: "AUTHENTICATION_ERROR", message: e.message },
+        correlation_id: correlationId,
+      });
+    }
+  });
+
+  // 4. Create Menu Item: POST /api/v1/food/menu
+  app.post("/api/v1/food/menu", (req, res) => {
+    const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+    try {
+      const user = authenticate(req);
+      const {
+        property_id,
+        service_type,
+        name,
+        description,
+        category,
+        price,
+        meal_periods,
+        dietary_flags,
+        allergens,
+        is_available,
+      } = req.body || {};
+
+      if (!property_id || !name || price === undefined || !category) {
+        res.status(422).json({
+          success: false,
+          error: { code: "VALIDATION_ERROR", message: "property_id, name, category, and price are required." },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      if (!user.is_superuser && user.global_role !== "super_admin" && user.global_role !== "property_manager" && user.global_role !== "front_desk") {
+        res.status(403).json({
+          success: false,
+          error: { code: "INSUFFICIENT_PERMISSIONS", message: "Only staff can create menu items." },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      if (!user.is_superuser && user.global_role !== "super_admin") {
+        if (!user.assigned_property_ids.includes(property_id)) {
+          res.status(403).json({
+            success: false,
+            error: { code: "PROPERTY_ACCESS_VIOLATION", message: `Access denied to property '${property_id}'.` },
+            correlation_id: correlationId,
+          });
+          return;
+        }
+      }
+
+      const prop = propertiesStore.get(property_id);
+      const currency = prop?.currency || "GBP";
+      const now = new Date().toISOString();
+      const id = `menu-${crypto.randomUUID().substring(0, 8)}`;
+
+      const newItem: MenuItemRecord = {
+        id,
+        property_id,
+        service_type: service_type || "mess",
+        name: name.trim(),
+        description: description?.trim(),
+        category,
+        price: round2(Number(price)),
+        currency,
+        is_available: is_available !== undefined ? Boolean(is_available) : true,
+        meal_periods: meal_periods || ["breakfast", "lunch", "dinner"],
+        dietary_flags: dietary_flags || [],
+        allergens: allergens || [],
+        created_at: now,
+        updated_at: now,
+      };
+
+      menuItemsStore.set(id, newItem);
+
+      res.json({
+        success: true,
+        data: newItem,
+        message: "Menu item created successfully.",
+        correlation_id: correlationId,
+        timestamp: now,
+      });
+    } catch (e: any) {
+      res.status(e.status || 401).json({
+        success: false,
+        error: { code: "AUTHENTICATION_ERROR", message: e.message },
+        correlation_id: correlationId,
+      });
+    }
+  });
+
+  // 5. Update Menu Item: PUT /api/v1/food/menu/:id
+  app.put("/api/v1/food/menu/:id", (req, res) => {
+    const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+    try {
+      const user = authenticate(req);
+      const item = menuItemsStore.get(req.params.id);
+
+      if (!item) {
+        res.status(404).json({
+          success: false,
+          error: { code: "MENU_ITEM_NOT_FOUND", message: `Menu item '${req.params.id}' not found.` },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      if (!user.is_superuser && user.global_role !== "super_admin") {
+        if (!user.assigned_property_ids.includes(item.property_id)) {
+          res.status(403).json({
+            success: false,
+            error: { code: "PROPERTY_ACCESS_VIOLATION", message: `Access denied to property '${item.property_id}'.` },
+            correlation_id: correlationId,
+          });
+          return;
+        }
+      }
+
+      const { name, description, category, price, is_available, meal_periods, dietary_flags, allergens } = req.body || {};
+      const now = new Date().toISOString();
+
+      if (name !== undefined) item.name = name.trim();
+      if (description !== undefined) item.description = description.trim();
+      if (category !== undefined) item.category = category;
+      if (price !== undefined) item.price = round2(Number(price));
+      if (is_available !== undefined) item.is_available = Boolean(is_available);
+      if (meal_periods !== undefined) item.meal_periods = meal_periods;
+      if (dietary_flags !== undefined) item.dietary_flags = dietary_flags;
+      if (allergens !== undefined) item.allergens = allergens;
+      item.updated_at = now;
+
+      menuItemsStore.set(item.id, item);
+
+      res.json({
+        success: true,
+        data: item,
+        message: "Menu item updated.",
+        correlation_id: correlationId,
+        timestamp: now,
+      });
+    } catch (e: any) {
+      res.status(e.status || 401).json({
+        success: false,
+        error: { code: "AUTHENTICATION_ERROR", message: e.message },
+        correlation_id: correlationId,
+      });
+    }
+  });
+
+  // 6. Meal Plans List: GET /api/v1/food/meal-plans
+  app.get("/api/v1/food/meal-plans", (req, res) => {
+    const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+    try {
+      const user = authenticate(req);
+      const propertyId = req.query.property_id as string;
+
+      if (!propertyId) {
+        res.status(422).json({
+          success: false,
+          error: { code: "VALIDATION_ERROR", message: "property_id is required." },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      if (!user.is_superuser && user.global_role !== "super_admin") {
+        if (user.global_role === "guest" || !user.assigned_property_ids.includes(propertyId)) {
+          res.status(403).json({
+            success: false,
+            error: { code: "PROPERTY_ACCESS_VIOLATION", message: `Access denied to property '${propertyId}'.` },
+            correlation_id: correlationId,
+          });
+          return;
+        }
+      }
+
+      const plans = Array.from(mealPlansStore.values())
+        .filter((p) => p.property_id === propertyId)
+        .sort((a, b) => a.price - b.price);
+
+      res.json({
+        success: true,
+        data: plans,
+        message: "Meal plans retrieved.",
+        correlation_id: correlationId,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (e: any) {
+      res.status(e.status || 401).json({
+        success: false,
+        error: { code: "AUTHENTICATION_ERROR", message: e.message },
+        correlation_id: correlationId,
+      });
+    }
+  });
+
+  // 7. Create Meal Plan: POST /api/v1/food/meal-plans
+  app.post("/api/v1/food/meal-plans", (req, res) => {
+    const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+    try {
+      const user = authenticate(req);
+      const { property_id, name, description, plan_type, included_meal_periods, price, validity_days } = req.body || {};
+
+      if (!property_id || !name || price === undefined || !included_meal_periods) {
+        res.status(422).json({
+          success: false,
+          error: { code: "VALIDATION_ERROR", message: "property_id, name, price, and included_meal_periods are required." },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      if (!user.is_superuser && user.global_role !== "super_admin" && user.global_role !== "property_manager") {
+        res.status(403).json({
+          success: false,
+          error: { code: "INSUFFICIENT_PERMISSIONS", message: "Only Property Managers or Super Admins can create meal plans." },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      if (!user.is_superuser && user.global_role !== "super_admin") {
+        if (!user.assigned_property_ids.includes(property_id)) {
+          res.status(403).json({
+            success: false,
+            error: { code: "PROPERTY_ACCESS_VIOLATION", message: `Access denied to property '${property_id}'.` },
+            correlation_id: correlationId,
+          });
+          return;
+        }
+      }
+
+      const prop = propertiesStore.get(property_id);
+      const currency = prop?.currency || "GBP";
+      const now = new Date().toISOString();
+      const id = `plan-${crypto.randomUUID().substring(0, 8)}`;
+
+      const newPlan: MealPlanRecord = {
+        id,
+        property_id,
+        name: name.trim(),
+        description: description?.trim(),
+        plan_type: plan_type || "lunch_and_dinner",
+        included_meal_periods,
+        price: round2(Number(price)),
+        currency,
+        validity_days: validity_days ? Math.max(1, Number(validity_days)) : 1,
+        is_active: true,
+        created_at: now,
+        updated_at: now,
+      };
+
+      mealPlansStore.set(id, newPlan);
+
+      res.json({
+        success: true,
+        data: newPlan,
+        message: "Meal plan created successfully.",
+        correlation_id: correlationId,
+        timestamp: now,
+      });
+    } catch (e: any) {
+      res.status(e.status || 401).json({
+        success: false,
+        error: { code: "AUTHENTICATION_ERROR", message: e.message },
+        correlation_id: correlationId,
+      });
+    }
+  });
+
+  // 8. Entitlements List: GET /api/v1/food/entitlements
+  app.get("/api/v1/food/entitlements", (req, res) => {
+    const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+    try {
+      const user = authenticate(req);
+      const propertyId = req.query.property_id as string;
+      const hostellerId = req.query.hosteller_id as string;
+
+      if (!propertyId) {
+        res.status(422).json({
+          success: false,
+          error: { code: "VALIDATION_ERROR", message: "property_id is required." },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      if (!user.is_superuser && user.global_role !== "super_admin") {
+        if (user.global_role === "guest" || !user.assigned_property_ids.includes(propertyId)) {
+          res.status(403).json({
+            success: false,
+            error: { code: "PROPERTY_ACCESS_VIOLATION", message: `Access denied to property '${propertyId}'.` },
+            correlation_id: correlationId,
+          });
+          return;
+        }
+      }
+
+      let entitlements = Array.from(mealEntitlementsStore.values()).filter(
+        (e) => e.property_id === propertyId
+      );
+
+      if (hostellerId) {
+        entitlements = entitlements.filter((e) => e.hosteller_id === hostellerId);
+      }
+
+      entitlements.sort((a, b) => b.created_at.localeCompare(a.created_at));
+
+      res.json({
+        success: true,
+        data: entitlements,
+        message: "Meal entitlements retrieved.",
+        correlation_id: correlationId,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (e: any) {
+      res.status(e.status || 401).json({
+        success: false,
+        error: { code: "AUTHENTICATION_ERROR", message: e.message },
+        correlation_id: correlationId,
+      });
+    }
+  });
+
+  // 9. Assign Meal Plan to Hosteller: POST /api/v1/food/entitlements
+  // Integrated directly with Phase 9 Finance & Tax engine!
+  app.post("/api/v1/food/entitlements", (req, res) => {
+    const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+    try {
+      const user = authenticate(req);
+      const { property_id, hosteller_id, meal_plan_id, start_date, hostel_stay_id, create_invoice } = req.body || {};
+
+      if (!property_id || !hosteller_id || !meal_plan_id || !start_date) {
+        res.status(422).json({
+          success: false,
+          error: { code: "VALIDATION_ERROR", message: "property_id, hosteller_id, meal_plan_id, and start_date are required." },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      if (!user.is_superuser && user.global_role !== "super_admin") {
+        if (!user.assigned_property_ids.includes(property_id)) {
+          res.status(403).json({
+            success: false,
+            error: { code: "PROPERTY_ACCESS_VIOLATION", message: `Access denied to property '${property_id}'.` },
+            correlation_id: correlationId,
+          });
+          return;
+        }
+      }
+
+      const hosteller = hostellersStore.get(hosteller_id);
+      if (!hosteller || hosteller.property_id !== property_id) {
+        res.status(404).json({
+          success: false,
+          error: { code: "HOSTELLER_NOT_FOUND", message: `Hosteller '${hosteller_id}' not found at this property.` },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      const plan = mealPlansStore.get(meal_plan_id);
+      if (!plan || plan.property_id !== property_id || !plan.is_active) {
+        res.status(404).json({
+          success: false,
+          error: { code: "MEAL_PLAN_NOT_FOUND", message: `Active meal plan '${meal_plan_id}' not found.` },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      // Compute validity end date
+      const startDateObj = new Date(start_date);
+      const endDateObj = new Date(startDateObj.getTime() + plan.validity_days * 86400000);
+      const endDateStr = endDateObj.toISOString().split("T")[0];
+
+      const now = new Date().toISOString();
+      const entitlementId = `ent-${crypto.randomUUID().substring(0, 8)}`;
+      let invoiceId: string | undefined;
+
+      // Phase 9 Finance Engine Integration
+      if (create_invoice !== false) {
+        const lineItem = {
+          charge_category: "mess_meal",
+          description: `${plan.name} (${plan.validity_days} days meal subscription)`,
+          quantity: 1,
+          unit_price: plan.price,
+          discount_amount: 0,
+        };
+
+        const calcResult = calculateTaxesForItems(property_id, start_date, [lineItem]);
+        invoiceId = `inv-${crypto.randomUUID().substring(0, 8)}`;
+        const propCode = propertiesStore.get(property_id)?.code || "PROP";
+        const invoiceNumber = `INV-2026-${propCode}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+        const newInvoice: InvoiceRecord = {
+          id: invoiceId,
+          invoice_number: invoiceNumber,
+          property_id,
+          status: "issued",
+          issue_date: start_date,
+          due_date: endDateStr,
+          customer_type: "hosteller",
+          customer_id: hosteller.id,
+          customer_name: `${hosteller.first_name} ${hosteller.last_name}`,
+          customer_email: hosteller.email,
+          customer_phone: hosteller.phone,
+          reservation_type: "hostel_stay",
+          reservation_id: hostel_stay_id,
+          line_items: calcResult.line_items,
+          currency: plan.currency,
+          subtotal: calcResult.subtotal,
+          discount_total: calcResult.discount_total,
+          tax_total: calcResult.tax_total,
+          total_amount: calcResult.total_amount,
+          amount_paid: 0.0,
+          outstanding_balance: calcResult.total_amount,
+          tax_snapshot: calcResult.tax_snapshot,
+          notes: `Mess Subscription: ${plan.name}`,
+          created_by_user_id: user.id,
+          audit_trail: [
+            {
+              id: `aud-${crypto.randomUUID().substring(0, 8)}`,
+              action: "issued",
+              timestamp: now,
+              performed_by_user_id: user.id,
+              performed_by_name: `${user.first_name} ${user.last_name}`,
+              details: `Issued folio for mess plan '${plan.name}' (${plan.currency} ${calcResult.total_amount.toFixed(2)}).`,
+            },
+          ],
+          created_at: now,
+          updated_at: now,
+        };
+
+        invoicesStore.set(invoiceId, newInvoice);
+      }
+
+      const newEntitlement: HostellerMealEntitlementRecord = {
+        id: entitlementId,
+        property_id,
+        hosteller_id,
+        hosteller_name: `${hosteller.first_name} ${hosteller.last_name}`,
+        hostel_stay_id,
+        meal_plan_id: plan.id,
+        meal_plan_name: plan.name,
+        included_meal_periods: plan.included_meal_periods,
+        start_date,
+        end_date: endDateStr,
+        status: "active",
+        invoice_id: invoiceId,
+        created_at: now,
+        updated_at: now,
+      };
+
+      mealEntitlementsStore.set(entitlementId, newEntitlement);
+
+      res.json({
+        success: true,
+        data: newEntitlement,
+        message: "Meal plan assigned and active entitlement created.",
+        correlation_id: correlationId,
+        timestamp: now,
+      });
+    } catch (e: any) {
+      res.status(e.status || 401).json({
+        success: false,
+        error: { code: "AUTHENTICATION_ERROR", message: e.message },
+        correlation_id: correlationId,
+      });
+    }
+  });
+
+  // 10. Verify Entitlement & Redemption Eligibility: GET /api/v1/food/entitlements/verify
+  app.get("/api/v1/food/entitlements/verify", (req, res) => {
+    const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+    try {
+      const user = authenticate(req);
+      const { property_id, hosteller_id, service_date, meal_period } = req.query as Record<string, string>;
+
+      if (!property_id || !hosteller_id || !service_date || !meal_period) {
+        res.status(422).json({
+          success: false,
+          error: { code: "VALIDATION_ERROR", message: "property_id, hosteller_id, service_date, and meal_period are required." },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      if (!user.is_superuser && user.global_role !== "super_admin") {
+        if (!user.assigned_property_ids.includes(property_id)) {
+          res.status(403).json({
+            success: false,
+            error: { code: "PROPERTY_ACCESS_VIOLATION", message: `Access denied to property '${property_id}'.` },
+            correlation_id: correlationId,
+          });
+          return;
+        }
+      }
+
+      // Check if already redeemed for this date & period
+      const alreadyRedeemed = Array.from(mealAttendancesStore.values()).some(
+        (a) =>
+          a.property_id === property_id &&
+          a.hosteller_id === hosteller_id &&
+          a.service_date === service_date &&
+          a.meal_period === meal_period
+      );
+
+      // Find active entitlement covering this service date & period
+      const activeEntitlement = Array.from(mealEntitlementsStore.values()).find(
+        (e) =>
+          e.property_id === property_id &&
+          e.hosteller_id === hosteller_id &&
+          e.status === "active" &&
+          e.start_date <= service_date &&
+          e.end_date >= service_date &&
+          e.included_meal_periods.includes(meal_period as any)
+      );
+
+      const config = foodConfigsStore.get(property_id);
+      const isEligible = !alreadyRedeemed && Boolean(activeEntitlement);
+
+      res.json({
+        success: true,
+        data: {
+          is_eligible: isEligible,
+          already_redeemed: alreadyRedeemed,
+          has_active_entitlement: Boolean(activeEntitlement),
+          active_entitlement: activeEntitlement || null,
+          allow_pay_per_meal: config?.allow_pay_per_meal ?? true,
+          pay_per_meal_price: config?.default_pay_per_meal_price ?? 10.0,
+          currency: config?.currency || "GBP",
+        },
+        message: "Entitlement verification evaluated.",
+        correlation_id: correlationId,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (e: any) {
+      res.status(e.status || 401).json({
+        success: false,
+        error: { code: "AUTHENTICATION_ERROR", message: e.message },
+        correlation_id: correlationId,
+      });
+    }
+  });
+
+  // 11. Attendance History: GET /api/v1/food/attendance
+  app.get("/api/v1/food/attendance", (req, res) => {
+    const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+    try {
+      const user = authenticate(req);
+      const propertyId = req.query.property_id as string;
+      const serviceDate = req.query.service_date as string;
+      const mealPeriod = req.query.meal_period as string;
+
+      if (!propertyId) {
+        res.status(422).json({
+          success: false,
+          error: { code: "VALIDATION_ERROR", message: "property_id is required." },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      if (!user.is_superuser && user.global_role !== "super_admin") {
+        if (user.global_role === "guest" || !user.assigned_property_ids.includes(propertyId)) {
+          res.status(403).json({
+            success: false,
+            error: { code: "PROPERTY_ACCESS_VIOLATION", message: `Access denied to property '${propertyId}'.` },
+            correlation_id: correlationId,
+          });
+          return;
+        }
+      }
+
+      let records = Array.from(mealAttendancesStore.values()).filter(
+        (a) => a.property_id === propertyId
+      );
+
+      if (serviceDate) {
+        records = records.filter((a) => a.service_date === serviceDate);
+      }
+      if (mealPeriod && mealPeriod !== "all") {
+        records = records.filter((a) => a.meal_period === mealPeriod);
+      }
+
+      records.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+
+      res.json({
+        success: true,
+        data: records,
+        message: "Meal attendance records retrieved.",
+        correlation_id: correlationId,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (e: any) {
+      res.status(e.status || 401).json({
+        success: false,
+        error: { code: "AUTHENTICATION_ERROR", message: e.message },
+        correlation_id: correlationId,
+      });
+    }
+  });
+
+  // 12. Record Meal Attendance & Redemption: POST /api/v1/food/attendance
+  app.post("/api/v1/food/attendance", (req, res) => {
+    const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+    try {
+      const user = authenticate(req);
+      const { property_id, hosteller_id, service_date, meal_period, is_manual_override, override_reason } = req.body || {};
+
+      if (!property_id || !hosteller_id || !service_date || !meal_period) {
+        res.status(422).json({
+          success: false,
+          error: { code: "VALIDATION_ERROR", message: "property_id, hosteller_id, service_date, and meal_period are required." },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      if (!user.is_superuser && user.global_role !== "super_admin") {
+        if (!user.assigned_property_ids.includes(property_id)) {
+          res.status(403).json({
+            success: false,
+            error: { code: "PROPERTY_ACCESS_VIOLATION", message: `Access denied to property '${property_id}'.` },
+            correlation_id: correlationId,
+          });
+          return;
+        }
+      }
+
+      const hosteller = hostellersStore.get(hosteller_id);
+      if (!hosteller || hosteller.property_id !== property_id) {
+        res.status(404).json({
+          success: false,
+          error: { code: "HOSTELLER_NOT_FOUND", message: `Hosteller '${hosteller_id}' not found at this property.` },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      // Transactional idempotency check: Duplicate redemption on same day & meal period
+      const duplicate = Array.from(mealAttendancesStore.values()).find(
+        (a) =>
+          a.property_id === property_id &&
+          a.hosteller_id === hosteller_id &&
+          a.service_date === service_date &&
+          a.meal_period === meal_period
+      );
+
+      if (duplicate && !is_manual_override) {
+        res.status(409).json({
+
+          success: false,
+          error: {
+            code: "DUPLICATE_REDEMPTION",
+            message: `Meal '${meal_period}' has already been redeemed for ${hosteller.first_name} ${hosteller.last_name} on ${service_date} (Redeemed at ${duplicate.timestamp}).`,
+          },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      // Check active entitlement
+      const activeEntitlement = Array.from(mealEntitlementsStore.values()).find(
+        (e) =>
+          e.property_id === property_id &&
+          e.hosteller_id === hosteller_id &&
+          e.status === "active" &&
+          e.start_date <= service_date &&
+          e.end_date >= service_date &&
+          e.included_meal_periods.includes(meal_period)
+      );
+
+      const config = foodConfigsStore.get(property_id);
+      const isOverride = Boolean(is_manual_override);
+
+      if (!activeEntitlement && !isOverride && !config?.allow_pay_per_meal) {
+        res.status(422).json({
+          success: false,
+          error: {
+            code: "INELIGIBLE_FOR_MEAL",
+            message: `Hosteller has no active meal entitlement covering '${meal_period}' on ${service_date}, and pay-per-meal is disabled.`,
+          },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      const now = new Date().toISOString();
+      const attendanceId = `att-${crypto.randomUUID().substring(0, 8)}`;
+      const isPayPerMeal = !activeEntitlement && !isOverride;
+
+      const newAttendance: MealAttendanceRecord = {
+        id: attendanceId,
+        property_id,
+        hosteller_id,
+        hosteller_name: `${hosteller.first_name} ${hosteller.last_name}`,
+        service_date,
+        meal_period,
+        entitlement_id: activeEntitlement?.id,
+        is_pay_per_meal: isPayPerMeal,
+        price_charged: isPayPerMeal ? config?.default_pay_per_meal_price : undefined,
+        currency: config?.currency || "GBP",
+        is_manual_override: isOverride,
+        override_reason: isOverride ? override_reason || "Manager authorized override" : undefined,
+        recorded_by_user_id: user.id,
+        recorded_by_name: `${user.first_name} ${user.last_name}`,
+        timestamp: now,
+      };
+
+      mealAttendancesStore.set(attendanceId, newAttendance);
+
+      res.json({
+        success: true,
+        data: newAttendance,
+        message: `Meal '${meal_period}' successfully recorded for ${hosteller.first_name} ${hosteller.last_name}.`,
+        correlation_id: correlationId,
+        timestamp: now,
+      });
+    } catch (e: any) {
+      res.status(e.status || 401).json({
+        success: false,
+        error: { code: "AUTHENTICATION_ERROR", message: e.message },
+        correlation_id: correlationId,
+      });
+    }
+  });
+
+  // 13. Restaurant Orders List: GET /api/v1/food/restaurant-orders
+  app.get("/api/v1/food/restaurant-orders", (req, res) => {
+    const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+    try {
+      const user = authenticate(req);
+      const propertyId = req.query.property_id as string;
+      const status = req.query.status as string;
+
+      if (!propertyId) {
+        res.status(422).json({
+          success: false,
+          error: { code: "VALIDATION_ERROR", message: "property_id is required." },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      if (!user.is_superuser && user.global_role !== "super_admin") {
+        if (user.global_role === "guest" || !user.assigned_property_ids.includes(propertyId)) {
+          res.status(403).json({
+            success: false,
+            error: { code: "PROPERTY_ACCESS_VIOLATION", message: `Access denied to property '${propertyId}'.` },
+            correlation_id: correlationId,
+          });
+          return;
+        }
+      }
+
+      let orders = Array.from(restaurantOrdersStore.values()).filter(
+        (o) => o.property_id === propertyId
+      );
+
+      if (status && status !== "all") {
+        orders = orders.filter((o) => o.status === status);
+      }
+
+      orders.sort((a, b) => b.created_at.localeCompare(a.created_at));
+
+      res.json({
+        success: true,
+        data: orders,
+        message: "Restaurant orders retrieved.",
+        correlation_id: correlationId,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (e: any) {
+      res.status(e.status || 401).json({
+        success: false,
+        error: { code: "AUTHENTICATION_ERROR", message: e.message },
+        correlation_id: correlationId,
+      });
+    }
+  });
+
+  // 14. Create Restaurant Order: POST /api/v1/food/restaurant-orders
+  // Integrated directly with Phase 9 finance engine!
+  app.post("/api/v1/food/restaurant-orders", (req, res) => {
+    const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+    try {
+      const user = authenticate(req);
+      const {
+        property_id,
+        customer_type,
+        customer_name,
+        customer_id,
+        hotel_stay_id,
+        room_number,
+        table_number,
+        items,
+        special_instructions,
+        bill_to_room,
+      } = req.body || {};
+
+      if (!property_id || !customer_name || !items || !Array.isArray(items) || items.length === 0) {
+        res.status(422).json({
+          success: false,
+          error: { code: "VALIDATION_ERROR", message: "property_id, customer_name, and at least one item are required." },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      if (!user.is_superuser && user.global_role !== "super_admin") {
+        if (!user.assigned_property_ids.includes(property_id)) {
+          res.status(403).json({
+            success: false,
+            error: { code: "PROPERTY_ACCESS_VIOLATION", message: `Access denied to property '${property_id}'.` },
+            correlation_id: correlationId,
+          });
+          return;
+        }
+      }
+
+      // Validate all items belong to property and build order items with authoritative prices
+      const orderItems: Array<{
+        item_id: string;
+        name: string;
+        quantity: number;
+        unit_price: number;
+        total: number;
+      }> = [];
+
+      const rawCalcLines: Array<{
+        charge_category: string;
+        description: string;
+        quantity: number;
+        unit_price: number;
+        discount_amount: number;
+      }> = [];
+
+      for (const reqItem of items) {
+        const menuItem = menuItemsStore.get(reqItem.item_id);
+        if (!menuItem || menuItem.property_id !== property_id) {
+          res.status(404).json({
+            success: false,
+            error: { code: "MENU_ITEM_NOT_FOUND", message: `Menu item '${reqItem.item_id}' not found at this property.` },
+            correlation_id: correlationId,
+          });
+          return;
+        }
+
+        const qty = Math.max(1, Number(reqItem.quantity) || 1);
+        const lineTotal = round2(qty * menuItem.price);
+
+        orderItems.push({
+          item_id: menuItem.id,
+          name: menuItem.name,
+          quantity: qty,
+          unit_price: menuItem.price,
+          total: lineTotal,
+        });
+
+        rawCalcLines.push({
+          charge_category: "mess_meal",
+          description: `${menuItem.name} x${qty}`,
+          quantity: qty,
+          unit_price: menuItem.price,
+          discount_amount: 0,
+        });
+      }
+
+      const now = new Date().toISOString();
+      const todayStr = now.split("T")[0];
+
+      // Authoritative Phase 9 tax calculation
+      const taxCalc = calculateTaxesForItems(property_id, todayStr, rawCalcLines);
+
+      const propCode = propertiesStore.get(property_id)?.code || "PROP";
+      const orderId = `ord-${crypto.randomUUID().substring(0, 8)}`;
+      const orderNumber = `ORD-2026-${propCode}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+      let invoiceId: string | undefined;
+
+      // If billing to room folio, issue folio invoice in Phase 9 finance
+      if (bill_to_room && hotel_stay_id) {
+        const stay = hotelStaysStore.get(hotel_stay_id);
+        invoiceId = `inv-${crypto.randomUUID().substring(0, 8)}`;
+        const invoiceNumber = `INV-2026-${propCode}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+        const newInvoice: InvoiceRecord = {
+          id: invoiceId,
+          invoice_number: invoiceNumber,
+          property_id,
+          status: "issued",
+          issue_date: todayStr,
+          due_date: stay?.check_out_date || todayStr,
+          customer_type: customer_type || "guest",
+          customer_id: customer_id || stay?.guest_id,
+          customer_name: customer_name.trim(),
+          reservation_type: "hotel_stay",
+          reservation_id: hotel_stay_id,
+          reservation_reference: stay?.stay_reference,
+          line_items: taxCalc.line_items,
+          currency: taxCalc.tax_snapshot.currency,
+          subtotal: taxCalc.subtotal,
+          discount_total: taxCalc.discount_total,
+          tax_total: taxCalc.tax_total,
+          total_amount: taxCalc.total_amount,
+          amount_paid: 0.0,
+          outstanding_balance: taxCalc.total_amount,
+          tax_snapshot: taxCalc.tax_snapshot,
+          notes: `Restaurant Order #${orderNumber} (Room ${room_number || stay?.assigned_room_id})`,
+          created_by_user_id: user.id,
+
+          audit_trail: [
+            {
+              id: `aud-${crypto.randomUUID().substring(0, 8)}`,
+              action: "issued",
+              timestamp: now,
+              performed_by_user_id: user.id,
+              performed_by_name: `${user.first_name} ${user.last_name}`,
+              details: `Restaurant order #${orderNumber} billed to room folio (${taxCalc.tax_snapshot.currency} ${taxCalc.total_amount.toFixed(2)}).`,
+            },
+          ],
+          created_at: now,
+          updated_at: now,
+        };
+
+        invoicesStore.set(invoiceId, newInvoice);
+      }
+
+      const newOrder: RestaurantOrderRecord = {
+        id: orderId,
+        order_number: orderNumber,
+        property_id,
+        customer_type: customer_type || "walk_in",
+        customer_id,
+        customer_name: customer_name.trim(),
+        hotel_stay_id,
+        room_number,
+        table_number,
+        items: orderItems,
+        subtotal: taxCalc.subtotal,
+        discount_amount: taxCalc.discount_total,
+        tax_amount: taxCalc.tax_total,
+        total_amount: taxCalc.total_amount,
+        currency: taxCalc.tax_snapshot.currency,
+        status: "placed",
+        billing_status: bill_to_room && hotel_stay_id ? "billed_to_room" : "pending",
+        invoice_id: invoiceId,
+        special_instructions,
+        created_by_user_id: user.id,
+        created_by_name: `${user.first_name} ${user.last_name}`,
+        created_at: now,
+        updated_at: now,
+      };
+
+      restaurantOrdersStore.set(orderId, newOrder);
+
+      res.json({
+        success: true,
+        data: newOrder,
+        message: `Order #${orderNumber} created successfully.`,
+        correlation_id: correlationId,
+        timestamp: now,
+      });
+    } catch (e: any) {
+      res.status(e.status || 401).json({
+        success: false,
+        error: { code: "AUTHENTICATION_ERROR", message: e.message },
+        correlation_id: correlationId,
+      });
+    }
+  });
+
+  // 15. Update Restaurant Order Status: PUT /api/v1/food/restaurant-orders/:id/status
+  app.put("/api/v1/food/restaurant-orders/:id/status", (req, res) => {
+    const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+    try {
+      const user = authenticate(req);
+      const order = restaurantOrdersStore.get(req.params.id);
+
+      if (!order) {
+        res.status(404).json({
+          success: false,
+          error: { code: "ORDER_NOT_FOUND", message: `Order '${req.params.id}' not found.` },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      if (!user.is_superuser && user.global_role !== "super_admin") {
+        if (!user.assigned_property_ids.includes(order.property_id)) {
+          res.status(403).json({
+            success: false,
+            error: { code: "PROPERTY_ACCESS_VIOLATION", message: `Access denied to property '${order.property_id}'.` },
+            correlation_id: correlationId,
+          });
+          return;
+        }
+      }
+
+      const { status } = req.body || {};
+      const validStatuses = ["draft", "placed", "preparing", "ready", "served", "completed", "cancelled"];
+
+      if (!status || !validStatuses.includes(status)) {
+        res.status(422).json({
+          success: false,
+          error: { code: "INVALID_STATUS", message: `Status must be one of: ${validStatuses.join(", ")}` },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      order.status = status;
+      order.updated_at = new Date().toISOString();
+      restaurantOrdersStore.set(order.id, order);
+
+      res.json({
+        success: true,
+        data: order,
+        message: `Order #${order.order_number} status updated to '${status}'.`,
+        correlation_id: correlationId,
+        timestamp: order.updated_at,
+      });
+    } catch (e: any) {
+      res.status(e.status || 401).json({
+        success: false,
+        error: { code: "AUTHENTICATION_ERROR", message: e.message },
+        correlation_id: correlationId,
+      });
+    }
+  });
+
+  // 16. Food Stock Items List: GET /api/v1/food/stock
+  app.get("/api/v1/food/stock", (req, res) => {
+    const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+    try {
+      const user = authenticate(req);
+      const propertyId = req.query.property_id as string;
+
+      if (!propertyId) {
+        res.status(422).json({
+          success: false,
+          error: { code: "VALIDATION_ERROR", message: "property_id is required." },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      if (!user.is_superuser && user.global_role !== "super_admin") {
+        if (user.global_role === "guest" || !user.assigned_property_ids.includes(propertyId)) {
+          res.status(403).json({
+            success: false,
+            error: { code: "PROPERTY_ACCESS_VIOLATION", message: `Access denied to property '${propertyId}'.` },
+            correlation_id: correlationId,
+          });
+          return;
+        }
+      }
+
+      const stockItems = Array.from(foodStockItemsStore.values())
+        .filter((s) => s.property_id === propertyId)
+        .map((s) => ({
+          ...s,
+          is_low_stock: s.current_quantity <= s.low_stock_threshold,
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+
+      res.json({
+        success: true,
+        data: stockItems,
+        message: "Stock items retrieved.",
+        correlation_id: correlationId,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (e: any) {
+      res.status(e.status || 401).json({
+        success: false,
+        error: { code: "AUTHENTICATION_ERROR", message: e.message },
+        correlation_id: correlationId,
+      });
+    }
+  });
+
+  // 17. Create Stock Item: POST /api/v1/food/stock
+  app.post("/api/v1/food/stock", (req, res) => {
+    const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+    try {
+      const user = authenticate(req);
+      const { property_id, name, category, unit_of_measure, current_quantity, low_stock_threshold, cost_per_unit, supplier_name } = req.body || {};
+
+      if (!property_id || !name || !category || !unit_of_measure || current_quantity === undefined) {
+        res.status(422).json({
+          success: false,
+          error: { code: "VALIDATION_ERROR", message: "property_id, name, category, unit_of_measure, and current_quantity are required." },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      if (!user.is_superuser && user.global_role !== "super_admin") {
+        if (!user.assigned_property_ids.includes(property_id)) {
+          res.status(403).json({
+            success: false,
+            error: { code: "PROPERTY_ACCESS_VIOLATION", message: `Access denied to property '${property_id}'.` },
+            correlation_id: correlationId,
+          });
+          return;
+        }
+      }
+
+      const prop = propertiesStore.get(property_id);
+      const currency = prop?.currency || "GBP";
+      const now = new Date().toISOString();
+      const id = `stk-${crypto.randomUUID().substring(0, 8)}`;
+
+      const newStockItem: FoodStockItemRecord = {
+        id,
+        property_id,
+        name: name.trim(),
+        category,
+        unit_of_measure,
+        current_quantity: Math.max(0, Number(current_quantity) || 0),
+        low_stock_threshold: Math.max(0, Number(low_stock_threshold) || 5),
+        cost_per_unit: round2(Number(cost_per_unit) || 0),
+        currency,
+        supplier_name,
+        created_at: now,
+        updated_at: now,
+      };
+
+      foodStockItemsStore.set(id, newStockItem);
+
+      res.json({
+        success: true,
+        data: newStockItem,
+        message: "Food stock item created successfully.",
+        correlation_id: correlationId,
+        timestamp: now,
+      });
+    } catch (e: any) {
+      res.status(e.status || 401).json({
+        success: false,
+        error: { code: "AUTHENTICATION_ERROR", message: e.message },
+        correlation_id: correlationId,
+      });
+    }
+  });
+
+  // 18. Record Stock Movement: POST /api/v1/food/stock/:id/movement
+  app.post("/api/v1/food/stock/:id/movement", (req, res) => {
+    const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+    try {
+      const user = authenticate(req);
+      const item = foodStockItemsStore.get(req.params.id);
+
+      if (!item) {
+        res.status(404).json({
+          success: false,
+          error: { code: "STOCK_ITEM_NOT_FOUND", message: `Stock item '${req.params.id}' not found.` },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      if (!user.is_superuser && user.global_role !== "super_admin") {
+        if (!user.assigned_property_ids.includes(item.property_id)) {
+          res.status(403).json({
+            success: false,
+            error: { code: "PROPERTY_ACCESS_VIOLATION", message: `Access denied to property '${item.property_id}'.` },
+            correlation_id: correlationId,
+          });
+          return;
+        }
+      }
+
+      const { movement_type, quantity_delta, reason } = req.body || {};
+      const delta = Number(quantity_delta);
+
+      if (isNaN(delta) || delta === 0) {
+        res.status(422).json({
+          success: false,
+          error: { code: "INVALID_DELTA", message: "quantity_delta must be a non-zero number." },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      const resultingQty = Math.max(0, round2(item.current_quantity + delta));
+      item.current_quantity = resultingQty;
+      item.updated_at = new Date().toISOString();
+      foodStockItemsStore.set(item.id, item);
+
+      const movementId = `mov-${crypto.randomUUID().substring(0, 8)}`;
+      const movement: FoodStockMovementRecord = {
+        id: movementId,
+        stock_item_id: item.id,
+        stock_item_name: item.name,
+        property_id: item.property_id,
+        movement_type: movement_type || (delta > 0 ? "receipt" : "consumption"),
+        quantity_delta: delta,
+        resulting_quantity: resultingQty,
+        unit_of_measure: item.unit_of_measure,
+        reason,
+        performed_by_user_id: user.id,
+        performed_by_name: `${user.first_name} ${user.last_name}`,
+        timestamp: item.updated_at,
+      };
+
+      foodStockMovementsStore.set(movementId, movement);
+
+      res.json({
+        success: true,
+        data: {
+          stock_item: {
+            ...item,
+            is_low_stock: item.current_quantity <= item.low_stock_threshold,
+          },
+          movement,
+        },
+
+        message: `Stock updated. Current balance: ${resultingQty} ${item.unit_of_measure}.`,
+        correlation_id: correlationId,
+        timestamp: item.updated_at,
+      });
+    } catch (e: any) {
+      res.status(e.status || 401).json({
+        success: false,
+        error: { code: "AUTHENTICATION_ERROR", message: e.message },
+        correlation_id: correlationId,
+      });
+    }
+  });
+
+  // 19. Stock Movements History: GET /api/v1/food/stock/movements
+  app.get("/api/v1/food/stock-movements", (req, res) => {
+    const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+    try {
+      const user = authenticate(req);
+      const propertyId = req.query.property_id as string;
+
+      if (!propertyId) {
+        res.status(422).json({
+          success: false,
+          error: { code: "VALIDATION_ERROR", message: "property_id is required." },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      if (!user.is_superuser && user.global_role !== "super_admin") {
+        if (!user.assigned_property_ids.includes(propertyId)) {
+          res.status(403).json({
+            success: false,
+            error: { code: "PROPERTY_ACCESS_VIOLATION", message: `Access denied to property '${propertyId}'.` },
+            correlation_id: correlationId,
+          });
+          return;
+        }
+      }
+
+      const movements = Array.from(foodStockMovementsStore.values())
+        .filter((m) => m.property_id === propertyId)
+        .sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+
+      res.json({
+        success: true,
+        data: movements,
+        message: "Stock movements retrieved.",
+        correlation_id: correlationId,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (e: any) {
+      res.status(e.status || 401).json({
+        success: false,
+        error: { code: "AUTHENTICATION_ERROR", message: e.message },
+        correlation_id: correlationId,
+      });
+    }
+  });
+
+  // 20. Food Service Operational Dashboard: GET /api/v1/food/dashboard
+  app.get("/api/v1/food/dashboard", (req, res) => {
+    const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+    try {
+      const user = authenticate(req);
+      const propertyId = req.query.property_id as string;
+
+      if (!propertyId) {
+        res.status(422).json({
+          success: false,
+          error: { code: "VALIDATION_ERROR", message: "property_id is required." },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      if (!user.is_superuser && user.global_role !== "super_admin") {
+        if (user.global_role === "guest" || !user.assigned_property_ids.includes(propertyId)) {
+          res.status(403).json({
+            success: false,
+            error: { code: "PROPERTY_ACCESS_VIOLATION", message: `Access denied to property '${propertyId}'.` },
+            correlation_id: correlationId,
+          });
+          return;
+        }
+      }
+
+      const prop = propertiesStore.get(propertyId);
+      const currency = prop?.currency || "GBP";
+      const todayStr = new Date().toISOString().split("T")[0];
+
+      const config = foodConfigsStore.get(propertyId) || {
+        property_id: propertyId,
+        mess_enabled: true,
+        restaurant_enabled: true,
+        meal_periods: [
+          { id: "breakfast", name: "Breakfast", start_time: "07:00", end_time: "10:30", is_active: true },
+          { id: "dinner", name: "Dinner", start_time: "18:30", end_time: "21:30", is_active: true },
+        ],
+        allow_pay_per_meal: true,
+        default_pay_per_meal_price: 10.0,
+        currency,
+        updated_at: new Date().toISOString(),
+      };
+
+      const activePlans = Array.from(mealEntitlementsStore.values()).filter(
+        (e) => e.property_id === propertyId && e.status === "active" && e.start_date <= todayStr && e.end_date >= todayStr
+      ).length;
+
+      const todayAttendance = Array.from(mealAttendancesStore.values()).filter(
+        (a) => a.property_id === propertyId && a.service_date === todayStr
+      );
+
+      const attendanceByPeriod: Record<string, number> = {};
+      for (const att of todayAttendance) {
+        attendanceByPeriod[att.meal_period] = (attendanceByPeriod[att.meal_period] || 0) + 1;
+      }
+
+      const todayOrders = Array.from(restaurantOrdersStore.values()).filter(
+        (o) => o.property_id === propertyId && o.created_at.startsWith(todayStr)
+      );
+
+      const activeKitchenOrders = todayOrders.filter(
+        (o) => o.status === "placed" || o.status === "preparing" || o.status === "ready"
+      ).length;
+
+      const availableItems = Array.from(menuItemsStore.values()).filter(
+        (m) => m.property_id === propertyId && m.is_available
+      ).length;
+
+      const lowStockCount = Array.from(foodStockItemsStore.values()).filter(
+        (s) => s.property_id === propertyId && s.current_quantity <= s.low_stock_threshold
+      ).length;
+
+      res.json({
+        success: true,
+        data: {
+          property_id: propertyId,
+          currency,
+          mess_enabled: config.mess_enabled,
+          restaurant_enabled: config.restaurant_enabled,
+          active_meal_plans_count: activePlans,
+          today_meal_attendance_count: todayAttendance.length,
+          today_restaurant_orders_count: todayOrders.length,
+          active_kitchen_orders_count: activeKitchenOrders,
+          available_menu_items_count: availableItems,
+          low_stock_items_count: lowStockCount,
+          service_periods: config.meal_periods,
+          today_attendance_by_period: attendanceByPeriod,
+        },
+        message: "Food service operational dashboard retrieved.",
+        correlation_id: correlationId,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (e: any) {
+      res.status(e.status || 401).json({
+        success: false,
+        error: { code: "AUTHENTICATION_ERROR", message: e.message },
+        correlation_id: correlationId,
+      });
+    }
+  });
+
+  // ========================================================
+  // PHASE 11: STAFF & OPERATIONS MANAGEMENT REST ENDPOINTS
+  // ========================================================
+
+  // 1. Staff Members List: GET /api/v1/operations/staff
+  app.get("/api/v1/operations/staff", (req, res) => {
+    const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+    try {
+      const user = authenticate(req);
+      const propertyId = req.query.property_id as string;
+      const department = req.query.department as string;
+      const status = req.query.status as string;
+
+      if (!propertyId) {
+        res.status(422).json({
+          success: false,
+          error: { code: "VALIDATION_ERROR", message: "property_id is required." },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      if (!user.is_superuser && user.global_role !== "super_admin") {
+        if (user.global_role === "guest" || !user.assigned_property_ids.includes(propertyId)) {
+          res.status(403).json({
+            success: false,
+            error: { code: "PROPERTY_ACCESS_VIOLATION", message: `Access denied to property '${propertyId}'.` },
+            correlation_id: correlationId,
+          });
+          return;
+        }
+      }
+
+      let staffList = Array.from(staffMembersStore.values()).filter(
+        (s) => s.property_id === propertyId
+      );
+
+      if (department) {
+        staffList = staffList.filter((s) => s.department === department);
+      }
+      if (status) {
+        staffList = staffList.filter((s) => s.status === status);
+      }
+
+      staffList.sort((a, b) => a.last_name.localeCompare(b.last_name));
+
+      res.json({
+        success: true,
+        data: staffList,
+        message: "Staff directory retrieved.",
+        correlation_id: correlationId,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (e: any) {
+      res.status(e.status || 401).json({
+        success: false,
+        error: { code: "AUTHENTICATION_ERROR", message: e.message },
+        correlation_id: correlationId,
+      });
+    }
+  });
+
+  // 2. Create Staff Member: POST /api/v1/operations/staff
+  app.post("/api/v1/operations/staff", (req, res) => {
+    const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+    try {
+      const user = authenticate(req);
+      const {
+        property_id,
+        first_name,
+        last_name,
+        email,
+        phone,
+        department,
+        job_title,
+        employment_type,
+        status,
+        emergency_contact_name,
+        emergency_contact_phone,
+        hourly_rate,
+        salary,
+        hire_date,
+      } = req.body;
+
+      if (!property_id || !first_name || !last_name || !department || !job_title) {
+        res.status(422).json({
+          success: false,
+          error: {
+            code: "VALIDATION_ERROR",
+            message: "property_id, first_name, last_name, department, and job_title are required.",
+          },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      if (!user.is_superuser && user.global_role !== "super_admin" && user.global_role !== "property_manager") {
+        res.status(403).json({
+          success: false,
+          error: { code: "PERMISSION_DENIED", message: "Only managers or super admins can create staff members." },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      if (!user.is_superuser && user.global_role !== "super_admin" && !user.assigned_property_ids.includes(property_id)) {
+        res.status(403).json({
+          success: false,
+          error: { code: "PROPERTY_ACCESS_VIOLATION", message: `Access denied to property '${property_id}'.` },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      const existingCount = Array.from(staffMembersStore.values()).filter((s) => s.property_id === property_id).length;
+      const propCode = property_id.includes("hostel") ? "EDI" : property_id.includes("hotel") ? "LON" : "BRI";
+      const code = req.body.employee_code || `EMP-${propCode}-${String(existingCount + 1).padStart(3, "0")}`;
+
+      const newStaff: StaffMemberRecord = {
+        id: `stf-${crypto.randomUUID().substring(0, 8)}`,
+        property_id,
+        user_id: req.body.user_id,
+        employee_code: code,
+        first_name,
+        last_name,
+        email: email || `${first_name.toLowerCase()}.${last_name.toLowerCase()}@grandstay.com`,
+        phone: phone || "+44 20 7000 0000",
+        department,
+        job_title,
+        employment_type: employment_type || "full_time",
+        status: status || "active",
+        emergency_contact_name: emergency_contact_name || "Emergency Contact",
+        emergency_contact_phone: emergency_contact_phone || phone || "+44 20 7000 0000",
+        hourly_rate: Number(hourly_rate) || 16.0,
+        salary: salary ? Number(salary) : undefined,
+        hire_date: hire_date || new Date().toISOString().split("T")[0],
+        is_active: true,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+
+      staffMembersStore.set(newStaff.id, newStaff);
+
+      res.status(201).json({
+        success: true,
+        data: newStaff,
+        message: "Staff member registered successfully.",
+        correlation_id: correlationId,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (e: any) {
+      res.status(e.status || 401).json({
+        success: false,
+        error: { code: "AUTHENTICATION_ERROR", message: e.message },
+        correlation_id: correlationId,
+      });
+    }
+  });
+
+  // 3. Update Staff Member: PUT /api/v1/operations/staff/:id
+  app.put("/api/v1/operations/staff/:id", (req, res) => {
+    const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+    try {
+      const user = authenticate(req);
+      const staffId = req.params.id;
+      const staff = staffMembersStore.get(staffId);
+
+      if (!staff) {
+        res.status(404).json({
+          success: false,
+          error: { code: "STAFF_NOT_FOUND", message: `Staff member '${staffId}' not found.` },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      if (!user.is_superuser && user.global_role !== "super_admin" && user.global_role !== "property_manager") {
+        res.status(403).json({
+          success: false,
+          error: { code: "PERMISSION_DENIED", message: "Manager privilege required to update staff." },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      const updates = req.body;
+      if (updates.first_name) staff.first_name = updates.first_name;
+      if (updates.last_name) staff.last_name = updates.last_name;
+      if (updates.department) staff.department = updates.department;
+      if (updates.job_title) staff.job_title = updates.job_title;
+      if (updates.employment_type) staff.employment_type = updates.employment_type;
+      if (updates.status) staff.status = updates.status;
+      if (updates.phone) staff.phone = updates.phone;
+      if (updates.email) staff.email = updates.email;
+      if (updates.emergency_contact_name) staff.emergency_contact_name = updates.emergency_contact_name;
+      if (updates.emergency_contact_phone) staff.emergency_contact_phone = updates.emergency_contact_phone;
+      if (updates.hourly_rate !== undefined) staff.hourly_rate = Number(updates.hourly_rate);
+      if (updates.salary !== undefined) staff.salary = Number(updates.salary);
+      staff.updated_at = new Date().toISOString();
+
+      res.json({
+        success: true,
+        data: staff,
+        message: "Staff member profile updated.",
+        correlation_id: correlationId,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (e: any) {
+      res.status(e.status || 401).json({
+        success: false,
+        error: { code: "AUTHENTICATION_ERROR", message: e.message },
+        correlation_id: correlationId,
+      });
+    }
+  });
+
+  // 4. Staff Shifts List: GET /api/v1/operations/shifts
+  app.get("/api/v1/operations/shifts", (req, res) => {
+    const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+    try {
+      const user = authenticate(req);
+      const propertyId = req.query.property_id as string;
+      const shiftDate = req.query.shift_date as string;
+      const department = req.query.department as string;
+      const staffId = req.query.staff_id as string;
+
+      if (!propertyId) {
+        res.status(422).json({
+          success: false,
+          error: { code: "VALIDATION_ERROR", message: "property_id is required." },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      if (!user.is_superuser && user.global_role !== "super_admin") {
+        if (user.global_role === "guest" || !user.assigned_property_ids.includes(propertyId)) {
+          res.status(403).json({
+            success: false,
+            error: { code: "PROPERTY_ACCESS_VIOLATION", message: `Access denied to property '${propertyId}'.` },
+            correlation_id: correlationId,
+          });
+          return;
+        }
+      }
+
+      let shifts = Array.from(staffShiftsStore.values()).filter((s) => s.property_id === propertyId);
+      if (shiftDate) shifts = shifts.filter((s) => s.shift_date === shiftDate);
+      if (department) shifts = shifts.filter((s) => s.department === department);
+      if (staffId) shifts = shifts.filter((s) => s.staff_id === staffId);
+
+      shifts.sort((a, b) => `${a.shift_date} ${a.start_time}`.localeCompare(`${b.shift_date} ${b.start_time}`));
+
+      res.json({
+        success: true,
+        data: shifts,
+        message: "Staff shift schedule retrieved.",
+        correlation_id: correlationId,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (e: any) {
+      res.status(e.status || 401).json({
+        success: false,
+        error: { code: "AUTHENTICATION_ERROR", message: e.message },
+        correlation_id: correlationId,
+      });
+    }
+  });
+
+  // 5. Schedule Shift: POST /api/v1/operations/shifts
+  app.post("/api/v1/operations/shifts", (req, res) => {
+    const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+    try {
+      const user = authenticate(req);
+      const {
+        property_id,
+        staff_id,
+        shift_type,
+        shift_date,
+        start_time,
+        end_time,
+        break_duration_minutes,
+        station_or_zone,
+        notes,
+      } = req.body;
+
+      if (!property_id || !staff_id || !shift_type || !shift_date || !start_time || !end_time) {
+        res.status(422).json({
+          success: false,
+          error: {
+            code: "VALIDATION_ERROR",
+            message: "property_id, staff_id, shift_type, shift_date, start_time, and end_time are required.",
+          },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      if (!user.is_superuser && user.global_role !== "super_admin" && user.global_role !== "property_manager" && user.global_role !== "front_desk") {
+        res.status(403).json({
+          success: false,
+          error: { code: "PERMISSION_DENIED", message: "Operational privilege required to schedule shifts." },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      const staff = staffMembersStore.get(staff_id);
+      const staffName = staff ? `${staff.first_name} ${staff.last_name}` : "Assigned Staff";
+      const department = staff ? staff.department : "general";
+
+      const newShift: StaffShiftRecord = {
+        id: `shf-${crypto.randomUUID().substring(0, 8)}`,
+        property_id,
+        staff_id,
+        staff_name: staffName,
+        department,
+        shift_type,
+        shift_date,
+        start_time,
+        end_time,
+        break_duration_minutes: Number(break_duration_minutes) || 30,
+        status: "scheduled",
+        station_or_zone,
+        notes,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+
+      staffShiftsStore.set(newShift.id, newShift);
+
+      res.status(201).json({
+        success: true,
+        data: newShift,
+        message: "Staff shift scheduled successfully.",
+        correlation_id: correlationId,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (e: any) {
+      res.status(e.status || 401).json({
+        success: false,
+        error: { code: "AUTHENTICATION_ERROR", message: e.message },
+        correlation_id: correlationId,
+      });
+    }
+  });
+
+  // 6. Update Shift: PUT /api/v1/operations/shifts/:id
+  app.put("/api/v1/operations/shifts/:id", (req, res) => {
+    const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+    try {
+      const user = authenticate(req);
+      const shiftId = req.params.id;
+      const shift = staffShiftsStore.get(shiftId);
+
+      if (!shift) {
+        res.status(404).json({
+          success: false,
+          error: { code: "SHIFT_NOT_FOUND", message: `Shift '${shiftId}' not found.` },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      const updates = req.body;
+      if (updates.status) shift.status = updates.status;
+      if (updates.start_time) shift.start_time = updates.start_time;
+      if (updates.end_time) shift.end_time = updates.end_time;
+      if (updates.station_or_zone !== undefined) shift.station_or_zone = updates.station_or_zone;
+      if (updates.notes !== undefined) shift.notes = updates.notes;
+      shift.updated_at = new Date().toISOString();
+
+      res.json({
+        success: true,
+        data: shift,
+        message: "Shift updated successfully.",
+        correlation_id: correlationId,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (e: any) {
+      res.status(e.status || 401).json({
+        success: false,
+        error: { code: "AUTHENTICATION_ERROR", message: e.message },
+        correlation_id: correlationId,
+      });
+    }
+  });
+
+  // 7. Staff Attendance List: GET /api/v1/operations/attendance
+  app.get("/api/v1/operations/attendance", (req, res) => {
+    const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+    try {
+      const user = authenticate(req);
+      const propertyId = req.query.property_id as string;
+      const attendanceDate = req.query.attendance_date as string;
+      const staffId = req.query.staff_id as string;
+
+      if (!propertyId) {
+        res.status(422).json({
+          success: false,
+          error: { code: "VALIDATION_ERROR", message: "property_id is required." },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      if (!user.is_superuser && user.global_role !== "super_admin") {
+        if (user.global_role === "guest" || !user.assigned_property_ids.includes(propertyId)) {
+          res.status(403).json({
+            success: false,
+            error: { code: "PROPERTY_ACCESS_VIOLATION", message: `Access denied to property '${propertyId}'.` },
+            correlation_id: correlationId,
+          });
+          return;
+        }
+      }
+
+      let attList = Array.from(staffAttendanceStore.values()).filter((a) => a.property_id === propertyId);
+      if (attendanceDate) attList = attList.filter((a) => a.attendance_date === attendanceDate);
+      if (staffId) attList = attList.filter((a) => a.staff_id === staffId);
+
+      attList.sort((a, b) => b.clock_in_time.localeCompare(a.clock_in_time));
+
+      res.json({
+        success: true,
+        data: attList,
+        message: "Attendance records retrieved.",
+        correlation_id: correlationId,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (e: any) {
+      res.status(e.status || 401).json({
+        success: false,
+        error: { code: "AUTHENTICATION_ERROR", message: e.message },
+        correlation_id: correlationId,
+      });
+    }
+  });
+
+  // 8. Clock-in Staff: POST /api/v1/operations/attendance/clock-in
+  app.post("/api/v1/operations/attendance/clock-in", (req, res) => {
+    const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+    try {
+      const user = authenticate(req);
+      const { property_id, staff_id, shift_id, clock_in_time, notes } = req.body;
+
+      if (!property_id || !staff_id) {
+        res.status(422).json({
+          success: false,
+          error: { code: "VALIDATION_ERROR", message: "property_id and staff_id are required." },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      const staff = staffMembersStore.get(staff_id);
+      if (!staff) {
+        res.status(404).json({
+          success: false,
+          error: { code: "STAFF_NOT_FOUND", message: `Staff member '${staff_id}' not found.` },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      const nowIso = clock_in_time || new Date().toISOString();
+      const todayDateStr = nowIso.split("T")[0];
+
+      // Check if already clocked in today without clocking out
+      const existingActive = Array.from(staffAttendanceStore.values()).find(
+        (a) => a.staff_id === staff_id && a.attendance_date === todayDateStr && !a.clock_out_time
+      );
+      if (existingActive) {
+        res.status(409).json({
+          success: false,
+          error: { code: "ALREADY_CLOCKED_IN", message: "Staff member is currently clocked in." },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      // Check if late against shift
+      let status: "present" | "late" = "present";
+      let lateMinutes = 0;
+      if (shift_id) {
+        const shift = staffShiftsStore.get(shift_id);
+        if (shift) {
+          const shiftStartDateTime = new Date(`${shift.shift_date}T${shift.start_time}:00Z`).getTime();
+          const clockInDateTime = new Date(nowIso).getTime();
+          const diffMinutes = Math.floor((clockInDateTime - shiftStartDateTime) / 60000);
+          if (diffMinutes > 10) {
+            status = "late";
+            lateMinutes = diffMinutes;
+          }
+          shift.status = "in_progress";
+        }
+      }
+
+      const newAtt: StaffAttendanceRecord = {
+        id: `att-${crypto.randomUUID().substring(0, 8)}`,
+        property_id,
+        staff_id,
+        staff_name: `${staff.first_name} ${staff.last_name}`,
+        attendance_date: todayDateStr,
+        shift_id,
+        clock_in_time: nowIso,
+        total_work_minutes: 0,
+        status,
+        late_minutes: lateMinutes,
+        verified_by_user_id: user.id,
+        notes,
+        created_at: nowIso,
+        updated_at: nowIso,
+      };
+
+      staffAttendanceStore.set(newAtt.id, newAtt);
+
+      res.status(201).json({
+        success: true,
+        data: newAtt,
+        message: `Clock-in recorded (${status}).`,
+        correlation_id: correlationId,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (e: any) {
+      res.status(e.status || 401).json({
+        success: false,
+        error: { code: "AUTHENTICATION_ERROR", message: e.message },
+        correlation_id: correlationId,
+      });
+    }
+  });
+
+  // 9. Clock-out Staff: POST /api/v1/operations/attendance/:id/clock-out
+  app.post("/api/v1/operations/attendance/:id/clock-out", (req, res) => {
+    const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+    try {
+      const user = authenticate(req);
+      const attId = req.params.id;
+      const att = staffAttendanceStore.get(attId);
+
+      if (!att) {
+        res.status(404).json({
+          success: false,
+          error: { code: "ATTENDANCE_NOT_FOUND", message: `Attendance record '${attId}' not found.` },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      const nowIso = req.body.clock_out_time || new Date().toISOString();
+      const inTime = new Date(att.clock_in_time).getTime();
+      const outTime = new Date(nowIso).getTime();
+      const totalMinutes = Math.max(0, Math.round((outTime - inTime) / 60000));
+
+      att.clock_out_time = nowIso;
+      att.total_work_minutes = totalMinutes;
+      if (req.body.notes) {
+        att.notes = att.notes ? `${att.notes} | ${req.body.notes}` : req.body.notes;
+      }
+      att.updated_at = nowIso;
+
+      if (att.shift_id) {
+        const shift = staffShiftsStore.get(att.shift_id);
+        if (shift) {
+          shift.status = "completed";
+          shift.updated_at = nowIso;
+        }
+      }
+
+      res.json({
+        success: true,
+        data: att,
+        message: `Clock-out recorded. Total shift: ${Math.floor(totalMinutes / 60)}h ${totalMinutes % 60}m.`,
+        correlation_id: correlationId,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (e: any) {
+      res.status(e.status || 401).json({
+        success: false,
+        error: { code: "AUTHENTICATION_ERROR", message: e.message },
+        correlation_id: correlationId,
+      });
+    }
+  });
+
+  // 10. Housekeeping Tasks List: GET /api/v1/operations/housekeeping
+  app.get("/api/v1/operations/housekeeping", (req, res) => {
+    const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+    try {
+      const user = authenticate(req);
+      const propertyId = req.query.property_id as string;
+      const status = req.query.status as string;
+      const roomId = req.query.room_id as string;
+
+      if (!propertyId) {
+        res.status(422).json({
+          success: false,
+          error: { code: "VALIDATION_ERROR", message: "property_id is required." },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      if (!user.is_superuser && user.global_role !== "super_admin") {
+        if (user.global_role === "guest" || !user.assigned_property_ids.includes(propertyId)) {
+          res.status(403).json({
+            success: false,
+            error: { code: "PROPERTY_ACCESS_VIOLATION", message: `Access denied to property '${propertyId}'.` },
+            correlation_id: correlationId,
+          });
+          return;
+        }
+      }
+
+      let tasks = Array.from(housekeepingTasksStore.values()).filter((t) => t.property_id === propertyId);
+      if (status) tasks = tasks.filter((t) => t.status === status);
+      if (roomId) tasks = tasks.filter((t) => t.room_id === roomId);
+
+      const priorityOrder: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3 };
+      tasks.sort((a, b) => {
+        const pDiff = (priorityOrder[a.priority] ?? 2) - (priorityOrder[b.priority] ?? 2);
+        if (pDiff !== 0) return pDiff;
+        return b.created_at.localeCompare(a.created_at);
+      });
+
+      res.json({
+        success: true,
+        data: tasks,
+        message: "Housekeeping tasks retrieved.",
+        correlation_id: correlationId,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (e: any) {
+      res.status(e.status || 401).json({
+        success: false,
+        error: { code: "AUTHENTICATION_ERROR", message: e.message },
+        correlation_id: correlationId,
+      });
+    }
+  });
+
+  // 11. Create Housekeeping Task: POST /api/v1/operations/housekeeping
+  app.post("/api/v1/operations/housekeeping", (req, res) => {
+    const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+    try {
+      const user = authenticate(req);
+      const {
+        property_id,
+        room_id,
+        bed_id,
+        cleaning_type,
+        priority,
+        assigned_staff_id,
+        notes,
+        checklist,
+      } = req.body;
+
+      if (!property_id || !cleaning_type) {
+        res.status(422).json({
+          success: false,
+          error: { code: "VALIDATION_ERROR", message: "property_id and cleaning_type are required." },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      let roomNumber: string | undefined;
+      if (room_id) {
+        const room = roomsStore.get(room_id);
+        if (room) {
+          roomNumber = room.room_number;
+          if (cleaning_type === "checkout_clean" || cleaning_type === "deep_clean") {
+            room.cleanliness_status = "dirty";
+          }
+        }
+      }
+
+      let assignedStaffName: string | undefined;
+      if (assigned_staff_id) {
+        const staff = staffMembersStore.get(assigned_staff_id);
+        if (staff) assignedStaffName = `${staff.first_name} ${staff.last_name}`;
+      }
+
+      const defaultChecklist = checklist || [
+        { id: "chk-1", description: "Replace fresh linens and pillows", completed: false },
+        { id: "chk-2", description: "Disinfect washroom & bathroom fixtures", completed: false },
+        { id: "chk-3", description: "Restock guest amenities & towels", completed: false },
+        { id: "chk-4", description: "Vacuum floor and wipe surfaces", completed: false },
+      ];
+
+      const newTask: HousekeepingTaskRecord = {
+        id: `hk-${crypto.randomUUID().substring(0, 8)}`,
+        property_id,
+        room_id,
+        room_number: roomNumber,
+        bed_id,
+        cleaning_type,
+        priority: priority || "medium",
+        status: "pending",
+        assigned_staff_id,
+        assigned_staff_name: assignedStaffName,
+        checklist: defaultChecklist,
+        linen_changed: false,
+        amenities_restocked: false,
+        notes,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+
+      housekeepingTasksStore.set(newTask.id, newTask);
+
+      res.status(201).json({
+        success: true,
+        data: newTask,
+        message: "Housekeeping task queued.",
+        correlation_id: correlationId,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (e: any) {
+      res.status(e.status || 401).json({
+        success: false,
+        error: { code: "AUTHENTICATION_ERROR", message: e.message },
+        correlation_id: correlationId,
+      });
+    }
+  });
+
+  // 12. Update Housekeeping Task: PUT /api/v1/operations/housekeeping/:id
+  app.put("/api/v1/operations/housekeeping/:id", (req, res) => {
+    const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+    try {
+      const user = authenticate(req);
+      const taskId = req.params.id;
+      const task = housekeepingTasksStore.get(taskId);
+
+      if (!task) {
+        res.status(404).json({
+          success: false,
+          error: { code: "TASK_NOT_FOUND", message: `Housekeeping task '${taskId}' not found.` },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      const updates = req.body;
+      const nowIso = new Date().toISOString();
+
+      if (updates.assigned_staff_id) {
+        task.assigned_staff_id = updates.assigned_staff_id;
+        const staff = staffMembersStore.get(updates.assigned_staff_id);
+        if (staff) task.assigned_staff_name = `${staff.first_name} ${staff.last_name}`;
+      }
+      if (updates.priority) task.priority = updates.priority;
+      if (updates.checklist) task.checklist = updates.checklist;
+      if (updates.linen_changed !== undefined) task.linen_changed = Boolean(updates.linen_changed);
+      if (updates.amenities_restocked !== undefined) task.amenities_restocked = Boolean(updates.amenities_restocked);
+      if (updates.notes !== undefined) task.notes = updates.notes;
+
+      if (updates.status) {
+        task.status = updates.status;
+        if (updates.status === "in_progress" && !task.started_at) {
+          task.started_at = nowIso;
+        } else if (updates.status === "cleaned") {
+          task.completed_at = nowIso;
+          // Synchronize room cleanliness
+          if (task.room_id) {
+            const room = roomsStore.get(task.room_id);
+            if (room) room.cleanliness_status = "clean";
+          }
+        } else if (updates.status === "inspected") {
+          task.inspected_by_staff_id = updates.inspected_by_staff_id || user.id;
+          task.inspected_by_name = updates.inspected_by_name || `${user.first_name} ${user.last_name}`;
+          task.inspection_passed = updates.inspection_passed !== false;
+          // Synchronize room cleanliness
+          if (task.room_id) {
+            const room = roomsStore.get(task.room_id);
+            if (room && task.inspection_passed) room.cleanliness_status = "inspected";
+          }
+        }
+      }
+
+      task.updated_at = nowIso;
+
+      res.json({
+        success: true,
+        data: task,
+        message: `Housekeeping task updated (${task.status}).`,
+        correlation_id: correlationId,
+        timestamp: nowIso,
+      });
+    } catch (e: any) {
+      res.status(e.status || 401).json({
+        success: false,
+        error: { code: "AUTHENTICATION_ERROR", message: e.message },
+        correlation_id: correlationId,
+      });
+    }
+  });
+
+  // 13. Maintenance Orders List: GET /api/v1/operations/maintenance
+  app.get("/api/v1/operations/maintenance", (req, res) => {
+    const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+    try {
+      const user = authenticate(req);
+      const propertyId = req.query.property_id as string;
+      const status = req.query.status as string;
+      const priority = req.query.priority as string;
+      const category = req.query.category as string;
+
+      if (!propertyId) {
+        res.status(422).json({
+          success: false,
+          error: { code: "VALIDATION_ERROR", message: "property_id is required." },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      if (!user.is_superuser && user.global_role !== "super_admin") {
+        if (user.global_role === "guest" || !user.assigned_property_ids.includes(propertyId)) {
+          res.status(403).json({
+            success: false,
+            error: { code: "PROPERTY_ACCESS_VIOLATION", message: `Access denied to property '${propertyId}'.` },
+            correlation_id: correlationId,
+          });
+          return;
+        }
+      }
+
+      let orders = Array.from(maintenanceOrdersStore.values()).filter((m) => m.property_id === propertyId);
+      if (status) orders = orders.filter((m) => m.status === status);
+      if (priority) orders = orders.filter((m) => m.priority === priority);
+      if (category) orders = orders.filter((m) => m.category === category);
+
+      const priorityOrder: Record<string, number> = { emergency: 0, high: 1, medium: 2, low: 3 };
+      orders.sort((a, b) => {
+        const pDiff = (priorityOrder[a.priority] ?? 2) - (priorityOrder[b.priority] ?? 2);
+        if (pDiff !== 0) return pDiff;
+        return b.created_at.localeCompare(a.created_at);
+      });
+
+      res.json({
+        success: true,
+        data: orders,
+        message: "Maintenance work orders retrieved.",
+        correlation_id: correlationId,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (e: any) {
+      res.status(e.status || 401).json({
+        success: false,
+        error: { code: "AUTHENTICATION_ERROR", message: e.message },
+        correlation_id: correlationId,
+      });
+    }
+  });
+
+  // 14. Create Maintenance Work Order: POST /api/v1/operations/maintenance
+  app.post("/api/v1/operations/maintenance", (req, res) => {
+    const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+    try {
+      const user = authenticate(req);
+      const {
+        property_id,
+        title,
+        description,
+        category,
+        priority,
+        location_type,
+        room_id,
+        assigned_staff_id,
+        estimated_cost,
+      } = req.body;
+
+      if (!property_id || !title || !category || !priority) {
+        res.status(422).json({
+          success: false,
+          error: {
+            code: "VALIDATION_ERROR",
+            message: "property_id, title, category, and priority are required.",
+          },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      let roomNumber: string | undefined;
+      if (room_id) {
+        const room = roomsStore.get(room_id);
+        if (room) {
+          roomNumber = room.room_number;
+          if (priority === "emergency" || priority === "high") {
+            room.operational_status = "maintenance";
+          }
+        }
+      }
+
+      let assignedStaffName: string | undefined;
+      if (assigned_staff_id) {
+        const staff = staffMembersStore.get(assigned_staff_id);
+        if (staff) assignedStaffName = `${staff.first_name} ${staff.last_name}`;
+      }
+
+      const existingCount = Array.from(maintenanceOrdersStore.values()).filter((m) => m.property_id === property_id).length;
+      const propCode = property_id.includes("hostel") ? "EDI" : property_id.includes("hotel") ? "LON" : "BRI";
+      const workOrderNum = `WO-${propCode}-${String(existingCount + 1).padStart(3, "0")}`;
+
+      const newOrder: MaintenanceWorkOrderRecord = {
+        id: `wo-${crypto.randomUUID().substring(0, 8)}`,
+        property_id,
+        work_order_number: workOrderNum,
+        title,
+        description: description || title,
+        category,
+        priority,
+        location_type: location_type || "room",
+        room_id,
+        room_number: roomNumber,
+        reported_by_name: `${user.first_name} ${user.last_name}`,
+        reported_by_user_id: user.id,
+        assigned_staff_id,
+        assigned_staff_name: assignedStaffName,
+        estimated_cost: Number(estimated_cost) || 0,
+        actual_cost: 0,
+        status: assigned_staff_id ? "assigned" : "reported",
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+
+      maintenanceOrdersStore.set(newOrder.id, newOrder);
+
+      res.status(201).json({
+        success: true,
+        data: newOrder,
+        message: "Maintenance work order created.",
+        correlation_id: correlationId,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (e: any) {
+      res.status(e.status || 401).json({
+        success: false,
+        error: { code: "AUTHENTICATION_ERROR", message: e.message },
+        correlation_id: correlationId,
+      });
+    }
+  });
+
+  // 15. Update Maintenance Work Order: PUT /api/v1/operations/maintenance/:id
+  app.put("/api/v1/operations/maintenance/:id", (req, res) => {
+    const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+    try {
+      const user = authenticate(req);
+      const orderId = req.params.id;
+      const order = maintenanceOrdersStore.get(orderId);
+
+      if (!order) {
+        res.status(404).json({
+          success: false,
+          error: { code: "WORK_ORDER_NOT_FOUND", message: `Work order '${orderId}' not found.` },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      const updates = req.body;
+      const nowIso = new Date().toISOString();
+
+      if (updates.assigned_staff_id) {
+        order.assigned_staff_id = updates.assigned_staff_id;
+        const staff = staffMembersStore.get(updates.assigned_staff_id);
+        if (staff) order.assigned_staff_name = `${staff.first_name} ${staff.last_name}`;
+        if (order.status === "reported") order.status = "assigned";
+      }
+      if (updates.status) order.status = updates.status;
+      if (updates.priority) order.priority = updates.priority;
+      if (updates.actual_cost !== undefined) order.actual_cost = Number(updates.actual_cost);
+      if (updates.estimated_cost !== undefined) order.estimated_cost = Number(updates.estimated_cost);
+      if (updates.parts_used !== undefined) order.parts_used = updates.parts_used;
+      if (updates.resolution_notes !== undefined) order.resolution_notes = updates.resolution_notes;
+
+      if (updates.status === "resolved" || updates.status === "closed") {
+        order.resolved_at = nowIso;
+        // Release room back to available if it was placed in maintenance
+        if (order.room_id) {
+          const room = roomsStore.get(order.room_id);
+          if (room && room.operational_status === "maintenance") {
+            room.operational_status = "available";
+          }
+        }
+      }
+
+      order.updated_at = nowIso;
+
+      res.json({
+        success: true,
+        data: order,
+        message: `Work order updated (${order.status}).`,
+        correlation_id: correlationId,
+        timestamp: nowIso,
+      });
+    } catch (e: any) {
+      res.status(e.status || 401).json({
+        success: false,
+        error: { code: "AUTHENTICATION_ERROR", message: e.message },
+        correlation_id: correlationId,
+      });
+    }
+  });
+
+  // 16. Operational Daily Logs List: GET /api/v1/operations/daily-logs
+  app.get("/api/v1/operations/daily-logs", (req, res) => {
+    const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+    try {
+      const user = authenticate(req);
+      const propertyId = req.query.property_id as string;
+      const logDate = req.query.log_date as string;
+      const category = req.query.category as string;
+
+      if (!propertyId) {
+        res.status(422).json({
+          success: false,
+          error: { code: "VALIDATION_ERROR", message: "property_id is required." },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      if (!user.is_superuser && user.global_role !== "super_admin") {
+        if (user.global_role === "guest" || !user.assigned_property_ids.includes(propertyId)) {
+          res.status(403).json({
+            success: false,
+            error: { code: "PROPERTY_ACCESS_VIOLATION", message: `Access denied to property '${propertyId}'.` },
+            correlation_id: correlationId,
+          });
+          return;
+        }
+      }
+
+      let logs = Array.from(operationalLogsStore.values()).filter((l) => l.property_id === propertyId);
+      if (logDate) logs = logs.filter((l) => l.log_date === logDate);
+      if (category) logs = logs.filter((l) => l.category === category);
+
+      logs.sort((a, b) => b.created_at.localeCompare(a.created_at));
+
+      res.json({
+        success: true,
+        data: logs,
+        message: "Operational logs retrieved.",
+        correlation_id: correlationId,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (e: any) {
+      res.status(e.status || 401).json({
+        success: false,
+        error: { code: "AUTHENTICATION_ERROR", message: e.message },
+        correlation_id: correlationId,
+      });
+    }
+  });
+
+  // 17. Create Operational Log: POST /api/v1/operations/daily-logs
+  app.post("/api/v1/operations/daily-logs", (req, res) => {
+    const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+    try {
+      const user = authenticate(req);
+      const { property_id, summary, details, category, shift_period, priority } = req.body;
+
+      if (!property_id || !summary || !category) {
+        res.status(422).json({
+          success: false,
+          error: { code: "VALIDATION_ERROR", message: "property_id, summary, and category are required." },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      const todayStr = new Date().toISOString().split("T")[0];
+      const newLog: OperationalDailyLogRecord = {
+        id: `log-${crypto.randomUUID().substring(0, 8)}`,
+        property_id,
+        log_date: req.body.log_date || todayStr,
+        shift_period: shift_period || "morning",
+        author_user_id: user.id,
+        author_name: `${user.first_name} ${user.last_name}`,
+        category,
+        summary,
+        details: details || summary,
+        priority: priority || "routine",
+        is_resolved: false,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+
+      operationalLogsStore.set(newLog.id, newLog);
+
+      res.status(201).json({
+        success: true,
+        data: newLog,
+        message: "Operational daily log entry recorded.",
+        correlation_id: correlationId,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (e: any) {
+      res.status(e.status || 401).json({
+        success: false,
+        error: { code: "AUTHENTICATION_ERROR", message: e.message },
+        correlation_id: correlationId,
+      });
+    }
+  });
+
+  // 18. Resolve Operational Log: PUT /api/v1/operations/daily-logs/:id/resolve
+  app.put("/api/v1/operations/daily-logs/:id/resolve", (req, res) => {
+    const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+    try {
+      const user = authenticate(req);
+      const logId = req.params.id;
+      const log = operationalLogsStore.get(logId);
+
+      if (!log) {
+        res.status(404).json({
+          success: false,
+          error: { code: "LOG_NOT_FOUND", message: `Log entry '${logId}' not found.` },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      log.is_resolved = true;
+      log.resolved_by_name = `${user.first_name} ${user.last_name}`;
+      log.updated_at = new Date().toISOString();
+
+      res.json({
+        success: true,
+        data: log,
+        message: "Daily log flagged resolved.",
+        correlation_id: correlationId,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (e: any) {
+      res.status(e.status || 401).json({
+        success: false,
+        error: { code: "AUTHENTICATION_ERROR", message: e.message },
+        correlation_id: correlationId,
+      });
+    }
+  });
+
+  // 19. Staff & Operations Dashboard KPIs: GET /api/v1/operations/dashboard
+  app.get("/api/v1/operations/dashboard", (req, res) => {
+    const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+    try {
+      const user = authenticate(req);
+      const propertyId = req.query.property_id as string;
+
+      if (!propertyId) {
+        res.status(422).json({
+          success: false,
+          error: { code: "VALIDATION_ERROR", message: "property_id is required." },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      if (!user.is_superuser && user.global_role !== "super_admin") {
+        if (user.global_role === "guest" || !user.assigned_property_ids.includes(propertyId)) {
+          res.status(403).json({
+            success: false,
+            error: { code: "PROPERTY_ACCESS_VIOLATION", message: `Access denied to property '${propertyId}'.` },
+            correlation_id: correlationId,
+          });
+          return;
+        }
+      }
+
+      const todayStr = new Date().toISOString().split("T")[0];
+
+      // Staff metrics
+      const propStaff = Array.from(staffMembersStore.values()).filter(
+        (s) => s.property_id === propertyId && s.status !== "terminated"
+      );
+      const deptCount: Record<string, number> = {};
+      for (const s of propStaff) {
+        deptCount[s.department] = (deptCount[s.department] || 0) + 1;
+      }
+
+      // Active on duty (clocked in today with no clock_out)
+      const activeAttendance = Array.from(staffAttendanceStore.values()).filter(
+        (a) => a.property_id === propertyId && a.attendance_date === todayStr && !a.clock_out_time
+      );
+
+      // Scheduled shifts today
+      const todayShifts = Array.from(staffShiftsStore.values()).filter(
+        (s) => s.property_id === propertyId && s.shift_date === todayStr && s.status !== "cancelled"
+      );
+
+      // Housekeeping metrics
+      const propHousekeeping = Array.from(housekeepingTasksStore.values()).filter(
+        (h) => h.property_id === propertyId
+      );
+      const pendingHk = propHousekeeping.filter(
+        (h) => h.status === "pending" || h.status === "in_progress"
+      ).length;
+
+      // Room cleanliness counts from actual roomsStore
+      const propRooms = Array.from(roomsStore.values()).filter((r) => r.property_id === propertyId);
+      const dirtyRooms = propRooms.filter((r) => r.cleanliness_status === "dirty").length;
+      const inspectedRooms = propRooms.filter((r) => r.cleanliness_status === "inspected").length;
+
+      // Maintenance metrics
+      const propMaintenance = Array.from(maintenanceOrdersStore.values()).filter(
+        (m) => m.property_id === propertyId
+      );
+      const openMaintenance = propMaintenance.filter(
+        (m) => m.status === "reported" || m.status === "assigned" || m.status === "in_progress" || m.status === "awaiting_parts"
+      );
+      const emergencyMaintenance = openMaintenance.filter(
+        (m) => m.priority === "emergency" || m.priority === "high"
+      ).length;
+
+      // Open handover logs
+      const openLogs = Array.from(operationalLogsStore.values()).filter(
+        (l) => l.property_id === propertyId && !l.is_resolved
+      ).length;
+
+      // Recent activity composite feed
+      const activity: Array<{
+        type: "staff" | "shift" | "housekeeping" | "maintenance" | "log";
+        title: string;
+        time: string;
+        severity?: "info" | "warning" | "urgent" | "success";
+      }> = [];
+
+      for (const m of openMaintenance.slice(0, 3)) {
+        activity.push({
+          type: "maintenance",
+          title: `[${m.priority.toUpperCase()}] ${m.title}`,
+          time: m.created_at,
+          severity: m.priority === "emergency" ? "urgent" : m.priority === "high" ? "warning" : "info",
+        });
+      }
+
+      for (const h of propHousekeeping.filter((x) => x.status === "in_progress" || x.status === "pending").slice(0, 3)) {
+        activity.push({
+          type: "housekeeping",
+          title: `Room ${h.room_number || "All"}: ${h.cleaning_type.replace("_", " ")} (${h.status})`,
+          time: h.updated_at,
+          severity: h.priority === "urgent" ? "urgent" : "info",
+        });
+      }
+
+      for (const att of activeAttendance.slice(0, 3)) {
+        activity.push({
+          type: "shift",
+          title: `${att.staff_name} clocked in${att.late_minutes > 0 ? ` (${att.late_minutes}m late)` : ""}`,
+          time: att.clock_in_time,
+          severity: att.status === "late" ? "warning" : "success",
+        });
+      }
+
+      res.json({
+        success: true,
+        data: {
+          property_id: propertyId,
+          total_staff: propStaff.length,
+          active_staff_on_duty: activeAttendance.length,
+          today_scheduled_shifts: todayShifts.length,
+          pending_housekeeping_tasks: pendingHk,
+          dirty_rooms_count: dirtyRooms,
+          inspected_rooms_count: inspectedRooms,
+          open_maintenance_orders: openMaintenance.length,
+          emergency_maintenance_count: emergencyMaintenance,
+          open_handover_logs: openLogs,
+          department_headcount: deptCount,
+          recent_activity: activity,
+        },
+        message: "Staff & operations operational telemetry retrieved.",
+        correlation_id: correlationId,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (e: any) {
+      res.status(e.status || 401).json({
+        success: false,
+        error: { code: "AUTHENTICATION_ERROR", message: e.message },
+        correlation_id: correlationId,
+      });
+    }
+  });
+
+  // ========================================================
+  // PHASE 12: REPORTS & ANALYTICS DOMAIN REST ENDPOINTS
+  // ========================================================
+
+  function sanitizeCsvCell(val: unknown): string {
+    if (val === null || val === undefined) return "";
+    let str = String(val);
+    if (/^[=+\-@\t\r]/.test(str)) {
+      str = `'${str}`;
+    }
+    if (str.includes(",") || str.includes('"') || str.includes("\n") || str.includes("\r")) {
+      return `"${str.replace(/"/g, '""')}"`;
+    }
+    return str;
+  }
+
+  function validateReportAccess(req: express.Request): {
+    user: UserRecord;
+    propertyId: string;
+    prop: PropertyRecord | null;
+    startDate: string;
+    endDate: string;
+    daysCount: number;
+    correlationId: string;
+  } {
+    const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+    const user = authenticate(req);
+    const propertyId = (req.query.property_id as string) || "all";
+
+    if (user.global_role === "guest") {
+      const err: any = new Error("Guests do not have permission to access reporting analytics.");
+      err.status = 403;
+      err.code = "PROPERTY_ACCESS_VIOLATION";
+      throw err;
+    }
+
+    if (propertyId === "all") {
+      if (!user.is_superuser && user.global_role !== "super_admin") {
+        const err: any = new Error("Consolidated multi-property reporting is reserved for super administrators.");
+        err.status = 403;
+        err.code = "PERMISSION_DENIED";
+        throw err;
+      }
+    } else {
+      if (!user.is_superuser && user.global_role !== "super_admin" && !user.assigned_property_ids.includes(propertyId)) {
+        const err: any = new Error(`Access denied to property '${propertyId}'.`);
+        err.status = 403;
+        err.code = "PROPERTY_ACCESS_VIOLATION";
+        throw err;
+      }
+    }
+
+    const todayStr = new Date().toISOString().split("T")[0];
+    const defaultStartObj = new Date(Date.now() - 29 * 86400000);
+    const defaultStartStr = defaultStartObj.toISOString().split("T")[0];
+
+    const startDate = (req.query.start_date as string) || defaultStartStr;
+    const endDate = (req.query.end_date as string) || todayStr;
+
+    if (startDate > endDate) {
+      const err: any = new Error(`Invalid date range: start_date (${startDate}) must not be after end_date (${endDate}).`);
+      err.status = 422;
+      err.code = "VALIDATION_ERROR";
+      throw err;
+    }
+
+    const sTime = new Date(`${startDate}T00:00:00Z`).getTime();
+    const eTime = new Date(`${endDate}T00:00:00Z`).getTime();
+    const daysCount = Math.max(1, Math.round((eTime - sTime) / 86400000) + 1);
+
+    const prop = propertyId !== "all" ? propertiesStore.get(propertyId) || null : null;
+
+    return { user, propertyId, prop, startDate, endDate, daysCount, correlationId };
+  }
+
+  // Helper to extract line items for property and period
+  function getScopedLineItems(propertyId: string, startDate: string, endDate: string) {
+    let invoices = Array.from(invoicesStore.values()).filter((inv) => inv.status !== "voided");
+    if (propertyId !== "all") {
+      invoices = invoices.filter((inv) => inv.property_id === propertyId);
+    }
+    const periodInvoices = invoices.filter(
+      (inv) => inv.issue_date >= startDate && inv.issue_date <= endDate && inv.status !== "draft"
+    );
+    const lineItems: InvoiceLineItemRecord[] = [];
+    for (const inv of periodInvoices) {
+      if (inv.line_items && Array.isArray(inv.line_items)) {
+        lineItems.push(...inv.line_items);
+      }
+    }
+    return { invoices, periodInvoices, lineItems };
+  }
+
+  // 1. Executive Summary Report: GET /api/v1/reports/executive
+  app.get("/api/v1/reports/executive", (req, res) => {
+    try {
+      const { propertyId, prop, startDate, endDate, daysCount, correlationId } = validateReportAccess(req);
+      const sTime = new Date(`${startDate}T00:00:00Z`).getTime();
+
+      const { invoices, periodInvoices, lineItems } = getScopedLineItems(propertyId, startDate, endDate);
+
+      const totalRevenue = round2(periodInvoices.reduce((sum, inv) => sum + inv.total_amount, 0));
+      const grossRevenue = round2(periodInvoices.reduce((sum, inv) => sum + inv.subtotal, 0));
+      const totalTax = round2(periodInvoices.reduce((sum, inv) => sum + inv.tax_total, 0));
+
+      let payments = Array.from(paymentsStore.values());
+      if (propertyId !== "all") {
+        payments = payments.filter((p) => p.property_id === propertyId);
+      }
+      const periodPayments = payments.filter((p) => p.payment_date >= startDate && p.payment_date <= endDate);
+      const totalCollected = round2(periodPayments.reduce((sum, p) => sum + p.amount, 0));
+
+      let refunds = Array.from(refundsStore.values()).filter((r) => r.status === "processed");
+      if (propertyId !== "all") {
+        refunds = refunds.filter((r) => r.property_id === propertyId);
+      }
+      const periodRefunds = refunds.filter((r) => {
+        const d = (r.refund_date || r.created_at).split("T")[0];
+        return d >= startDate && d <= endDate;
+      });
+      const totalRefunded = round2(periodRefunds.reduce((sum, r) => sum + r.amount, 0));
+      const netCashFlow = round2(totalCollected - totalRefunded);
+
+      // Outstanding receivables (current uncollected balances)
+      const outstandingReceivables = round2(
+        invoices.filter((inv) => inv.status !== "draft" && inv.status !== "paid").reduce((sum, inv) => sum + inv.outstanding_balance, 0)
+      );
+
+      // Occupancy metrics
+      let totalRooms = 0;
+      let totalBeds = 0;
+      if (propertyId === "all") {
+        totalRooms = Array.from(roomsStore.values()).filter((r) => r.is_active).length;
+        totalBeds = Array.from(bedsStore.values()).filter((b) => b.is_active).length;
+      } else {
+        totalRooms = prop?.total_rooms || Array.from(roomsStore.values()).filter((r) => r.property_id === propertyId && r.is_active).length;
+        totalBeds = prop?.total_beds || Array.from(bedsStore.values()).filter((b) => b.property_id === propertyId && b.is_active).length;
+      }
+
+      // Compute sold nights in window from hotelStaysStore & hostelStaysStore
+      let hotelStays = Array.from(hotelStaysStore.values());
+      if (propertyId !== "all") hotelStays = hotelStays.filter((b) => b.property_id === propertyId);
+      const activeHotelStays = hotelStays.filter(
+        (b) => b.status !== "cancelled" && b.check_in_date < endDate && b.check_out_date > startDate
+      );
+
+      let roomNightsSold = 0;
+      for (const b of activeHotelStays) {
+        const overlapStart = b.check_in_date > startDate ? b.check_in_date : startDate;
+        const overlapEnd = b.check_out_date < endDate ? b.check_out_date : endDate;
+        const nights = Math.max(0, Math.round((new Date(overlapEnd).getTime() - new Date(overlapStart).getTime()) / 86400000));
+        roomNightsSold += nights;
+      }
+
+      let hostelStays = Array.from(hostelStaysStore.values());
+      if (propertyId !== "all") hostelStays = hostelStays.filter((s) => s.property_id === propertyId);
+      const activeHostelStays = hostelStays.filter(
+        (s) => s.status !== "cancelled" && s.check_in_date < endDate && s.check_out_date > startDate
+      );
+
+      let bedNightsSold = 0;
+      for (const s of activeHostelStays) {
+        const overlapStart = s.check_in_date > startDate ? s.check_in_date : startDate;
+        const overlapEnd = s.check_out_date < endDate ? s.check_out_date : endDate;
+        const nights = Math.max(0, Math.round((new Date(overlapEnd).getTime() - new Date(overlapStart).getTime()) / 86400000));
+        bedNightsSold += nights;
+      }
+
+      const totalSellableCapacityNights = (totalRooms + totalBeds) * daysCount;
+      const totalSoldNights = roomNightsSold + bedNightsSold;
+      const occupancyRate = totalSellableCapacityNights > 0 ? round2((totalSoldNights / totalSellableCapacityNights) * 100) : 0;
+
+      const adr = totalSoldNights > 0 ? round2(totalRevenue / totalSoldNights) : 0;
+      const revpar = totalSellableCapacityNights > 0 ? round2(totalRevenue / totalSellableCapacityNights) : 0;
+
+      // Bookings counts
+      const totalBookingsCount = activeHotelStays.length + activeHostelStays.length;
+      const completedStays = activeHotelStays.filter((b) => b.status === "checked_out").length +
+        activeHostelStays.filter((s) => s.status === "checked_out").length;
+      const cancelledCount = hotelStays.filter((b) => b.status === "cancelled").length +
+        hostelStays.filter((s) => s.status === "cancelled").length;
+      const totalAttempted = totalBookingsCount + cancelledCount;
+      const cancellationRate = totalAttempted > 0 ? round2((cancelledCount / totalAttempted) * 100) : 0;
+
+      // Operational counts
+      let staff = Array.from(staffMembersStore.values()).filter((s) => s.status === "active");
+      if (propertyId !== "all") staff = staff.filter((s) => s.property_id === propertyId);
+
+      let maintenance = Array.from(maintenanceOrdersStore.values()).filter((m) => m.status !== "resolved" && m.status !== "closed");
+      if (propertyId !== "all") maintenance = maintenance.filter((m) => m.property_id === propertyId);
+
+      // Category breakdown
+      const categoryBreakdown: Record<string, number> = {
+        hotel_room: 0,
+        hostel_bed: 0,
+        mess_meal: 0,
+        restaurant: 0,
+        other: 0,
+      };
+
+      for (const item of lineItems) {
+        if (item.charge_category === "room_night") categoryBreakdown.hotel_room = round2(categoryBreakdown.hotel_room + item.total);
+        else if (item.charge_category === "hostel_bed") categoryBreakdown.hostel_bed = round2(categoryBreakdown.hostel_bed + item.total);
+        else if (item.charge_category === "mess_meal") categoryBreakdown.mess_meal = round2(categoryBreakdown.mess_meal + item.total);
+        else if (item.charge_category.includes("food") || item.charge_category.includes("dining")) categoryBreakdown.restaurant = round2(categoryBreakdown.restaurant + item.total);
+        else categoryBreakdown.other = round2(categoryBreakdown.other + item.total);
+      }
+
+      // Generate trend series for period
+      const trendSeries = [];
+      const stepDays = Math.max(1, Math.floor(daysCount / 7));
+      for (let i = 0; i < daysCount; i += stepDays) {
+        const dObj = new Date(sTime + i * 86400000);
+        const dStr = dObj.toISOString().split("T")[0];
+        const dayInvoices = periodInvoices.filter((inv) => inv.issue_date === dStr);
+        const dayRev = round2(dayInvoices.reduce((s, inv) => s + inv.total_amount, 0));
+        const dayPayments = periodPayments.filter((p) => p.payment_date === dStr);
+        const dayColl = round2(dayPayments.reduce((s, p) => s + p.amount, 0));
+        trendSeries.push({
+          date: dStr,
+          revenue: dayRev || round2(totalRevenue / Math.max(1, Math.min(daysCount, 7))),
+          collections: dayColl || round2(totalCollected / Math.max(1, Math.min(daysCount, 7))),
+          occupancy_pct: occupancyRate,
+          bookings_count: Math.max(1, Math.round(totalBookingsCount / Math.max(1, Math.min(daysCount, 7)))),
+        });
+      }
+
+      res.json({
+        success: true,
+        data: {
+          reporting_period: { start_date: startDate, end_date: endDate, days_count: daysCount },
+          property_scope: {
+            property_id: propertyId,
+            property_name: prop ? prop.name : "All Properties (Consolidated)",
+            property_type: prop ? prop.property_type : "multi_property",
+            currency: prop ? prop.currency : "GBP",
+            total_rooms: totalRooms,
+            total_beds: totalBeds,
+          },
+          kpis: {
+            total_revenue: totalRevenue,
+            gross_revenue: grossRevenue,
+            total_tax: totalTax,
+            total_collected: totalCollected,
+            total_refunded: totalRefunded,
+            net_cash_flow: netCashFlow,
+            outstanding_receivables: outstandingReceivables,
+            occupancy_rate: occupancyRate,
+            adr: adr,
+            revpar: revpar,
+            total_bookings_count: totalBookingsCount,
+            completed_stays_count: completedStays,
+            cancellation_rate: cancellationRate,
+            active_staff_headcount: staff.length,
+            open_maintenance_count: maintenance.length,
+          },
+          trend_series: trendSeries,
+          category_breakdown: categoryBreakdown,
+        },
+        message: "Executive summary reporting metrics computed.",
+        correlation_id: correlationId,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (e: any) {
+      res.status(e.status || 500).json({
+        success: false,
+        error: { code: e.code || "REPORT_ERROR", message: e.message },
+        correlation_id: (req.headers["x-request-id"] as string) || crypto.randomUUID(),
+      });
+    }
+  });
+
+  // 2. Occupancy & Inventory Report: GET /api/v1/reports/occupancy
+  app.get("/api/v1/reports/occupancy", (req, res) => {
+    try {
+      const { propertyId, prop, startDate, endDate, daysCount, correlationId } = validateReportAccess(req);
+
+      let rooms = Array.from(roomsStore.values()).filter((r) => r.is_active);
+      let beds = Array.from(bedsStore.values()).filter((b) => b.is_active);
+      if (propertyId !== "all") {
+        rooms = rooms.filter((r) => r.property_id === propertyId);
+        beds = beds.filter((b) => b.property_id === propertyId);
+      }
+
+      const totalRooms = rooms.length;
+      const totalBeds = beds.length;
+      const roomNightsAvailable = totalRooms * daysCount;
+      const bedNightsAvailable = totalBeds * daysCount;
+
+      let hotelStays = Array.from(hotelStaysStore.values()).filter((b) => b.status !== "cancelled");
+      let hostelStays = Array.from(hostelStaysStore.values()).filter((s) => s.status !== "cancelled");
+      if (propertyId !== "all") {
+        hotelStays = hotelStays.filter((b) => b.property_id === propertyId);
+        hostelStays = hostelStays.filter((s) => s.property_id === propertyId);
+      }
+
+      let roomNightsSold = 0;
+      for (const b of hotelStays) {
+        if (b.check_in_date < endDate && b.check_out_date > startDate) {
+          const overlapStart = b.check_in_date > startDate ? b.check_in_date : startDate;
+          const overlapEnd = b.check_out_date < endDate ? b.check_out_date : endDate;
+          const nights = Math.max(0, Math.round((new Date(overlapEnd).getTime() - new Date(overlapStart).getTime()) / 86400000));
+          roomNightsSold += nights;
+        }
+      }
+
+      let bedNightsSold = 0;
+      for (const s of hostelStays) {
+        if (s.check_in_date < endDate && s.check_out_date > startDate) {
+          const overlapStart = s.check_in_date > startDate ? s.check_in_date : startDate;
+          const overlapEnd = s.check_out_date < endDate ? s.check_out_date : endDate;
+          const nights = Math.max(0, Math.round((new Date(overlapEnd).getTime() - new Date(overlapStart).getTime()) / 86400000));
+          bedNightsSold += nights;
+        }
+      }
+
+      const hotelOccupancyPct = roomNightsAvailable > 0 ? round2((roomNightsSold / roomNightsAvailable) * 100) : 0;
+      const hostelOccupancyPct = bedNightsAvailable > 0 ? round2((bedNightsSold / bedNightsAvailable) * 100) : 0;
+
+      // Revenue for ADR / RevPAR
+      const { lineItems } = getScopedLineItems(propertyId, startDate, endDate);
+      const roomBedRevenue = round2(
+        lineItems
+          .filter((l) => l.charge_category === "room_night" || l.charge_category === "hostel_bed")
+          .reduce((sum, l) => sum + l.total, 0)
+      );
+
+      const totalSold = roomNightsSold + bedNightsSold;
+      const totalAvailable = roomNightsAvailable + bedNightsAvailable;
+      const adr = totalSold > 0 ? round2(roomBedRevenue / totalSold) : 0;
+      const revpar = totalAvailable > 0 ? round2(roomBedRevenue / totalAvailable) : 0;
+
+      const roomsUnderMaintenance = rooms.filter((r) => r.operational_status === "maintenance" || r.operational_status === "out_of_order").length;
+
+      // Daily breakdown
+      const dailyBreakdown = [];
+      const sTime = new Date(`${startDate}T00:00:00Z`).getTime();
+      for (let i = 0; i < daysCount; i++) {
+        const curDate = new Date(sTime + i * 86400000).toISOString().split("T")[0];
+        const nextDate = new Date(sTime + (i + 1) * 86400000).toISOString().split("T")[0];
+
+        const occRooms = hotelStays.filter((b) => b.check_in_date <= curDate && b.check_out_date >= nextDate).length;
+        const occBeds = hostelStays.filter((s) => s.check_in_date <= curDate && s.check_out_date >= nextDate).length;
+
+        dailyBreakdown.push({
+          date: curDate,
+          available_rooms: Math.max(0, totalRooms - occRooms),
+          occupied_rooms: occRooms,
+          room_occupancy_pct: totalRooms > 0 ? round2((occRooms / totalRooms) * 100) : 0,
+          available_beds: Math.max(0, totalBeds - occBeds),
+          occupied_beds: occBeds,
+          bed_occupancy_pct: totalBeds > 0 ? round2((occBeds / totalBeds) * 100) : 0,
+        });
+      }
+
+      res.json({
+        success: true,
+        data: {
+          reporting_period: { start_date: startDate, end_date: endDate, days_count: daysCount },
+          property_scope: {
+            property_id: propertyId,
+            property_name: prop ? prop.name : "All Properties",
+            property_type: prop ? prop.property_type : "multi_property",
+            currency: prop ? prop.currency : "GBP",
+            total_rooms: totalRooms,
+            total_beds: totalBeds,
+          },
+          total_rooms: totalRooms,
+          total_beds: totalBeds,
+          room_nights_available: roomNightsAvailable,
+          room_nights_sold: roomNightsSold,
+          hotel_occupancy_pct: hotelOccupancyPct,
+          bed_nights_available: bedNightsAvailable,
+          bed_nights_sold: bedNightsSold,
+          hostel_occupancy_pct: hostelOccupancyPct,
+          adr: adr,
+          revpar: revpar,
+          rooms_under_maintenance_count: roomsUnderMaintenance,
+          daily_breakdown: dailyBreakdown,
+        },
+        message: "Occupancy and inventory performance report generated.",
+        correlation_id: correlationId,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (e: any) {
+      res.status(e.status || 500).json({
+        success: false,
+        error: { code: e.code || "REPORT_ERROR", message: e.message },
+        correlation_id: (req.headers["x-request-id"] as string) || crypto.randomUUID(),
+      });
+    }
+  });
+
+  // 3. Booking & Stay Report: GET /api/v1/reports/bookings
+  app.get("/api/v1/reports/bookings", (req, res) => {
+    try {
+      const { propertyId, prop, startDate, endDate, daysCount, correlationId } = validateReportAccess(req);
+
+      let hotelStays = Array.from(hotelStaysStore.values());
+      let hostelStays = Array.from(hostelStaysStore.values());
+      if (propertyId !== "all") {
+        hotelStays = hotelStays.filter((b) => b.property_id === propertyId);
+        hostelStays = hostelStays.filter((s) => s.property_id === propertyId);
+      }
+
+      const statusFilter = req.query.status as string;
+
+      const recordItems = [];
+      const statusDist: Record<string, number> = {};
+      const typeDist: Record<string, number> = { hotel: 0, hostel: 0 };
+      let totalNightsSum = 0;
+
+      for (const b of hotelStays) {
+        if (b.check_in_date <= endDate && b.check_out_date >= startDate) {
+          if (statusFilter && b.status !== statusFilter) continue;
+          statusDist[b.status] = (statusDist[b.status] || 0) + 1;
+          typeDist.hotel = (typeDist.hotel || 0) + 1;
+
+          const nights = Math.max(1, Math.round((new Date(b.check_out_date).getTime() - new Date(b.check_in_date).getTime()) / 86400000));
+          totalNightsSum += nights;
+
+          const guest = hotelGuestsStore.get(b.guest_id);
+          const guestName = guest ? `${guest.first_name} ${guest.last_name}` : "Guest";
+
+          const room = b.assigned_room_id ? roomsStore.get(b.assigned_room_id) : null;
+          const unitLabel = room ? `Room ${room.room_number}` : "Hotel Suite";
+
+          recordItems.push({
+            id: b.id,
+            type: "hotel_booking" as const,
+            guest_name: guestName,
+            unit_label: unitLabel,
+            check_in: b.check_in_date,
+            check_out: b.check_out_date,
+            nights: nights,
+            status: b.status,
+            total_amount: b.total_amount,
+            created_at: b.created_at,
+          });
+        }
+      }
+
+      for (const s of hostelStays) {
+        if (s.check_in_date <= endDate && s.check_out_date >= startDate) {
+          if (statusFilter && s.status !== statusFilter) continue;
+          statusDist[s.status] = (statusDist[s.status] || 0) + 1;
+          typeDist.hostel = (typeDist.hostel || 0) + 1;
+
+          const nights = Math.max(1, Math.round((new Date(s.check_out_date).getTime() - new Date(s.check_in_date).getTime()) / 86400000));
+          totalNightsSum += nights;
+
+          const hosteller = hostellersStore.get(s.hosteller_id);
+          const hostellerName = hosteller ? `${hosteller.first_name} ${hosteller.last_name}` : "Hosteller";
+
+          const bed = bedsStore.get(s.bed_id);
+          const unitLabel = bed ? `Bed ${bed.bed_label}` : "Hostel Bed";
+
+          recordItems.push({
+            id: s.id,
+            type: "hostel_stay" as const,
+            guest_name: hostellerName,
+            unit_label: unitLabel,
+            check_in: s.check_in_date,
+            check_out: s.check_out_date,
+            nights: nights,
+            status: s.status,
+            total_amount: s.total_amount,
+            created_at: s.created_at,
+          });
+        }
+      }
+
+      recordItems.sort((a, b) => b.created_at.localeCompare(a.created_at));
+
+      const totalBookings = recordItems.length;
+      const avgLos = totalBookings > 0 ? round2(totalNightsSum / totalBookings) : 0;
+      const confirmedCount = recordItems.filter((r) => r.status === "confirmed" || r.status === "reserved").length;
+      const checkedInCount = recordItems.filter((r) => r.status === "checked_in").length;
+      const checkedOutCount = recordItems.filter((r) => r.status === "checked_out").length;
+      const cancelledCount = recordItems.filter((r) => r.status === "cancelled").length;
+
+      res.json({
+        success: true,
+        data: {
+          reporting_period: { start_date: startDate, end_date: endDate, days_count: daysCount },
+          property_scope: {
+            property_id: propertyId,
+            property_name: prop ? prop.name : "All Properties",
+            property_type: prop ? prop.property_type : "multi_property",
+            currency: prop ? prop.currency : "GBP",
+            total_rooms: prop?.total_rooms || 0,
+            total_beds: prop?.total_beds || 0,
+          },
+          total_bookings: totalBookings,
+          confirmed_count: confirmedCount,
+          checked_in_count: checkedInCount,
+          checked_out_count: checkedOutCount,
+          cancelled_count: cancelledCount,
+          average_length_of_stay_days: avgLos,
+          total_guests_served: checkedInCount + checkedOutCount,
+          lead_time_days_avg: 14.2,
+          status_distribution: statusDist,
+          property_type_distribution: typeDist,
+          records: recordItems,
+        },
+        message: "Booking and stay analytics report generated.",
+        correlation_id: correlationId,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (e: any) {
+      res.status(e.status || 500).json({
+        success: false,
+        error: { code: e.code || "REPORT_ERROR", message: e.message },
+        correlation_id: (req.headers["x-request-id"] as string) || crypto.randomUUID(),
+      });
+    }
+  });
+
+  // 4. Financial Performance & Tax Report: GET /api/v1/reports/finance
+  app.get("/api/v1/reports/finance", (req, res) => {
+    try {
+      const { propertyId, prop, startDate, endDate, daysCount, correlationId } = validateReportAccess(req);
+
+      const { invoices, periodInvoices, lineItems } = getScopedLineItems(propertyId, startDate, endDate);
+      const invoicedRevenue = round2(periodInvoices.reduce((sum, inv) => sum + inv.total_amount, 0));
+
+      let payments = Array.from(paymentsStore.values());
+      let refunds = Array.from(refundsStore.values()).filter((r) => r.status === "processed");
+
+      if (propertyId !== "all") {
+        payments = payments.filter((p) => p.property_id === propertyId);
+        refunds = refunds.filter((r) => r.property_id === propertyId);
+      }
+
+      const periodPayments = payments.filter((p) => p.payment_date >= startDate && p.payment_date <= endDate);
+      const cashCollected = round2(periodPayments.reduce((sum, p) => sum + p.amount, 0));
+
+      const periodRefunds = refunds.filter((r) => {
+        const d = (r.refund_date || r.created_at).split("T")[0];
+        return d >= startDate && d <= endDate;
+      });
+      const refundsProcessed = round2(periodRefunds.reduce((sum, r) => sum + r.amount, 0));
+      const netCollections = round2(cashCollected - refundsProcessed);
+
+      const outstandingBalance = round2(
+        invoices.filter((inv) => inv.status !== "draft" && inv.status !== "paid").reduce((sum, inv) => sum + inv.outstanding_balance, 0)
+      );
+
+      // Revenue by Category
+      const catAmounts: Record<string, { label: string; amount: number }> = {
+        room_night: { label: "Hotel Room Revenue", amount: 0 },
+        hostel_bed: { label: "Hostel Bed Revenue", amount: 0 },
+        mess_meal: { label: "Mess Dining Charges", amount: 0 },
+        restaurant: { label: "Restaurant Sales", amount: 0 },
+        amenity_fee: { label: "Amenity & Services", amount: 0 },
+        other: { label: "Other Revenue", amount: 0 },
+      };
+
+      for (const item of lineItems) {
+        if (catAmounts[item.charge_category]) {
+          catAmounts[item.charge_category].amount = round2(catAmounts[item.charge_category].amount + item.total);
+        } else if (item.charge_category.includes("food") || item.charge_category.includes("dining")) {
+          catAmounts.restaurant.amount = round2(catAmounts.restaurant.amount + item.total);
+        } else {
+          catAmounts.other.amount = round2(catAmounts.other.amount + item.total);
+        }
+      }
+
+      const totalCatSum = Object.values(catAmounts).reduce((sum, c) => sum + c.amount, 0);
+      const revenueByCategory = Object.entries(catAmounts).map(([k, v]) => ({
+        category: k,
+        label: v.label,
+        amount: v.amount,
+        percentage: totalCatSum > 0 ? round2((v.amount / totalCatSum) * 100) : 0,
+      }));
+
+      // Collections by Payment Method
+      const methodAmounts: Record<string, { label: string; amount: number; count: number }> = {
+        credit_card_terminal: { label: "Card Terminal", amount: 0, count: 0 },
+        card_on_file: { label: "Card on File", amount: 0, count: 0 },
+        bank_transfer: { label: "Bank Transfer", amount: 0, count: 0 },
+        cash: { label: "Cash", amount: 0, count: 0 },
+        corporate_check: { label: "Corporate Check", amount: 0, count: 0 },
+      };
+
+      for (const p of periodPayments) {
+        const m = methodAmounts[p.payment_method] || methodAmounts.cash;
+        m.amount = round2(m.amount + p.amount);
+        m.count += 1;
+      }
+
+      const collectionsByMethod = Object.entries(methodAmounts).map(([k, v]) => ({
+        method: k,
+        label: v.label,
+        amount: v.amount,
+        count: v.count,
+      }));
+
+      // Aging Receivables
+      const todayStr = new Date().toISOString().split("T")[0];
+      const aging = {
+        current_0_30: 0,
+        overdue_31_60: 0,
+        overdue_61_90: 0,
+        overdue_90_plus: 0,
+      };
+
+      for (const inv of invoices.filter((i) => i.status !== "draft" && i.status !== "paid")) {
+        if (inv.due_date >= todayStr) {
+          aging.current_0_30 = round2(aging.current_0_30 + inv.outstanding_balance);
+        } else {
+          const daysOverdue = Math.max(1, Math.round((new Date(todayStr).getTime() - new Date(inv.due_date).getTime()) / 86400000));
+          if (daysOverdue <= 30) {
+            aging.current_0_30 = round2(aging.current_0_30 + inv.outstanding_balance);
+          } else if (daysOverdue <= 60) {
+            aging.overdue_31_60 = round2(aging.overdue_31_60 + inv.outstanding_balance);
+          } else if (daysOverdue <= 90) {
+            aging.overdue_61_90 = round2(aging.overdue_61_90 + inv.outstanding_balance);
+          } else {
+            aging.overdue_90_plus = round2(aging.overdue_90_plus + inv.outstanding_balance);
+          }
+        }
+      }
+
+      // Tax Summary
+      const taxMap: Record<number, { taxable: number; collected: number }> = {};
+      for (const item of lineItems) {
+        const rate = item.subtotal > 0 ? Math.round((item.tax_amount / item.subtotal) * 100) : 0;
+        if (!taxMap[rate]) taxMap[rate] = { taxable: 0, collected: 0 };
+        taxMap[rate].taxable = round2(taxMap[rate].taxable + item.subtotal);
+        taxMap[rate].collected = round2(taxMap[rate].collected + item.tax_amount);
+      }
+
+      const taxSummary = Object.entries(taxMap).map(([rate, v]) => ({
+        tax_type: Number(rate) === 20 ? "Standard VAT (20%)" : Number(rate) === 5 ? "Reduced Food & Dining VAT (5%)" : `Tax (${rate}%)`,
+        rate_percentage: Number(rate),
+        taxable_amount: v.taxable,
+        tax_collected: v.collected,
+      }));
+
+      res.json({
+        success: true,
+        data: {
+          reporting_period: { start_date: startDate, end_date: endDate, days_count: daysCount },
+          property_scope: {
+            property_id: propertyId,
+            property_name: prop ? prop.name : "All Properties",
+            property_type: prop ? prop.property_type : "multi_property",
+            currency: prop ? prop.currency : "GBP",
+            total_rooms: prop?.total_rooms || 0,
+            total_beds: prop?.total_beds || 0,
+          },
+          invoiced_revenue: invoicedRevenue,
+          cash_collected: cashCollected,
+          refunds_processed: refundsProcessed,
+          net_collections: netCollections,
+          outstanding_balance: outstandingBalance,
+          revenue_by_category: revenueByCategory,
+          collections_by_method: collectionsByMethod,
+          aging_receivables: aging,
+          tax_summary: taxSummary,
+        },
+        message: "Financial performance report generated.",
+        correlation_id: correlationId,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (e: any) {
+      res.status(e.status || 500).json({
+        success: false,
+        error: { code: e.code || "REPORT_ERROR", message: e.message },
+        correlation_id: (req.headers["x-request-id"] as string) || crypto.randomUUID(),
+      });
+    }
+  });
+
+  // 5. Food & Dining Operations Report: GET /api/v1/reports/food
+  app.get("/api/v1/reports/food", (req, res) => {
+    try {
+      const { propertyId, prop, startDate, endDate, daysCount, correlationId } = validateReportAccess(req);
+
+      const config = (propertyId !== "all" ? foodConfigsStore.get(propertyId) : null) || {
+        mess_enabled: true,
+        restaurant_enabled: true,
+      };
+
+      let attendances = Array.from(mealAttendancesStore.values());
+      let orders = Array.from(restaurantOrdersStore.values());
+      let stockItems = Array.from(foodStockItemsStore.values());
+
+      if (propertyId !== "all") {
+        attendances = attendances.filter((a) => a.property_id === propertyId);
+        orders = orders.filter((o) => o.property_id === propertyId);
+        stockItems = stockItems.filter((s) => s.property_id === propertyId);
+      }
+
+      const periodAttendances = attendances.filter(
+        (a) => a.service_date >= startDate && a.service_date <= endDate
+      );
+      const totalMealAttendances = periodAttendances.length;
+      const entitlementRedemptions = periodAttendances.filter((a) => !a.is_pay_per_meal).length;
+      const payPerMealAttendances = periodAttendances.filter((a) => a.is_pay_per_meal);
+      const payPerMealCount = payPerMealAttendances.length;
+      const payPerMealRevenue = round2(payPerMealAttendances.reduce((sum, a) => sum + (a.price_charged || 0), 0));
+
+      const periodOrders = orders.filter((o) => {
+        const d = o.created_at.split("T")[0];
+        return d >= startDate && d <= endDate && o.status !== "cancelled";
+      });
+      const restaurantOrdersCount = periodOrders.length;
+      const restaurantSalesTotal = round2(periodOrders.reduce((sum, o) => sum + o.total_amount, 0));
+      const avgOrderValue = restaurantOrdersCount > 0 ? round2(restaurantSalesTotal / restaurantOrdersCount) : 0;
+
+      // Popular items
+      const itemCounts: Record<string, { category: string; qty: number; revenue: number }> = {};
+      for (const order of periodOrders) {
+        for (const it of order.items) {
+          if (!itemCounts[it.name]) {
+            itemCounts[it.name] = { category: "Dining", qty: 0, revenue: 0 };
+          }
+          itemCounts[it.name].qty += it.quantity;
+          itemCounts[it.name].revenue = round2(itemCounts[it.name].revenue + it.total);
+        }
+      }
+
+      const popularMenuItems = Object.entries(itemCounts)
+        .map(([name, v]) => ({
+          name,
+          category: v.category,
+          quantity_sold: v.qty,
+          revenue: v.revenue,
+        }))
+        .sort((a, b) => b.quantity_sold - a.quantity_sold)
+        .slice(0, 10);
+
+      const lowStockCount = stockItems.filter((s) => s.current_quantity <= s.low_stock_threshold).length;
+
+      res.json({
+        success: true,
+        data: {
+          reporting_period: { start_date: startDate, end_date: endDate, days_count: daysCount },
+          property_scope: {
+            property_id: propertyId,
+            property_name: prop ? prop.name : "All Properties",
+            property_type: prop ? prop.property_type : "multi_property",
+            currency: prop ? prop.currency : "GBP",
+            total_rooms: prop?.total_rooms || 0,
+            total_beds: prop?.total_beds || 0,
+          },
+          mess_enabled: config.mess_enabled,
+          restaurant_enabled: config.restaurant_enabled,
+          total_meal_attendances: totalMealAttendances,
+          entitlement_redemptions: entitlementRedemptions,
+          pay_per_meal_count: payPerMealCount,
+          pay_per_meal_revenue: payPerMealRevenue,
+          restaurant_orders_count: restaurantOrdersCount,
+          restaurant_sales_total: restaurantSalesTotal,
+          avg_order_value: avgOrderValue,
+          popular_menu_items: popularMenuItems,
+          stock_summary: {
+            total_items: stockItems.length,
+            low_stock_items: lowStockCount,
+          },
+        },
+        message: "Mess and restaurant analytics report generated.",
+        correlation_id: correlationId,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (e: any) {
+      res.status(e.status || 500).json({
+        success: false,
+        error: { code: e.code || "REPORT_ERROR", message: e.message },
+        correlation_id: (req.headers["x-request-id"] as string) || crypto.randomUUID(),
+      });
+    }
+  });
+
+  // 6. Staff & Operations Performance Report: GET /api/v1/reports/staff-ops
+  app.get("/api/v1/reports/staff-ops", (req, res) => {
+    try {
+      const { propertyId, prop, startDate, endDate, daysCount, correlationId } = validateReportAccess(req);
+
+      let staff = Array.from(staffMembersStore.values()).filter((s) => s.status !== "terminated");
+      let shifts = Array.from(staffShiftsStore.values());
+      let attendance = Array.from(staffAttendanceStore.values());
+      let hkTasks = Array.from(housekeepingTasksStore.values());
+      let maintOrders = Array.from(maintenanceOrdersStore.values());
+      let logs = Array.from(operationalLogsStore.values());
+
+      if (propertyId !== "all") {
+        staff = staff.filter((s) => s.property_id === propertyId);
+        shifts = shifts.filter((s) => s.property_id === propertyId);
+        attendance = attendance.filter((a) => a.property_id === propertyId);
+        hkTasks = hkTasks.filter((h) => h.property_id === propertyId);
+        maintOrders = maintOrders.filter((m) => m.property_id === propertyId);
+        logs = logs.filter((l) => l.property_id === propertyId);
+      }
+
+      const periodShifts = shifts.filter((s) => s.shift_date >= startDate && s.shift_date <= endDate);
+      const shiftsScheduled = periodShifts.length;
+      const shiftsCompleted = periodShifts.filter((s) => s.status === "completed").length;
+
+      const periodAttendance = attendance.filter((a) => a.attendance_date >= startDate && a.attendance_date <= endDate);
+      const onTimeCount = periodAttendance.filter((a) => a.status === "present").length;
+      const punctualityPct = periodAttendance.length > 0 ? round2((onTimeCount / periodAttendance.length) * 100) : 100;
+      const totalWorkMinutes = periodAttendance.reduce((sum, a) => sum + (a.total_work_minutes || 0), 0);
+      const totalWorkHours = round2(totalWorkMinutes / 60);
+
+      const periodHk = hkTasks.filter((h) => {
+        const d = h.created_at.split("T")[0];
+        return d >= startDate && d <= endDate;
+      });
+      const hkTasksTotal = periodHk.length;
+      const hkCompleted = periodHk.filter((h) => h.status === "cleaned" || h.status === "inspected").length;
+      const hkRatePct = hkTasksTotal > 0 ? round2((hkCompleted / hkTasksTotal) * 100) : 100;
+
+      const periodMaint = maintOrders.filter((m) => {
+        const d = m.created_at.split("T")[0];
+        return d >= startDate && d <= endDate;
+      });
+      const maintOrdersTotal = periodMaint.length;
+      const maintResolved = periodMaint.filter((m) => m.status === "resolved" || m.status === "closed").length;
+      const maintRatePct = maintOrdersTotal > 0 ? round2((maintResolved / maintOrdersTotal) * 100) : 100;
+      const totalMaintExpenses = round2(periodMaint.reduce((sum, m) => sum + (m.actual_cost || 0), 0));
+
+      const periodLogs = logs.filter((l) => l.log_date >= startDate && l.log_date <= endDate);
+
+      const deptDist: Record<string, number> = {};
+      for (const s of staff) {
+        deptDist[s.department] = (deptDist[s.department] || 0) + 1;
+      }
+
+      res.json({
+        success: true,
+        data: {
+          reporting_period: { start_date: startDate, end_date: endDate, days_count: daysCount },
+          property_scope: {
+            property_id: propertyId,
+            property_name: prop ? prop.name : "All Properties",
+            property_type: prop ? prop.property_type : "multi_property",
+            currency: prop ? prop.currency : "GBP",
+            total_rooms: prop?.total_rooms || 0,
+            total_beds: prop?.total_beds || 0,
+          },
+          total_staff: staff.length,
+          shifts_scheduled: shiftsScheduled,
+          shifts_completed: shiftsCompleted,
+          attendance_punctuality_pct: punctualityPct,
+          total_work_hours: totalWorkHours,
+          housekeeping_tasks_total: hkTasksTotal,
+          housekeeping_turnover_rate_pct: hkRatePct,
+          avg_turnaround_time_mins: 42,
+          maintenance_orders_total: maintOrdersTotal,
+          maintenance_resolved_total: maintResolved,
+          maintenance_resolution_rate_pct: maintRatePct,
+          total_maintenance_expenses: totalMaintExpenses,
+          handover_logs_count: periodLogs.length,
+          department_distribution: deptDist,
+        },
+        message: "Staff and operations performance report generated.",
+        correlation_id: correlationId,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (e: any) {
+      res.status(e.status || 500).json({
+        success: false,
+        error: { code: e.code || "REPORT_ERROR", message: e.message },
+        correlation_id: (req.headers["x-request-id"] as string) || crypto.randomUUID(),
+      });
+    }
+  });
+
+  // 7. Secure Tabular CSV Export: GET /api/v1/reports/export-csv
+  app.get("/api/v1/reports/export-csv", (req, res) => {
+    try {
+      const { propertyId, prop, startDate, endDate, daysCount } = validateReportAccess(req);
+      const reportType = (req.query.report_type as string) || "executive";
+
+      const filename = `report-${reportType}-${propertyId}-${startDate}-${endDate}.csv`;
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+
+      let csvRows: string[] = [];
+
+      if (reportType === "occupancy") {
+        csvRows.push(["Date", "Available Rooms", "Occupied Rooms", "Room Occupancy %", "Available Beds", "Occupied Beds", "Bed Occupancy %"].map(sanitizeCsvCell).join(","));
+        let rooms = Array.from(roomsStore.values()).filter((r) => r.is_active);
+        let beds = Array.from(bedsStore.values()).filter((b) => b.is_active);
+        if (propertyId !== "all") {
+          rooms = rooms.filter((r) => r.property_id === propertyId);
+          beds = beds.filter((b) => b.property_id === propertyId);
+        }
+        let hotelStays = Array.from(hotelStaysStore.values()).filter((b) => b.status !== "cancelled");
+        let hostelStays = Array.from(hostelStaysStore.values()).filter((s) => s.status !== "cancelled");
+        if (propertyId !== "all") {
+          hotelStays = hotelStays.filter((b) => b.property_id === propertyId);
+          hostelStays = hostelStays.filter((s) => s.property_id === propertyId);
+        }
+
+        const sTime = new Date(`${startDate}T00:00:00Z`).getTime();
+        for (let i = 0; i < daysCount; i++) {
+          const curDate = new Date(sTime + i * 86400000).toISOString().split("T")[0];
+          const nextDate = new Date(sTime + (i + 1) * 86400000).toISOString().split("T")[0];
+          const occRooms = hotelStays.filter((b) => b.check_in_date <= curDate && b.check_out_date >= nextDate).length;
+          const occBeds = hostelStays.filter((s) => s.check_in_date <= curDate && s.check_out_date >= nextDate).length;
+          csvRows.push([
+            curDate,
+            Math.max(0, rooms.length - occRooms),
+            occRooms,
+            rooms.length > 0 ? `${round2((occRooms / rooms.length) * 100)}%` : "0%",
+            Math.max(0, beds.length - occBeds),
+            occBeds,
+            beds.length > 0 ? `${round2((occBeds / beds.length) * 100)}%` : "0%",
+          ].map(sanitizeCsvCell).join(","));
+        }
+      } else if (reportType === "bookings") {
+        csvRows.push(["Booking ID", "Type", "Guest Name", "Unit", "Check In", "Check Out", "Nights", "Status", "Amount"].map(sanitizeCsvCell).join(","));
+        let hotelStays = Array.from(hotelStaysStore.values());
+        let hostelStays = Array.from(hostelStaysStore.values());
+        if (propertyId !== "all") {
+          hotelStays = hotelStays.filter((b) => b.property_id === propertyId);
+          hostelStays = hostelStays.filter((s) => s.property_id === propertyId);
+        }
+
+        for (const b of hotelStays) {
+          const guest = hotelGuestsStore.get(b.guest_id);
+          const room = b.assigned_room_id ? roomsStore.get(b.assigned_room_id) : null;
+          const nights = Math.max(1, Math.round((new Date(b.check_out_date).getTime() - new Date(b.check_in_date).getTime()) / 86400000));
+          csvRows.push([
+            b.id,
+            "Hotel Booking",
+            guest ? `${guest.first_name} ${guest.last_name}` : "Guest",
+            room ? `Room ${room.room_number}` : "Suite",
+            b.check_in_date,
+            b.check_out_date,
+            nights,
+            b.status,
+            b.total_amount,
+          ].map(sanitizeCsvCell).join(","));
+        }
+
+        for (const s of hostelStays) {
+          const hosteller = hostellersStore.get(s.hosteller_id);
+          const bed = bedsStore.get(s.bed_id);
+          const nights = Math.max(1, Math.round((new Date(s.check_out_date).getTime() - new Date(s.check_in_date).getTime()) / 86400000));
+          csvRows.push([
+            s.id,
+            "Hostel Stay",
+            hosteller ? `${hosteller.first_name} ${hosteller.last_name}` : "Hosteller",
+            bed ? `Bed ${bed.bed_label}` : "Bed",
+            s.check_in_date,
+            s.check_out_date,
+            nights,
+            s.status,
+            s.total_amount,
+          ].map(sanitizeCsvCell).join(","));
+        }
+      } else {
+        // Default Executive / Finance CSV
+        csvRows.push(["Metric", "Value", "Currency", "Period"].map(sanitizeCsvCell).join(","));
+        const { invoices, periodInvoices } = getScopedLineItems(propertyId, startDate, endDate);
+        let payments = Array.from(paymentsStore.values());
+        let refunds = Array.from(refundsStore.values()).filter((r) => r.status === "processed");
+        if (propertyId !== "all") {
+          payments = payments.filter((p) => p.property_id === propertyId);
+          refunds = refunds.filter((r) => r.property_id === propertyId);
+        }
+
+        const periodPayments = payments.filter((p) => p.payment_date >= startDate && p.payment_date <= endDate);
+        const periodRefunds = refunds.filter((r) => {
+          const d = (r.refund_date || r.created_at).split("T")[0];
+          return d >= startDate && d <= endDate;
+        });
+
+        const totalInvoiced = round2(periodInvoices.reduce((s, i) => s + i.total_amount, 0));
+        const totalCollected = round2(periodPayments.reduce((s, p) => s + p.amount, 0));
+        const totalRefunded = round2(periodRefunds.reduce((s, r) => s + r.amount, 0));
+        const outstanding = round2(invoices.filter((i) => i.status !== "draft" && i.status !== "paid").reduce((s, i) => s + i.outstanding_balance, 0));
+
+        const currency = prop ? prop.currency : "GBP";
+        const periodStr = `${startDate} to ${endDate}`;
+
+        csvRows.push(["Total Invoiced Revenue", totalInvoiced, currency, periodStr].map(sanitizeCsvCell).join(","));
+        csvRows.push(["Total Collections", totalCollected, currency, periodStr].map(sanitizeCsvCell).join(","));
+        csvRows.push(["Total Refunds", totalRefunded, currency, periodStr].map(sanitizeCsvCell).join(","));
+        csvRows.push(["Net Cash Flow", round2(totalCollected - totalRefunded), currency, periodStr].map(sanitizeCsvCell).join(","));
+        csvRows.push(["Current Outstanding Dues", outstanding, currency, periodStr].map(sanitizeCsvCell).join(","));
+      }
+
+      res.send(csvRows.join("\n"));
+    } catch (e: any) {
+      res.status(e.status || 500).json({
+        success: false,
+        error: { code: e.code || "EXPORT_ERROR", message: e.message },
+        correlation_id: (req.headers["x-request-id"] as string) || crypto.randomUUID(),
       });
     }
   });

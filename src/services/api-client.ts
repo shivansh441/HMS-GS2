@@ -1,4 +1,64 @@
 import { ApiResponse, HealthResponse, SystemMetaResponse } from "@/src/types/api";
+import {
+  TaxRule,
+  CreateTaxRuleInput,
+  TaxPreviewRequest,
+  Invoice,
+  CreateDraftInvoiceInput,
+  UpdateDraftInvoiceInput,
+  Payment,
+  RecordPaymentInput,
+  AllocatePaymentInput,
+  Refund,
+  RecordRefundInput,
+  FinanceDashboardMetrics,
+} from "@/src/types/finance";
+import {
+  FoodServiceConfig,
+  UpdateFoodServiceConfigInput,
+  MenuItem,
+  CreateMenuItemInput,
+  UpdateMenuItemInput,
+  MealPlan,
+  CreateMealPlanInput,
+  HostellerMealEntitlement,
+  AssignMealPlanInput,
+  EntitlementVerificationResult,
+  MealAttendance,
+  RecordMealAttendanceInput,
+  RestaurantOrder,
+  CreateRestaurantOrderInput,
+  OrderStatus,
+  FoodStockItem,
+  CreateStockItemInput,
+  UpdateStockItemInput,
+  FoodStockMovement,
+  FoodDashboardSummary,
+} from "@/src/types/food";
+import {
+  StaffMember,
+  StaffDepartment,
+  StaffShift,
+  ShiftType,
+  StaffAttendance,
+  HousekeepingTask,
+  CleaningType,
+  MaintenanceWorkOrder,
+  MaintenanceCategory,
+  MaintenancePriority,
+  OperationalDailyLog,
+  DailyLogCategory,
+  StaffOperationsDashboard,
+} from "@/src/types/staff";
+import {
+  ExecutiveSummaryReport,
+  OccupancyReport,
+  BookingStayReport,
+  FinancialReport,
+  FoodDiningReport,
+  StaffOpsReport,
+} from "@/src/types/reports";
+
 
 function getApiBase(): string {
   if (typeof window !== "undefined") {
@@ -940,5 +1000,687 @@ export async function fetchHotelFrontDesk(
     `/hotel/front-desk?property_id=${encodeURIComponent(propertyId)}`
   );
 }
+
+// ==========================================
+// PHASE 9 FINANCE & TAX ENGINE API CLIENT
+// ==========================================
+
+export async function fetchTaxRules(propertyId: string): Promise<ApiResponse<TaxRule[]>> {
+  return apiFetch<TaxRule[]>(`/finance/tax-rules?property_id=${encodeURIComponent(propertyId)}`);
+}
+
+export async function createTaxRule(input: CreateTaxRuleInput): Promise<ApiResponse<TaxRule>> {
+  return apiFetch<TaxRule>("/finance/tax-rules", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateTaxRule(
+  ruleId: string,
+  input: Partial<CreateTaxRuleInput> & { is_active?: boolean }
+): Promise<ApiResponse<TaxRule>> {
+  return apiFetch<TaxRule>(`/finance/tax-rules/${encodeURIComponent(ruleId)}`, {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function calculateTaxPreview(
+  input: TaxPreviewRequest
+): Promise<ApiResponse<{
+  subtotal: number;
+  discount_total: number;
+  tax_total: number;
+  total_amount: number;
+  tax_snapshot: any;
+  line_items: any[];
+}>> {
+  return apiFetch("/finance/tax-rules/calculate-preview", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function fetchInvoices(params: {
+  property_id: string;
+  status?: string;
+  customer_id?: string;
+  customer_type?: string;
+}): Promise<ApiResponse<Invoice[]>> {
+  const q = new URLSearchParams();
+  q.set("property_id", params.property_id);
+  if (params.status && params.status !== "all") q.set("status", params.status);
+  if (params.customer_id) q.set("customer_id", params.customer_id);
+  if (params.customer_type) q.set("customer_type", params.customer_type);
+  return apiFetch<Invoice[]>(`/finance/invoices?${q.toString()}`);
+}
+
+export async function createDraftInvoice(
+  input: CreateDraftInvoiceInput
+): Promise<ApiResponse<Invoice>> {
+  return apiFetch<Invoice>("/finance/invoices", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function fetchInvoiceById(invoiceId: string): Promise<ApiResponse<Invoice>> {
+  return apiFetch<Invoice>(`/finance/invoices/${encodeURIComponent(invoiceId)}`);
+}
+
+export async function updateDraftInvoice(
+  invoiceId: string,
+  input: UpdateDraftInvoiceInput
+): Promise<ApiResponse<Invoice>> {
+  return apiFetch<Invoice>(`/finance/invoices/${encodeURIComponent(invoiceId)}`, {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function issueInvoice(invoiceId: string): Promise<ApiResponse<Invoice>> {
+  return apiFetch<Invoice>(`/finance/invoices/${encodeURIComponent(invoiceId)}/issue`, {
+    method: "POST",
+  });
+}
+
+export async function voidInvoice(
+  invoiceId: string,
+  reason?: string
+): Promise<ApiResponse<Invoice>> {
+  return apiFetch<Invoice>(`/finance/invoices/${encodeURIComponent(invoiceId)}/void`, {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+  });
+}
+
+export async function fetchPayments(propertyId: string): Promise<ApiResponse<Payment[]>> {
+  return apiFetch<Payment[]>(`/finance/payments?property_id=${encodeURIComponent(propertyId)}`);
+}
+
+export async function recordPayment(input: RecordPaymentInput): Promise<ApiResponse<Payment>> {
+  return apiFetch<Payment>("/finance/payments", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function allocatePayment(
+  paymentId: string,
+  input: AllocatePaymentInput
+): Promise<ApiResponse<Payment>> {
+  return apiFetch<Payment>(`/finance/payments/${encodeURIComponent(paymentId)}/allocate`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function recordRefund(input: RecordRefundInput): Promise<ApiResponse<Refund>> {
+  return apiFetch<Refund>("/finance/refunds", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function fetchFinanceDashboard(
+  propertyId: string
+): Promise<ApiResponse<FinanceDashboardMetrics>> {
+  return apiFetch<FinanceDashboardMetrics>(
+    `/finance/dashboard?property_id=${encodeURIComponent(propertyId)}`
+  );
+}
+
+export async function fetchOutstandingDues(
+  propertyId: string
+): Promise<ApiResponse<Array<Invoice & { is_overdue: boolean }>>> {
+  return apiFetch<Array<Invoice & { is_overdue: boolean }>>(
+    `/finance/outstanding-dues?property_id=${encodeURIComponent(propertyId)}`
+  );
+}
+
+// ==========================================
+// Phase 10: Mess & Restaurant APIs
+// ==========================================
+
+export async function fetchFoodConfig(
+  propertyId: string
+): Promise<ApiResponse<FoodServiceConfig>> {
+  return apiFetch<FoodServiceConfig>(`/food/config?property_id=${encodeURIComponent(propertyId)}`);
+}
+
+export async function updateFoodConfig(
+  input: UpdateFoodServiceConfigInput
+): Promise<ApiResponse<FoodServiceConfig>> {
+  return apiFetch<FoodServiceConfig>("/food/config", {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function fetchMenuItems(
+  propertyId: string,
+  serviceType?: string,
+  category?: string
+): Promise<ApiResponse<MenuItem[]>> {
+  let url = `/food/menu?property_id=${encodeURIComponent(propertyId)}`;
+  if (serviceType && serviceType !== "all") {
+    url += `&service_type=${encodeURIComponent(serviceType)}`;
+  }
+  if (category && category !== "all") {
+    url += `&category=${encodeURIComponent(category)}`;
+  }
+  return apiFetch<MenuItem[]>(url);
+}
+
+export async function createMenuItem(
+  input: CreateMenuItemInput
+): Promise<ApiResponse<MenuItem>> {
+  return apiFetch<MenuItem>("/food/menu", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateMenuItem(
+  id: string,
+  input: UpdateMenuItemInput
+): Promise<ApiResponse<MenuItem>> {
+  return apiFetch<MenuItem>(`/food/menu/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function fetchMealPlans(
+  propertyId: string
+): Promise<ApiResponse<MealPlan[]>> {
+  return apiFetch<MealPlan[]>(`/food/meal-plans?property_id=${encodeURIComponent(propertyId)}`);
+}
+
+export async function createMealPlan(
+  input: CreateMealPlanInput
+): Promise<ApiResponse<MealPlan>> {
+  return apiFetch<MealPlan>("/food/meal-plans", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function fetchMealEntitlements(
+  propertyId: string,
+  hostellerId?: string
+): Promise<ApiResponse<HostellerMealEntitlement[]>> {
+  let url = `/food/entitlements?property_id=${encodeURIComponent(propertyId)}`;
+  if (hostellerId) {
+    url += `&hosteller_id=${encodeURIComponent(hostellerId)}`;
+  }
+  return apiFetch<HostellerMealEntitlement[]>(url);
+}
+
+export async function assignMealPlan(
+  input: AssignMealPlanInput
+): Promise<ApiResponse<HostellerMealEntitlement>> {
+  return apiFetch<HostellerMealEntitlement>("/food/entitlements", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function verifyEntitlement(
+  propertyId: string,
+  hostellerId: string,
+  serviceDate: string,
+  mealPeriod: string
+): Promise<ApiResponse<EntitlementVerificationResult>> {
+  const url = `/food/entitlements/verify?property_id=${encodeURIComponent(
+    propertyId
+  )}&hosteller_id=${encodeURIComponent(hostellerId)}&service_date=${encodeURIComponent(
+    serviceDate
+  )}&meal_period=${encodeURIComponent(mealPeriod)}`;
+  return apiFetch<EntitlementVerificationResult>(url);
+}
+
+export async function fetchMealAttendance(
+  propertyId: string,
+  serviceDate?: string,
+  mealPeriod?: string
+): Promise<ApiResponse<MealAttendance[]>> {
+  let url = `/food/attendance?property_id=${encodeURIComponent(propertyId)}`;
+  if (serviceDate) {
+    url += `&service_date=${encodeURIComponent(serviceDate)}`;
+  }
+  if (mealPeriod && mealPeriod !== "all") {
+    url += `&meal_period=${encodeURIComponent(mealPeriod)}`;
+  }
+  return apiFetch<MealAttendance[]>(url);
+}
+
+export async function recordMealAttendance(
+  input: RecordMealAttendanceInput
+): Promise<ApiResponse<MealAttendance>> {
+  return apiFetch<MealAttendance>("/food/attendance", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function fetchRestaurantOrders(
+  propertyId: string,
+  status?: string
+): Promise<ApiResponse<RestaurantOrder[]>> {
+  let url = `/food/restaurant-orders?property_id=${encodeURIComponent(propertyId)}`;
+  if (status && status !== "all") {
+    url += `&status=${encodeURIComponent(status)}`;
+  }
+  return apiFetch<RestaurantOrder[]>(url);
+}
+
+export async function createRestaurantOrder(
+  input: CreateRestaurantOrderInput
+): Promise<ApiResponse<RestaurantOrder>> {
+  return apiFetch<RestaurantOrder>("/food/restaurant-orders", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateRestaurantOrderStatus(
+  orderId: string,
+  status: OrderStatus
+): Promise<ApiResponse<RestaurantOrder>> {
+  return apiFetch<RestaurantOrder>(
+    `/food/restaurant-orders/${encodeURIComponent(orderId)}/status`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ status }),
+    }
+  );
+}
+
+export async function fetchFoodStock(
+  propertyId: string
+): Promise<ApiResponse<FoodStockItem[]>> {
+  return apiFetch<FoodStockItem[]>(`/food/stock?property_id=${encodeURIComponent(propertyId)}`);
+}
+
+export async function createFoodStockItem(
+  input: CreateStockItemInput
+): Promise<ApiResponse<FoodStockItem>> {
+  return apiFetch<FoodStockItem>("/food/stock", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function recordStockMovement(
+  stockId: string,
+  input: UpdateStockItemInput
+): Promise<ApiResponse<{ stock_item: FoodStockItem; movement: FoodStockMovement }>> {
+  return apiFetch<{ stock_item: FoodStockItem; movement: FoodStockMovement }>(
+    `/food/stock/${encodeURIComponent(stockId)}/movement`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    }
+  );
+}
+
+export async function fetchFoodStockMovements(
+  propertyId: string
+): Promise<ApiResponse<FoodStockMovement[]>> {
+  return apiFetch<FoodStockMovement[]>(
+    `/food/stock-movements?property_id=${encodeURIComponent(propertyId)}`
+  );
+}
+
+export async function fetchFoodDashboard(
+  propertyId: string
+): Promise<ApiResponse<FoodDashboardSummary>> {
+  return apiFetch<FoodDashboardSummary>(
+    `/food/dashboard?property_id=${encodeURIComponent(propertyId)}`
+  );
+}
+
+// ==========================================
+// PHASE 11: STAFF & OPERATIONS API CLIENT
+// ==========================================
+
+export async function fetchStaffMembers(
+  propertyId: string,
+  department?: string,
+  status?: string
+): Promise<ApiResponse<StaffMember[]>> {
+  let url = `/operations/staff?property_id=${encodeURIComponent(propertyId)}`;
+  if (department) url += `&department=${encodeURIComponent(department)}`;
+  if (status) url += `&status=${encodeURIComponent(status)}`;
+  return apiFetch<StaffMember[]>(url);
+}
+
+export async function createStaffMember(
+  input: Partial<StaffMember> & {
+    property_id: string;
+    first_name: string;
+    last_name: string;
+    department: StaffDepartment;
+    job_title: string;
+  }
+): Promise<ApiResponse<StaffMember>> {
+  return apiFetch<StaffMember>("/operations/staff", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateStaffMember(
+  staffId: string,
+  input: Partial<StaffMember>
+): Promise<ApiResponse<StaffMember>> {
+  return apiFetch<StaffMember>(`/operations/staff/${encodeURIComponent(staffId)}`, {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function fetchStaffShifts(
+  propertyId: string,
+  date?: string,
+  department?: string
+): Promise<ApiResponse<StaffShift[]>> {
+  let url = `/operations/shifts?property_id=${encodeURIComponent(propertyId)}`;
+  if (date) url += `&shift_date=${encodeURIComponent(date)}`;
+  if (department) url += `&department=${encodeURIComponent(department)}`;
+  return apiFetch<StaffShift[]>(url);
+}
+
+export async function createStaffShift(
+  input: Partial<StaffShift> & {
+    property_id: string;
+    staff_id: string;
+    shift_type: ShiftType;
+    shift_date: string;
+    start_time: string;
+    end_time: string;
+  }
+): Promise<ApiResponse<StaffShift>> {
+  return apiFetch<StaffShift>("/operations/shifts", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateStaffShift(
+  shiftId: string,
+  input: Partial<StaffShift>
+): Promise<ApiResponse<StaffShift>> {
+  return apiFetch<StaffShift>(`/operations/shifts/${encodeURIComponent(shiftId)}`, {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function fetchStaffAttendance(
+  propertyId: string,
+  date?: string,
+  staffId?: string
+): Promise<ApiResponse<StaffAttendance[]>> {
+  let url = `/operations/attendance?property_id=${encodeURIComponent(propertyId)}`;
+  if (date) url += `&attendance_date=${encodeURIComponent(date)}`;
+  if (staffId) url += `&staff_id=${encodeURIComponent(staffId)}`;
+  return apiFetch<StaffAttendance[]>(url);
+}
+
+export async function clockInStaff(input: {
+  property_id: string;
+  staff_id: string;
+  shift_id?: string;
+  clock_in_time?: string;
+  notes?: string;
+}): Promise<ApiResponse<StaffAttendance>> {
+  return apiFetch<StaffAttendance>("/operations/attendance/clock-in", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function clockOutStaff(
+  attendanceId: string,
+  input?: { clock_out_time?: string; notes?: string }
+): Promise<ApiResponse<StaffAttendance>> {
+  return apiFetch<StaffAttendance>(
+    `/operations/attendance/${encodeURIComponent(attendanceId)}/clock-out`,
+    {
+      method: "POST",
+      body: JSON.stringify(input || {}),
+    }
+  );
+}
+
+export async function fetchHousekeepingTasks(
+  propertyId: string,
+  status?: string,
+  roomId?: string
+): Promise<ApiResponse<HousekeepingTask[]>> {
+  let url = `/operations/housekeeping?property_id=${encodeURIComponent(propertyId)}`;
+  if (status) url += `&status=${encodeURIComponent(status)}`;
+  if (roomId) url += `&room_id=${encodeURIComponent(roomId)}`;
+  return apiFetch<HousekeepingTask[]>(url);
+}
+
+export async function createHousekeepingTask(
+  input: Partial<HousekeepingTask> & {
+    property_id: string;
+    cleaning_type: CleaningType;
+  }
+): Promise<ApiResponse<HousekeepingTask>> {
+  return apiFetch<HousekeepingTask>("/operations/housekeeping", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateHousekeepingTask(
+  taskId: string,
+  input: Partial<HousekeepingTask>
+): Promise<ApiResponse<HousekeepingTask>> {
+  return apiFetch<HousekeepingTask>(
+    `/operations/housekeeping/${encodeURIComponent(taskId)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }
+  );
+}
+
+export async function fetchMaintenanceOrders(
+  propertyId: string,
+  status?: string,
+  priority?: string
+): Promise<ApiResponse<MaintenanceWorkOrder[]>> {
+  let url = `/operations/maintenance?property_id=${encodeURIComponent(propertyId)}`;
+  if (status) url += `&status=${encodeURIComponent(status)}`;
+  if (priority) url += `&priority=${encodeURIComponent(priority)}`;
+  return apiFetch<MaintenanceWorkOrder[]>(url);
+}
+
+export async function createMaintenanceOrder(
+  input: Partial<MaintenanceWorkOrder> & {
+    property_id: string;
+    title: string;
+    category: MaintenanceCategory;
+    priority: MaintenancePriority;
+  }
+): Promise<ApiResponse<MaintenanceWorkOrder>> {
+  return apiFetch<MaintenanceWorkOrder>("/operations/maintenance", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateMaintenanceOrder(
+  orderId: string,
+  input: Partial<MaintenanceWorkOrder>
+): Promise<ApiResponse<MaintenanceWorkOrder>> {
+  return apiFetch<MaintenanceWorkOrder>(
+    `/operations/maintenance/${encodeURIComponent(orderId)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }
+  );
+}
+
+export async function fetchDailyLogs(
+  propertyId: string,
+  date?: string,
+  category?: string
+): Promise<ApiResponse<OperationalDailyLog[]>> {
+  let url = `/operations/daily-logs?property_id=${encodeURIComponent(propertyId)}`;
+  if (date) url += `&log_date=${encodeURIComponent(date)}`;
+  if (category) url += `&category=${encodeURIComponent(category)}`;
+  return apiFetch<OperationalDailyLog[]>(url);
+}
+
+export async function createDailyLog(
+  input: Partial<OperationalDailyLog> & {
+    property_id: string;
+    summary: string;
+    category: DailyLogCategory;
+  }
+): Promise<ApiResponse<OperationalDailyLog>> {
+  return apiFetch<OperationalDailyLog>("/operations/daily-logs", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function resolveDailyLog(
+  logId: string
+): Promise<ApiResponse<OperationalDailyLog>> {
+  return apiFetch<OperationalDailyLog>(
+    `/operations/daily-logs/${encodeURIComponent(logId)}/resolve`,
+    {
+      method: "PUT",
+    }
+  );
+}
+
+export async function fetchOperationsDashboard(
+  propertyId: string
+): Promise<ApiResponse<StaffOperationsDashboard>> {
+  return apiFetch<StaffOperationsDashboard>(
+    `/operations/dashboard?property_id=${encodeURIComponent(propertyId)}`
+  );
+}
+
+// ==========================================
+// PHASE 12: REPORTS & ANALYTICS API CLIENT
+// ==========================================
+
+export async function fetchExecutiveReport(params: {
+  property_id: string;
+  start_date: string;
+  end_date: string;
+}): Promise<ApiResponse<ExecutiveSummaryReport>> {
+  const q = new URLSearchParams({
+    property_id: params.property_id,
+    start_date: params.start_date,
+    end_date: params.end_date,
+  });
+  return apiFetch<ExecutiveSummaryReport>(`/reports/executive?${q.toString()}`);
+}
+
+export async function fetchOccupancyReport(params: {
+  property_id: string;
+  start_date: string;
+  end_date: string;
+}): Promise<ApiResponse<OccupancyReport>> {
+  const q = new URLSearchParams({
+    property_id: params.property_id,
+    start_date: params.start_date,
+    end_date: params.end_date,
+  });
+  return apiFetch<OccupancyReport>(`/reports/occupancy?${q.toString()}`);
+}
+
+export async function fetchBookingStayReport(params: {
+  property_id: string;
+  start_date: string;
+  end_date: string;
+  status?: string;
+}): Promise<ApiResponse<BookingStayReport>> {
+  const q = new URLSearchParams({
+    property_id: params.property_id,
+    start_date: params.start_date,
+    end_date: params.end_date,
+  });
+  if (params.status) q.set("status", params.status);
+  return apiFetch<BookingStayReport>(`/reports/bookings?${q.toString()}`);
+}
+
+export async function fetchFinancialReport(params: {
+  property_id: string;
+  start_date: string;
+  end_date: string;
+}): Promise<ApiResponse<FinancialReport>> {
+  const q = new URLSearchParams({
+    property_id: params.property_id,
+    start_date: params.start_date,
+    end_date: params.end_date,
+  });
+  return apiFetch<FinancialReport>(`/reports/finance?${q.toString()}`);
+}
+
+export async function fetchFoodDiningReport(params: {
+  property_id: string;
+  start_date: string;
+  end_date: string;
+}): Promise<ApiResponse<FoodDiningReport>> {
+  const q = new URLSearchParams({
+    property_id: params.property_id,
+    start_date: params.start_date,
+    end_date: params.end_date,
+  });
+  return apiFetch<FoodDiningReport>(`/reports/food?${q.toString()}`);
+}
+
+export async function fetchStaffOpsReport(params: {
+  property_id: string;
+  start_date: string;
+  end_date: string;
+}): Promise<ApiResponse<StaffOpsReport>> {
+  const q = new URLSearchParams({
+    property_id: params.property_id,
+    start_date: params.start_date,
+    end_date: params.end_date,
+  });
+  return apiFetch<StaffOpsReport>(`/reports/staff-ops?${q.toString()}`);
+}
+
+export async function downloadReportCsv(params: {
+  report_type: string;
+  property_id: string;
+  start_date: string;
+  end_date: string;
+}): Promise<string> {
+  const q = new URLSearchParams({
+    report_type: params.report_type,
+    property_id: params.property_id,
+    start_date: params.start_date,
+    end_date: params.end_date,
+  });
+  const url = `${getApiBase()}/reports/export-csv?${q.toString()}`;
+  const headers: Record<string, string> = {};
+  if (currentAccessToken) {
+    headers["Authorization"] = `Bearer ${currentAccessToken}`;
+  }
+  const response = await fetch(url, { headers });
+  if (!response.ok) {
+    throw new Error(`Export failed with status ${response.status}`);
+  }
+  return response.text();
+}
+
+
 
 

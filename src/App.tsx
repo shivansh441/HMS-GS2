@@ -13,7 +13,12 @@ import { HostelWorkflowCard } from "@/src/components/shared/HostelWorkflowCard";
 import { HotelWorkflowCard } from "@/src/components/shared/HotelWorkflowCard";
 import { CustomerPortalCard } from "@/src/components/shared/CustomerPortalCard";
 import { AdminUserManagementCard } from "@/src/components/shared/AdminUserManagementCard";
+import { FinanceWorkflowCard } from "@/src/components/shared/FinanceWorkflowCard";
+import { MessRestaurantCard } from "@/src/components/shared/MessRestaurantCard";
+import { StaffOperationsCard } from "@/src/components/shared/StaffOperationsCard";
+import { ReportsAnalyticsCard } from "@/src/components/shared/ReportsAnalyticsCard";
 import { AdminPropertiesPage } from "@/src/pages/admin/AdminPropertiesPage";
+
 import { AdminInventoryPage } from "@/src/pages/admin/AdminInventoryPage";
 import { fetchHealthProbe } from "@/src/services/api-client";
 import { HealthResponse } from "@/src/types/api";
@@ -124,6 +129,15 @@ function MainAppShell() {
           {activeTab === "properties" && <AdminPropertiesPage />}
 
           {activeTab === "rooms-beds" && <AdminInventoryPage />}
+
+          {activeTab === "finance" && <FinanceWorkflowCard />}
+
+          {activeTab === "mess-restaurant" && <MessRestaurantCard />}
+
+          {activeTab === "staff-operations" && <StaffOperationsCard />}
+
+          {activeTab === "reports" && <ReportsAnalyticsCard />}
+
 
           {activeTab === "health" && (
             <HealthMonitorCard

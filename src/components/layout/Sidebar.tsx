@@ -11,6 +11,10 @@ import {
   KeyRound,
   Sparkles,
   Building2,
+  Receipt,
+  UtensilsCrossed,
+  Users,
+  BarChart3,
 } from "lucide-react";
 import { useProperty } from "@/src/contexts/PropertyContext";
 import { useAuth } from "@/src/contexts/AuthContext";
@@ -19,6 +23,10 @@ export type ActiveTab =
   | "overview"
   | "properties"
   | "rooms-beds"
+  | "finance"
+  | "mess-restaurant"
+  | "staff-operations"
+  | "reports"
   | "health"
   | "architecture"
   | "hostel-workflow"
@@ -27,6 +35,7 @@ export type ActiveTab =
   | "database"
   | "customer-portal"
   | "admin-users";
+
 
 interface SidebarProps {
   activeTab: ActiveTab;
@@ -186,6 +195,111 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onSelectTab }) => {
             </button>
           </nav>
         </div>
+
+        {/* Finance & Tax Engine Section */}
+        <div>
+          <div className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-wider text-zinc-500 flex items-center justify-between">
+            <span>Finance & Billing</span>
+            <span className="text-[10px] text-purple-400 font-mono font-semibold">Phase 9</span>
+          </div>
+          <nav className="space-y-1">
+            <button
+              onClick={() => onSelectTab("finance")}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
+                activeTab === "finance"
+                  ? "bg-purple-600 text-white font-semibold shadow-sm"
+                  : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900"
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <Receipt className="w-4 h-4 text-purple-400" />
+                <span>Finance & Tax Engine</span>
+              </div>
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-purple-300 font-mono">
+                Folios
+              </span>
+            </button>
+          </nav>
+        </div>
+
+        {/* Mess & Restaurant Management Section */}
+        <div>
+          <div className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-wider text-zinc-500 flex items-center justify-between">
+            <span>Dining & Operations</span>
+            <span className="text-[10px] text-amber-400 font-mono font-semibold">Phase 10</span>
+          </div>
+          <nav className="space-y-1">
+            <button
+              onClick={() => onSelectTab("mess-restaurant")}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
+                activeTab === "mess-restaurant"
+                  ? "bg-amber-500 text-zinc-950 font-bold shadow-sm"
+                  : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900"
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <UtensilsCrossed className="w-4 h-4 text-amber-400" />
+                <span>Mess & Restaurant</span>
+              </div>
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-amber-300 font-mono">
+                KDS/POS
+              </span>
+            </button>
+          </nav>
+        </div>
+
+        {/* Staff & Operations Management Section */}
+        <div>
+          <div className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-wider text-zinc-500 flex items-center justify-between">
+            <span>Staff & Facilities</span>
+            <span className="text-[10px] text-emerald-400 font-mono font-semibold">Phase 11</span>
+          </div>
+          <nav className="space-y-1">
+            <button
+              onClick={() => onSelectTab("staff-operations")}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
+                activeTab === "staff-operations"
+                  ? "bg-emerald-600 text-white font-semibold shadow-sm"
+                  : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900"
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <Users className="w-4 h-4 text-emerald-400" />
+                <span>Staff & Operations</span>
+              </div>
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-emerald-300 font-mono">
+                Ops/Rota
+              </span>
+            </button>
+          </nav>
+        </div>
+
+        {/* Reports & Analytics Intelligence Section */}
+        <div>
+          <div className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-wider text-zinc-500 flex items-center justify-between">
+            <span>Intelligence & Audit</span>
+            <span className="text-[10px] text-blue-400 font-mono font-semibold">Phase 12</span>
+          </div>
+          <nav className="space-y-1">
+            <button
+              onClick={() => onSelectTab("reports")}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
+                activeTab === "reports"
+                  ? "bg-blue-600 text-white font-semibold shadow-sm"
+                  : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900"
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <BarChart3 className="w-4 h-4 text-blue-400" />
+                <span>Reports & Analytics</span>
+              </div>
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-blue-300 font-mono">
+                RevPAR
+              </span>
+            </button>
+          </nav>
+        </div>
+
 
         {/* Security & Access Enforcement */}
         <div>

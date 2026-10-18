@@ -114,10 +114,11 @@ export const ADMIN_NAVIGATION: NavGroup[] = [
         id: "nav-mess",
         label: "Mess & Restaurant",
         path: "/admin/operations/mess",
-        allowedRoles: ["super_admin", "property_manager", "accountant"],
-        isImplemented: false,
+        allowedRoles: ["super_admin", "property_manager", "accountant", "front_desk"],
+        isImplemented: true, // Backed by Phase 10 Mess & Restaurant engine
         moduleName: "Mess & Dining Operations",
       },
+
       {
         id: "nav-staff",
         label: "Staff",
