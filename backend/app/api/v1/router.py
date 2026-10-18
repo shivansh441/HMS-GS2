@@ -2,11 +2,13 @@
 
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import auth, health, spec
+from app.api.v1.endpoints import auth, bookings, health, properties, spec
 
 api_router = APIRouter()
 
 # Mount authentication and infrastructure routers
 api_router.include_router(auth.router)
+api_router.include_router(bookings.router)
 api_router.include_router(health.router)
+api_router.include_router(properties.router)
 api_router.include_router(spec.router)

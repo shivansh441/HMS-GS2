@@ -67,3 +67,8 @@ class UserRead(BaseModel):
     global_role: UserRole
     is_active: bool
     is_superuser: bool
+
+
+class UpdateUserStatusRequest(BaseModel):
+    is_active: bool = Field(..., description="Target active status for the account")
+

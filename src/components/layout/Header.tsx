@@ -18,7 +18,7 @@ export const Header: React.FC<HeaderProps> = ({
   isRefreshing,
 }) => {
   const { properties, activeProperty, setActivePropertyId } = useProperty();
-  const { user, switchRole, canAccessProperty } = useAuth();
+  const { user, switchRole, canAccessProperty, isAuthenticated, logout } = useAuth();
 
   const isCurrentPropertyAllowed = canAccessProperty(activeProperty.id);
 
@@ -137,15 +137,28 @@ export const Header: React.FC<HeaderProps> = ({
           </select>
         </div>
 
-        {/* User Identity avatar */}
+        {/* User Identity avatar & Logout Action */}
         <div className="flex items-center gap-2 pl-1">
           <div className="w-8 h-8 rounded-full bg-zinc-800 border border-zinc-700 flex items-center justify-center text-xs font-semibold text-zinc-200">
-            {user.firstName[0]}{user.lastName[0]}
+            {user.firstName ? `${user.firstName[0]}${user.lastName ? user.lastName[0] : ""}` : "V"}
           </div>
           <div className="hidden xl:block text-left text-xs">
-            <p className="font-medium text-zinc-200 leading-tight">{user.firstName} {user.lastName}</p>
-            <p className="text-[11px] text-zinc-500 leading-tight">{user.role}</p>
+            <p className="font-medium text-zinc-200 leading-tight">
+              {user.firstName} {user.lastName}
+            </p>
+            <p className="text-[11px] text-zinc-500 leading-tight">
+              {isAuthenticated ? user.role : "Unauthenticated"}
+            </p>
           </div>
+          {isAuthenticated && (
+            <button
+              onClick={() => logout()}
+              title="Revoke session and sign out"
+              className="text-[11px] px-2 py-1 rounded border border-zinc-800 bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors ml-1"
+            >
+              Logout
+            </button>
+          )}
         </div>
       </div>
     </header>

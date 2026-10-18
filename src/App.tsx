@@ -11,6 +11,8 @@ import { SecurityBaselineCard } from "@/src/components/shared/SecurityBaselineCa
 import { DatabaseSchemaCard } from "@/src/components/shared/DatabaseSchemaCard";
 import { HostelWorkflowCard } from "@/src/components/shared/HostelWorkflowCard";
 import { HotelWorkflowCard } from "@/src/components/shared/HotelWorkflowCard";
+import { CustomerPortalCard } from "@/src/components/shared/CustomerPortalCard";
+import { AdminUserManagementCard } from "@/src/components/shared/AdminUserManagementCard";
 import { fetchHealthProbe } from "@/src/services/api-client";
 import { HealthResponse } from "@/src/types/api";
 
@@ -134,6 +136,10 @@ function MainAppShell() {
           {activeTab === "hotel-workflow" && <HotelWorkflowCard />}
 
           {activeTab === "security" && <SecurityBaselineCard />}
+
+          {activeTab === "customer-portal" && <CustomerPortalCard />}
+
+          {activeTab === "admin-users" && <AdminUserManagementCard />}
 
           {activeTab === "database" && <DatabaseSchemaCard />}
         </main>

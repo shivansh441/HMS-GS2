@@ -8,9 +8,14 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import PermissionDeniedError, PropertyAccessViolationError
+from app.core.exceptions import (
+    EntityNotFoundError,
+    PermissionDeniedError,
+    PropertyAccessViolationError,
+)
 from app.core.security import TokenPayload, UserRole, decode_access_token
 from app.db.session import get_async_session
+from app.models.booking import Booking
 from app.models.user import User, UserPropertyAssignment
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -130,3 +135,41 @@ async def verify_property_scope(
         raise PropertyAccessViolationError(property_id=property_id)
 
     return current_user
+
+
+async def verify_booking_ownership(
+    booking_id: str,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> Booking:
+    """Enforce resource-level authorization: customers can only view/mutate their own bookings;
+    staff members can only view bookings for properties assigned to them; platform super admins have global access.
+    """
+    result = await session.execute(select(Booking).where(Booking.id == booking_id))
+    booking = result.scalar_one_or_none()
+    if not booking:
+        raise EntityNotFoundError("Booking", booking_id)
+
+    # 1. Platform Super Admin has global override
+    if current_user.is_superuser or current_user.global_role == UserRole.SUPER_ADMIN:
+        return booking
+
+    # 2. Customer / Guest must be the explicit owner of this booking
+    if current_user.global_role == UserRole.GUEST:
+        if booking.user_id != current_user.id:
+            raise PermissionDeniedError("Access denied: You do not own this booking.")
+        return booking
+
+    # 3. Staff / Property Manager must be assigned to the booking's property
+    assignment_res = await session.execute(
+        select(UserPropertyAssignment).where(
+            UserPropertyAssignment.user_id == current_user.id,
+            UserPropertyAssignment.property_id == booking.property_id,
+            UserPropertyAssignment.is_active,
+        )
+    )
+    if not assignment_res.scalar_one_or_none():
+        raise PropertyAccessViolationError(property_id=booking.property_id)
+
+    return booking
+

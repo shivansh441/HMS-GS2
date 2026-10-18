@@ -16,6 +16,7 @@ from app.schemas.auth import (
     RefreshTokenRequest,
     ResetPasswordRequest,
     Token,
+    UpdateUserStatusRequest,
     UserRead,
 )
 from app.schemas.common import ApiResponse
@@ -216,3 +217,25 @@ async def admin_provision_user(
         data=UserRead.model_validate(user),
         message="Administrative user provisioned successfully.",
     )
+
+
+@router.patch(
+    "/admin/users/{user_id}/status",
+    response_model=ApiResponse[UserRead],
+    status_code=status.HTTP_200_OK,
+    summary="Activate or deactivate a user account",
+)
+async def update_user_status(
+    user_id: str,
+    data: UpdateUserStatusRequest,
+    session: Annotated[AsyncSession, Depends(get_db)],
+    _admin: Annotated[User, Depends(require_platform_admin)],
+) -> ApiResponse[UserRead]:
+    """Platform administrator action to activate or deactivate a staff or customer account."""
+    user = await AuthService.update_user_status(session, user_id=user_id, is_active=data.is_active)
+    return ApiResponse(
+        success=True,
+        data=UserRead.model_validate(user),
+        message=f"User account {'activated' if data.is_active else 'deactivated'} successfully.",
+    )
+

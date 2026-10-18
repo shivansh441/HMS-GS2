@@ -21,7 +21,9 @@ export type ActiveTab =
   | "hostel-workflow"
   | "hotel-workflow"
   | "security"
-  | "database";
+  | "database"
+  | "customer-portal"
+  | "admin-users";
 
 interface SidebarProps {
   activeTab: ActiveTab;
@@ -151,9 +153,43 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onSelectTab }) => {
         {/* Security & Access Enforcement */}
         <div>
           <div className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
-            Security & RBAC
+            Authentication & Access
           </div>
           <nav className="space-y-1">
+            <button
+              onClick={() => onSelectTab("customer-portal")}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
+                activeTab === "customer-portal"
+                  ? "bg-indigo-600 text-white font-semibold"
+                  : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900"
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <Users2 className="w-4 h-4 text-emerald-400" />
+                <span>Customer Portal</span>
+              </div>
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-emerald-300">
+                My Bookings
+              </span>
+            </button>
+
+            <button
+              onClick={() => onSelectTab("admin-users")}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
+                activeTab === "admin-users"
+                  ? "bg-indigo-600 text-white font-semibold"
+                  : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900"
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <KeyRound className="w-4 h-4 text-purple-400" />
+                <span>Admin Staff RBAC</span>
+              </div>
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-purple-300">
+                Super Admin
+              </span>
+            </button>
+
             <button
               onClick={() => onSelectTab("security")}
               className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
@@ -162,8 +198,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onSelectTab }) => {
                   : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900"
               }`}
             >
-              <KeyRound className="w-4 h-4 text-emerald-400" />
-              <span>Security Baseline</span>
+              <ShieldAlert className="w-4 h-4 text-amber-400" />
+              <span>Security & Token Bench</span>
             </button>
           </nav>
         </div>

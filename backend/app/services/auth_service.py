@@ -5,7 +5,12 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import AuthenticationError, ConflictError, ValidationError
+from app.core.exceptions import (
+    AuthenticationError,
+    ConflictError,
+    EntityNotFoundError,
+    ValidationError,
+)
 from app.core.security import (
     UserRole,
     create_access_token,
@@ -147,36 +152,47 @@ class AuthService:
 
         token_hash = hash_token(refresh_token)
         result = await session.execute(
-            select(RefreshSession).where(
-                RefreshSession.refresh_token_hash == token_hash,
-                not RefreshSession.is_revoked,
-            )
+            select(RefreshSession).where(RefreshSession.refresh_token_hash == token_hash)
         )
         ref_session = result.scalar_one_or_none()
 
-        exp = ref_session.expires_at if ref_session else None
+        if not ref_session:
+            raise AuthenticationError("Invalid or non-existent refresh token session.")
+
+        if ref_session.is_revoked:
+            # Security Alert: Reuse detected on an already revoked/rotated token!
+            # Revoke all active sessions for this user immediately
+            user_sessions = await session.execute(
+                select(RefreshSession).where(
+                    RefreshSession.user_id == ref_session.user_id,
+                    RefreshSession.is_revoked.is_(False),
+                )
+            )
+            for s in user_sessions.scalars().all():
+                s.is_revoked = True
+                s.revoked_at = datetime.now(UTC)
+            await session.commit()
+            raise AuthenticationError("Refresh token reuse detected. All active sessions have been revoked for security.")
+
+        exp = ref_session.expires_at
         if exp and exp.tzinfo is None:
             exp = exp.replace(tzinfo=UTC)
 
-        if not ref_session or not exp or exp < datetime.now(UTC):
-            if ref_session and ref_session.is_revoked:
-                # Security Alert: Reuse detected on a revoked token! Revoke all sessions for this user.
-                await session.execute(
-                    select(RefreshSession).where(RefreshSession.user_id == ref_session.user_id)
-                )
-                # Revoke all sessions for safety
-                await session.commit()
-            raise AuthenticationError("Invalid or expired refresh token session.")
+        if not exp or exp < datetime.now(UTC):
+            ref_session.is_revoked = True
+            ref_session.revoked_at = datetime.now(UTC)
+            await session.commit()
+            raise AuthenticationError("Refresh token session has expired.")
 
         # Revoke current refresh session (rotation)
         ref_session.is_revoked = True
         ref_session.revoked_at = datetime.now(UTC)
 
         # Fetch user
-        user_res = await session.execute(select(User).where(User.id == payload.sub, User.is_active))
+        user_res = await session.execute(select(User).where(User.id == payload.sub, User.is_active.is_(True)))
         user = user_res.scalar_one_or_none()
         if not user:
-            raise AuthenticationError("User not found.")
+            raise AuthenticationError("User not found or deactivated.")
 
         # Issue new pair
         new_access = create_access_token(subject=user.id, role=user.global_role)
@@ -230,7 +246,7 @@ class AuthService:
         sessions_res = await session.execute(
             select(RefreshSession).where(
                 RefreshSession.user_id == user.id,
-                not RefreshSession.is_revoked,
+                RefreshSession.is_revoked.is_(False),
             )
         )
         for s in sessions_res.scalars().all():
@@ -270,7 +286,7 @@ class AuthService:
         result = await session.execute(
             select(PasswordResetToken).where(
                 PasswordResetToken.token_hash == token_hash,
-                not PasswordResetToken.is_used,
+                PasswordResetToken.is_used.is_(False),
             )
         )
         reset_rec = result.scalar_one_or_none()
@@ -293,7 +309,7 @@ class AuthService:
             sessions_res = await session.execute(
                 select(RefreshSession).where(
                     RefreshSession.user_id == user.id,
-                    not RefreshSession.is_revoked,
+                    RefreshSession.is_revoked.is_(False),
                 )
             )
             for s in sessions_res.scalars().all():
@@ -336,3 +352,28 @@ class AuthService:
         await session.commit()
         await session.refresh(user)
         return user
+
+    @staticmethod
+    async def update_user_status(session: AsyncSession, user_id: str, is_active: bool) -> User:
+        """Activate or deactivate a user account and immediately revoke sessions if deactivated."""
+        result = await session.execute(select(User).where(User.id == user_id))
+        user = result.scalar_one_or_none()
+        if not user:
+            raise EntityNotFoundError("User", user_id)
+
+        user.is_active = is_active
+        if not is_active:
+            sessions_res = await session.execute(
+                select(RefreshSession).where(
+                    RefreshSession.user_id == user.id,
+                    RefreshSession.is_revoked.is_(False),
+                )
+            )
+            for s in sessions_res.scalars().all():
+                s.is_revoked = True
+                s.revoked_at = datetime.now(UTC)
+
+        await session.commit()
+        await session.refresh(user)
+        return user
+

@@ -240,3 +240,128 @@ async def test_admin_provisioning_and_property_rbac(async_client: AsyncClient, d
     assert login_staff.status_code == 200
     staff_token = login_staff.json()["data"]["access_token"]
     assert staff_token is not None
+
+    # Staff accesses assigned Hotel Alpha private details -> 200 OK
+    staff_headers = {"Authorization": f"Bearer {staff_token}"}
+    alpha_res = await async_client.get(
+        f"/api/v1/properties/{p1.id}/private-details",
+        headers=staff_headers,
+    )
+    assert alpha_res.status_code == 200
+
+    # Staff attempts to access unassigned Hotel Beta private details -> 403 Forbidden
+    beta_res = await async_client.get(
+        f"/api/v1/properties/{p2.id}/private-details",
+        headers=staff_headers,
+    )
+    assert beta_res.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_refresh_token_reuse_detection(async_client: AsyncClient) -> None:
+    """Verify that reusing an already rotated refresh token triggers security revocation of all sessions."""
+    reg_payload = {
+        "email": "reuse.test@example.com",
+        "password": "SecurePassword2026!",
+        "first_name": "Eve",
+        "last_name": "Hacker",
+    }
+    await async_client.post("/api/v1/auth/register", json=reg_payload)
+
+    login_res = await async_client.post(
+        "/api/v1/auth/login",
+        json={"email": "reuse.test@example.com", "password": "SecurePassword2026!"},
+    )
+    token_1 = login_res.json()["data"]["refresh_token"]
+
+    # Legitimate first rotation (token 1 -> token 2)
+    ref1_res = await async_client.post("/api/v1/auth/refresh", json={"refresh_token": token_1})
+    assert ref1_res.status_code == 200
+    token_2 = ref1_res.json()["data"]["refresh_token"]
+
+    # Attacker attempts to reuse rotated token 1 -> Must be rejected with 401 and trigger reuse detection
+    reuse_res = await async_client.post("/api/v1/auth/refresh", json={"refresh_token": token_1})
+    assert reuse_res.status_code == 401
+
+    # Now verify that token 2 has been revoked due to reuse detection
+    token2_try = await async_client.post("/api/v1/auth/refresh", json={"refresh_token": token_2})
+    assert token2_try.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_invalid_and_expired_access_tokens(async_client: AsyncClient) -> None:
+    """Verify that malformed or forged access tokens return 401 Unauthorized."""
+    # Malformed token
+    res_malformed = await async_client.get(
+        "/api/v1/auth/me",
+        headers={"Authorization": "Bearer not.a.valid.jwt"},
+    )
+    assert res_malformed.status_code == 401
+
+    # Missing credentials
+    res_none = await async_client.get("/api/v1/auth/me")
+    assert res_none.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_staff_account_activation_and_deactivation(async_client: AsyncClient, db_session: AsyncSession) -> None:
+    """Verify platform admin can deactivate a staff account and deactivated account cannot authenticate."""
+    admin_user = User(
+        email="superadmin2@grandstay.com",
+        hashed_password=get_password_hash("AdminPass2026!"),
+        first_name="Admin",
+        last_name="Super",
+        global_role=UserRole.SUPER_ADMIN,
+        is_superuser=True,
+        is_active=True,
+    )
+    db_session.add(admin_user)
+    await db_session.commit()
+
+    admin_login = await async_client.post(
+        "/api/v1/auth/login",
+        json={"email": "superadmin2@grandstay.com", "password": "AdminPass2026!"},
+    )
+    admin_token = admin_login.json()["data"]["access_token"]
+    admin_headers = {"Authorization": f"Bearer {admin_token}"}
+
+    # Provision staff
+    prov_res = await async_client.post(
+        "/api/v1/auth/admin/provision",
+        json={
+            "email": "deactivate.staff@grandstay.com",
+            "password": "Password2026!",
+            "first_name": "Target",
+            "last_name": "Staff",
+            "global_role": UserRole.HOUSEKEEPING,
+            "assigned_property_ids": [],
+        },
+        headers=admin_headers,
+    )
+    assert prov_res.status_code == 201
+    staff_id = prov_res.json()["data"]["id"]
+
+    # Deactivate staff account
+    patch_res = await async_client.patch(
+        f"/api/v1/auth/admin/users/{staff_id}/status",
+        json={"is_active": False},
+        headers=admin_headers,
+    )
+    assert patch_res.status_code == 200
+    assert patch_res.json()["data"]["is_active"] is False
+
+    # Attempt to log in with deactivated account -> 401
+    bad_login = await async_client.post(
+        "/api/v1/auth/login",
+        json={"email": "deactivate.staff@grandstay.com", "password": "Password2026!"},
+    )
+    assert bad_login.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_public_properties_access_without_authentication(async_client: AsyncClient) -> None:
+    """Verify public visitors can browse properties catalog without an account."""
+    res = await async_client.get("/api/v1/properties/public")
+    assert res.status_code == 200
+    assert res.json()["success"] is True
+
