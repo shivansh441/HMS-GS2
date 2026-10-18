@@ -55,7 +55,22 @@ export async function apiFetch<T>(
     headers,
   });
 
-  const data = await response.json();
+  let data: any = null;
+  const contentType = response.headers.get("content-type");
+  if (contentType && contentType.includes("application/json")) {
+    try {
+      data = await response.json();
+    } catch {
+      data = null;
+    }
+  } else {
+    try {
+      const text = await response.text();
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      data = null;
+    }
+  }
 
   if (!response.ok || (data && data.success === false)) {
     const errorMsg =
@@ -229,8 +244,97 @@ export async function adminUpdateUserStatus(
 }
 
 // Property & Booking APIs
-export async function fetchPublicProperties(): Promise<ApiResponse<any[]>> {
-  return apiFetch<any[]>("/properties/public");
+export async function fetchPublicProperties(filters?: {
+  property_type?: string;
+  city?: string;
+}): Promise<ApiResponse<any[]>> {
+  const params = new URLSearchParams();
+  if (filters?.property_type && filters.property_type !== "all") {
+    params.set("property_type", filters.property_type);
+  }
+  if (filters?.city) {
+    params.set("city", filters.city);
+  }
+  const query = params.toString() ? `?${params.toString()}` : "";
+  return apiFetch<any[]>(`/properties/public${query}`);
+}
+
+export async function fetchPublicPropertyBySlug(slug: string): Promise<ApiResponse<any>> {
+  return apiFetch<any>(`/properties/public/${encodeURIComponent(slug)}`);
+}
+
+export async function fetchAdminProperties(filters?: {
+  property_type?: string;
+  publication_status?: string;
+  q?: string;
+  include_inactive?: boolean;
+}): Promise<ApiResponse<import("@/src/types/property").Property[]>> {
+  const params = new URLSearchParams();
+  if (filters?.property_type && filters.property_type !== "all") {
+    params.set("property_type", filters.property_type);
+  }
+  if (filters?.publication_status && filters.publication_status !== "all") {
+    params.set("publication_status", filters.publication_status);
+  }
+  if (filters?.q) {
+    params.set("q", filters.q);
+  }
+  if (filters?.include_inactive) {
+    params.set("include_inactive", "true");
+  }
+  const query = params.toString() ? `?${params.toString()}` : "";
+  return apiFetch<import("@/src/types/property").Property[]>(`/properties${query}`);
+}
+
+export async function fetchPropertyById(
+  propertyId: string
+): Promise<ApiResponse<import("@/src/types/property").Property>> {
+  return apiFetch<import("@/src/types/property").Property>(`/properties/${propertyId}`);
+}
+
+export async function createProperty(
+  payload: import("@/src/types/property").PropertyCreateInput
+): Promise<ApiResponse<import("@/src/types/property").Property>> {
+  return apiFetch<import("@/src/types/property").Property>("/properties", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateProperty(
+  propertyId: string,
+  payload: import("@/src/types/property").PropertyUpdateInput
+): Promise<ApiResponse<import("@/src/types/property").Property>> {
+  return apiFetch<import("@/src/types/property").Property>(`/properties/${propertyId}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function publishProperty(
+  propertyId: string,
+  publicationStatus: import("@/src/types/property").PublicationStatus
+): Promise<ApiResponse<import("@/src/types/property").Property>> {
+  return apiFetch<import("@/src/types/property").Property>(`/properties/${propertyId}/publish`, {
+    method: "POST",
+    body: JSON.stringify({ publication_status: publicationStatus }),
+  });
+}
+
+export async function archiveProperty(
+  propertyId: string
+): Promise<
+  ApiResponse<{
+    id: string;
+    is_active: boolean;
+    publication_status: string;
+    archived_at: string;
+    message: string;
+  }>
+> {
+  return apiFetch(`/properties/${propertyId}/archive`, {
+    method: "POST",
+  });
 }
 
 export async function fetchPropertyPrivateDetails(propertyId: string): Promise<ApiResponse<any>> {
@@ -258,5 +362,243 @@ export async function fetchAdminReservations(
 ): Promise<ApiResponse<any[]>> {
   const query = propertyId ? `?property_id=${encodeURIComponent(propertyId)}` : "";
   return apiFetch<any[]>(`/admin/reservations${query}`);
+}
+
+// -------------------------------------------------------------------------
+// Phase 6 Inventory & Availability Engine API Client
+// -------------------------------------------------------------------------
+
+export async function fetchRoomTypes(
+  propertyId: string
+): Promise<ApiResponse<import("@/src/types/inventory").RoomType[]>> {
+  return apiFetch<import("@/src/types/inventory").RoomType[]>(
+    `/inventory/room-types?property_id=${encodeURIComponent(propertyId)}`
+  );
+}
+
+export async function createRoomType(
+  payload: Partial<import("@/src/types/inventory").RoomType>
+): Promise<ApiResponse<import("@/src/types/inventory").RoomType>> {
+  return apiFetch<import("@/src/types/inventory").RoomType>("/inventory/room-types", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateRoomType(
+  id: string,
+  payload: Partial<import("@/src/types/inventory").RoomType>
+): Promise<ApiResponse<import("@/src/types/inventory").RoomType>> {
+  return apiFetch<import("@/src/types/inventory").RoomType>(`/inventory/room-types/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteRoomType(id: string): Promise<ApiResponse<any>> {
+  return apiFetch(`/inventory/room-types/${id}`, {
+    method: "DELETE",
+  });
+}
+
+export async function fetchRooms(filters: {
+  property_id: string;
+  room_type_id?: string;
+  operational_status?: string;
+  q?: string;
+}): Promise<ApiResponse<import("@/src/types/inventory").Room[]>> {
+  const params = new URLSearchParams();
+  params.set("property_id", filters.property_id);
+  if (filters.room_type_id && filters.room_type_id !== "all") {
+    params.set("room_type_id", filters.room_type_id);
+  }
+  if (filters.operational_status && filters.operational_status !== "all") {
+    params.set("operational_status", filters.operational_status);
+  }
+  if (filters.q) {
+    params.set("q", filters.q);
+  }
+  return apiFetch<import("@/src/types/inventory").Room[]>(`/inventory/rooms?${params.toString()}`);
+}
+
+export async function createRoom(payload: {
+  property_id: string;
+  room_type_id: string;
+  floor_id?: string;
+  floor_name?: string;
+  room_number: string;
+  operational_status?: string;
+  cleanliness_status?: string;
+  keycard_code?: string;
+  notes?: string;
+  initial_bed_count?: number;
+  initial_bed_prefix?: string;
+}): Promise<ApiResponse<import("@/src/types/inventory").Room>> {
+  return apiFetch<import("@/src/types/inventory").Room>("/inventory/rooms", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchRoomById(
+  id: string
+): Promise<ApiResponse<import("@/src/types/inventory").Room>> {
+  return apiFetch<import("@/src/types/inventory").Room>(`/inventory/rooms/${id}`);
+}
+
+export async function updateRoom(
+  id: string,
+  payload: Partial<import("@/src/types/inventory").Room>
+): Promise<ApiResponse<import("@/src/types/inventory").Room>> {
+  return apiFetch<import("@/src/types/inventory").Room>(`/inventory/rooms/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateRoomStatus(
+  id: string,
+  operationalStatus?: string,
+  cleanlinessStatus?: string
+): Promise<ApiResponse<import("@/src/types/inventory").Room>> {
+  return apiFetch<import("@/src/types/inventory").Room>(`/inventory/rooms/${id}/status`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      operational_status: operationalStatus,
+      cleanliness_status: cleanlinessStatus,
+    }),
+  });
+}
+
+export async function blockRoomForMaintenance(
+  id: string,
+  payload: { check_in_date: string; check_out_date: string; notes: string }
+): Promise<ApiResponse<any>> {
+  return apiFetch(`/inventory/rooms/${id}/block`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteRoom(id: string): Promise<ApiResponse<any>> {
+  return apiFetch(`/inventory/rooms/${id}`, {
+    method: "DELETE",
+  });
+}
+
+export async function fetchBeds(
+  propertyId: string,
+  roomId?: string
+): Promise<ApiResponse<import("@/src/types/inventory").Bed[]>> {
+  const query = roomId
+    ? `?property_id=${encodeURIComponent(propertyId)}&room_id=${encodeURIComponent(roomId)}`
+    : `?property_id=${encodeURIComponent(propertyId)}`;
+  return apiFetch<import("@/src/types/inventory").Bed[]>(`/inventory/beds${query}`);
+}
+
+export async function createBed(payload: {
+  property_id: string;
+  room_id: string;
+  bed_label: string;
+  bed_type?: string;
+  locker_number?: string;
+  operational_status?: string;
+}): Promise<ApiResponse<import("@/src/types/inventory").Bed>> {
+  return apiFetch<import("@/src/types/inventory").Bed>("/inventory/beds", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateBed(
+  id: string,
+  payload: Partial<import("@/src/types/inventory").Bed>
+): Promise<ApiResponse<import("@/src/types/inventory").Bed>> {
+  return apiFetch<import("@/src/types/inventory").Bed>(`/inventory/beds/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateBedStatus(
+  id: string,
+  operationalStatus: string
+): Promise<ApiResponse<import("@/src/types/inventory").Bed>> {
+  return apiFetch<import("@/src/types/inventory").Bed>(`/inventory/beds/${id}/status`, {
+    method: "PATCH",
+    body: JSON.stringify({ operational_status: operationalStatus }),
+  });
+}
+
+export async function blockBedForMaintenance(
+  id: string,
+  payload: { check_in_date: string; check_out_date: string; notes: string }
+): Promise<ApiResponse<any>> {
+  return apiFetch(`/inventory/beds/${id}/block`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteBed(id: string): Promise<ApiResponse<any>> {
+  return apiFetch(`/inventory/beds/${id}`, {
+    method: "DELETE",
+  });
+}
+
+export async function fetchInventoryAvailability(
+  propertyId: string,
+  checkInDate: string,
+  checkOutDate: string,
+  roomTypeId?: string
+): Promise<ApiResponse<import("@/src/types/inventory").PropertyAvailabilityResponse>> {
+  const params = new URLSearchParams({
+    property_id: propertyId,
+    check_in_date: checkInDate,
+    check_out_date: checkOutDate,
+  });
+  if (roomTypeId && roomTypeId !== "all") {
+    params.set("room_type_id", roomTypeId);
+  }
+  return apiFetch<import("@/src/types/inventory").PropertyAvailabilityResponse>(
+    `/inventory/availability?${params.toString()}`
+  );
+}
+
+export async function fetchInventorySummary(
+  propertyId: string
+): Promise<ApiResponse<import("@/src/types/inventory").InventorySummaryResponse>> {
+  return apiFetch<import("@/src/types/inventory").InventorySummaryResponse>(
+    `/inventory/summary?property_id=${encodeURIComponent(propertyId)}`
+  );
+}
+
+export async function fetchInventoryCalendar(
+  propertyId: string,
+  startDate: string,
+  endDate: string
+): Promise<ApiResponse<import("@/src/types/inventory").CalendarMatrixResponse>> {
+  const params = new URLSearchParams({
+    property_id: propertyId,
+    start_date: startDate,
+    end_date: endDate,
+  });
+  return apiFetch<import("@/src/types/inventory").CalendarMatrixResponse>(
+    `/inventory/calendar?${params.toString()}`
+  );
+}
+
+export async function fetchPublicAvailability(
+  slug: string,
+  checkInDate: string,
+  checkOutDate: string
+): Promise<ApiResponse<any>> {
+  const params = new URLSearchParams({
+    check_in_date: checkInDate,
+    check_out_date: checkOutDate,
+  });
+  return apiFetch<any>(
+    `/properties/public/${encodeURIComponent(slug)}/availability?${params.toString()}`
+  );
 }
 

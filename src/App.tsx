@@ -13,6 +13,8 @@ import { HostelWorkflowCard } from "@/src/components/shared/HostelWorkflowCard";
 import { HotelWorkflowCard } from "@/src/components/shared/HotelWorkflowCard";
 import { CustomerPortalCard } from "@/src/components/shared/CustomerPortalCard";
 import { AdminUserManagementCard } from "@/src/components/shared/AdminUserManagementCard";
+import { AdminPropertiesPage } from "@/src/pages/admin/AdminPropertiesPage";
+import { AdminInventoryPage } from "@/src/pages/admin/AdminInventoryPage";
 import { fetchHealthProbe } from "@/src/services/api-client";
 import { HealthResponse } from "@/src/types/api";
 
@@ -118,6 +120,10 @@ function MainAppShell() {
           {activeTab === "overview" && (
             <DashboardOverview healthData={healthData} onNavigateTab={setActiveTab} />
           )}
+
+          {activeTab === "properties" && <AdminPropertiesPage />}
+
+          {activeTab === "rooms-beds" && <AdminInventoryPage />}
 
           {activeTab === "health" && (
             <HealthMonitorCard

@@ -5,6 +5,7 @@
 export interface ApiResponse<T> {
   success: boolean;
   data: T;
+  error?: ErrorDetail;
   message?: string;
   correlation_id?: string;
   timestamp: string;

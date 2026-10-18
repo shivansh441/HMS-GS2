@@ -118,5 +118,25 @@ class PropertyAdminRead(PropertyBase):
     total_rooms: int
     total_beds: int
     is_active: bool
+    created_by_user_id: str | None = None
+    archived_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class PropertyPublishRequest(BaseModel):
+    """Request to change publication status with validation."""
+
+    publication_status: PublicationStatus
+    reason: str | None = None
+
+
+class PropertyArchiveResponse(BaseModel):
+    """Confirmation of property archival."""
+
+    id: str
+    is_active: bool
+    publication_status: PublicationStatus
+    archived_at: datetime
+    message: str
+

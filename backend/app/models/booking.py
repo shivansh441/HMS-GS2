@@ -276,6 +276,8 @@ class InventoryAllocation(Base, UUIDMixin, TimestampMixin, SoftDeleteMixin):
         default=InventoryAllocationType.RESERVATION,
         nullable=False,
     )
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by_user_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
 
     # Relationships
     booking_item: Mapped[BookingItem | None] = relationship("BookingItem", back_populates="allocations")

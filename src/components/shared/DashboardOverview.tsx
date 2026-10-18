@@ -15,7 +15,7 @@ import { HealthResponse } from "@/src/types/api";
 
 interface DashboardOverviewProps {
   healthData: HealthResponse | null;
-  onNavigateTab: (tab: "health" | "architecture" | "hostel-workflow" | "hotel-workflow" | "security" | "database") => void;
+  onNavigateTab: (tab: import("@/src/components/layout/Sidebar").ActiveTab) => void;
 }
 
 export const DashboardOverview: React.FC<DashboardOverviewProps> = ({

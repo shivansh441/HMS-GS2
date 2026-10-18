@@ -10,12 +10,15 @@ import {
   Users2,
   KeyRound,
   Sparkles,
+  Building2,
 } from "lucide-react";
 import { useProperty } from "@/src/contexts/PropertyContext";
 import { useAuth } from "@/src/contexts/AuthContext";
 
 export type ActiveTab =
   | "overview"
+  | "properties"
+  | "rooms-beds"
   | "health"
   | "architecture"
   | "hostel-workflow"
@@ -67,6 +70,40 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onSelectTab }) => {
             >
               <Layers className="w-4 h-4" />
               <span>Foundation Dashboard</span>
+            </button>
+
+            <button
+              onClick={() => onSelectTab("properties")}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
+                activeTab === "properties"
+                  ? "bg-indigo-600 text-white font-semibold"
+                  : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900"
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <Building2 className="w-4 h-4 text-indigo-400" />
+                <span>Property Registry</span>
+              </div>
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-indigo-300 font-mono">
+                Phase 5
+              </span>
+            </button>
+
+            <button
+              onClick={() => onSelectTab("rooms-beds")}
+              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
+                activeTab === "rooms-beds"
+                  ? "bg-indigo-600 text-white font-semibold"
+                  : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900"
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <Bed className="w-4 h-4 text-amber-400" />
+                <span>Rooms, Beds & Avail</span>
+              </div>
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-amber-300 font-mono">
+                Phase 6
+              </span>
             </button>
 
             <button

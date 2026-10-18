@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import JSON, Boolean, Float, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, String, Text
 from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -91,6 +92,10 @@ class Property(Base, UUIDMixin, TimestampMixin, SoftDeleteMixin):
 
     # Property-specific configuration (hostel bed-level rules vs hotel room rules)
     configuration: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+
+    # Audit & Lifecycle Tracking
+    created_by_user_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Relationships
     user_assignments: Mapped[list[UserPropertyAssignment]] = relationship(
