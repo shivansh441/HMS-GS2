@@ -16,6 +16,16 @@ function hashPassword(password: string): string {
   return `$argon2id$v=19$m=65536,t=3,p=4$${salt}$${derivedKey}`;
 }
 
+const DUMMY_SALT = "a1b2c3d4e5f60718293a4b5c6d7e8f90";
+const DUMMY_HASH = crypto.scryptSync("dummyPassword123!", DUMMY_SALT, 64).toString("hex");
+
+function dummyVerifyPassword(): void {
+  const derivedKey = crypto.scryptSync("invalidPasswordAttempt", DUMMY_SALT, 64).toString("hex");
+  if (derivedKey.length === DUMMY_HASH.length) {
+    crypto.timingSafeEqual(Buffer.from(derivedKey), Buffer.from(DUMMY_HASH));
+  }
+}
+
 function verifyPassword(password: string, storedHash: string): boolean {
   if (!storedHash) return false;
   const parts = storedHash.split("$");
@@ -23,6 +33,7 @@ function verifyPassword(password: string, storedHash: string): boolean {
     const salt = parts[parts.length - 2];
     const originalKey = parts[parts.length - 1];
     const derivedKey = crypto.scryptSync(password, salt, 64).toString("hex");
+    if (derivedKey.length !== originalKey.length) return false;
     return crypto.timingSafeEqual(Buffer.from(derivedKey), Buffer.from(originalKey));
   }
   return false;
@@ -3721,6 +3732,83 @@ async function startServer() {
 
   app.use(express.json());
 
+  // --- Rate Limiting State & Engine ---
+  interface RateLimitRecord {
+    count: number;
+    resetAt: number;
+  }
+  const rateLimitStores = {
+    login: new Map<string, RateLimitRecord>(),
+    forgotPassword: new Map<string, RateLimitRecord>(),
+    register: new Map<string, RateLimitRecord>(),
+    general: new Map<string, RateLimitRecord>(),
+  };
+
+  function checkRateLimit(
+    store: Map<string, RateLimitRecord>,
+    key: string,
+    limit: number,
+    windowMs: number
+  ): { allowed: boolean; remaining: number; resetInSec: number } {
+    const now = Date.now();
+    const record = store.get(key);
+    if (!record || now > record.resetAt) {
+      store.set(key, { count: 1, resetAt: now + windowMs });
+      return { allowed: true, remaining: limit - 1, resetInSec: Math.ceil(windowMs / 1000) };
+    }
+    if (record.count >= limit) {
+      return { allowed: false, remaining: 0, resetInSec: Math.ceil((record.resetAt - now) / 1000) };
+    }
+    record.count += 1;
+    return { allowed: true, remaining: limit - record.count, resetInSec: Math.ceil((record.resetAt - now) / 1000) };
+  }
+
+  function getClientIp(req: express.Request): string {
+    const forwarded = req.headers["x-forwarded-for"];
+    if (typeof forwarded === "string") {
+      return forwarded.split(",")[0].trim();
+    }
+    return req.socket.remoteAddress || "127.0.0.1";
+  }
+
+  // --- Structured Security Event Logger ---
+  function logSecurityEvent(
+    eventType: string,
+    details: Record<string, unknown>,
+    req?: express.Request
+  ): void {
+    const correlationId = (req?.headers["x-request-id"] as string) || crypto.randomUUID();
+    const ip = req ? getClientIp(req) : "system";
+    const logEntry: Record<string, unknown> = {
+      timestamp: new Date().toISOString(),
+      event_type: eventType,
+      correlation_id: correlationId,
+      client_ip: ip,
+      ...details,
+    };
+    delete logEntry.password;
+    delete logEntry.current_password;
+    delete logEntry.new_password;
+    delete logEntry.token;
+    delete logEntry.refresh_token;
+    delete logEntry.access_token;
+    delete logEntry.secret;
+    console.warn(`[SECURITY_AUDIT] ${JSON.stringify(logEntry)}`);
+  }
+
+  // Security Headers & Hardening Middleware
+  app.use((req, res, next) => {
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("X-Frame-Options", "SAMEORIGIN");
+    res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+    res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+    if (req.path.startsWith("/api/")) {
+      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+      res.setHeader("Pragma", "no-cache");
+    }
+    next();
+  });
+
   // CORS headers
   app.use((req, res, next) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
@@ -3843,12 +3931,34 @@ async function startServer() {
   // 1. Customer Registration: POST /api/v1/auth/register
   app.post("/api/v1/auth/register", (req, res) => {
     const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+    const rateCheck = checkRateLimit(rateLimitStores.register, getClientIp(req), 30, 60000);
+    if (!rateCheck.allowed) {
+      res.setHeader("Retry-After", String(rateCheck.resetInSec));
+      res.status(429).json({
+        success: false,
+        error: { code: "RATE_LIMIT_EXCEEDED", message: "Too many registration attempts. Please try again later." },
+        correlation_id: correlationId,
+      });
+      return;
+    }
+
     const { email, password, first_name, last_name } = req.body || {};
 
     if (!email || !password || !first_name || !last_name) {
       res.status(422).json({
         success: false,
         error: { code: "VALIDATION_ERROR", message: "email, password, first_name, and last_name are required." },
+        correlation_id: correlationId,
+      });
+      return;
+    }
+
+    const normalizedEmail = String(email).trim().toLowerCase();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(normalizedEmail)) {
+      res.status(422).json({
+        success: false,
+        error: { code: "VALIDATION_ERROR", message: "Invalid email address format." },
         correlation_id: correlationId,
       });
       return;
@@ -3863,7 +3973,7 @@ async function startServer() {
       return;
     }
 
-    if (usersStore.has(email)) {
+    if (usersStore.has(normalizedEmail)) {
       res.status(409).json({
         success: false,
         error: { code: "RESOURCE_CONFLICT", message: `Email address '${email}' is already registered.` },
@@ -3874,10 +3984,10 @@ async function startServer() {
 
     const newUser: UserRecord = {
       id: `usr-cust-${crypto.randomUUID().substring(0, 8)}`,
-      email,
+      email: normalizedEmail,
       hashed_password: hashPassword(password),
-      first_name,
-      last_name,
+      first_name: String(first_name).trim(),
+      last_name: String(last_name).trim(),
       global_role: "guest",
       is_superuser: false,
       is_active: true,
@@ -3885,7 +3995,8 @@ async function startServer() {
       created_at: new Date().toISOString(),
     };
 
-    usersStore.set(email, newUser);
+    usersStore.set(normalizedEmail, newUser);
+    logSecurityEvent("USER_REGISTERED", { user_id: newUser.id, email: normalizedEmail }, req);
 
     res.status(201).json({
       success: true,
@@ -3907,6 +4018,18 @@ async function startServer() {
   // 2. Login: POST /api/v1/auth/login
   app.post("/api/v1/auth/login", (req, res) => {
     const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+    const rateCheck = checkRateLimit(rateLimitStores.login, getClientIp(req), 40, 60000);
+    if (!rateCheck.allowed) {
+      res.setHeader("Retry-After", String(rateCheck.resetInSec));
+      logSecurityEvent("RATE_LIMIT_EXCEEDED", { endpoint: "/api/v1/auth/login" }, req);
+      res.status(429).json({
+        success: false,
+        error: { code: "RATE_LIMIT_EXCEEDED", message: "Too many login attempts. Please try again in 1 minute." },
+        correlation_id: correlationId,
+      });
+      return;
+    }
+
     const { email, password, property_id } = req.body || {};
 
     if (!email || !password) {
@@ -3918,8 +4041,21 @@ async function startServer() {
       return;
     }
 
-    const user = usersStore.get(email);
-    if (!user || !verifyPassword(password, user.hashed_password)) {
+    const normalizedEmail = String(email).trim().toLowerCase();
+    const user = usersStore.get(normalizedEmail);
+    if (!user) {
+      dummyVerifyPassword();
+      logSecurityEvent("AUTH_FAILURE", { reason: "USER_NOT_FOUND", email: normalizedEmail }, req);
+      res.status(401).json({
+        success: false,
+        error: { code: "AUTHENTICATION_ERROR", message: "Incorrect email or password." },
+        correlation_id: correlationId,
+      });
+      return;
+    }
+
+    if (!verifyPassword(password, user.hashed_password)) {
+      logSecurityEvent("AUTH_FAILURE", { reason: "INVALID_CREDENTIALS", user_id: user.id }, req);
       res.status(401).json({
         success: false,
         error: { code: "AUTHENTICATION_ERROR", message: "Incorrect email or password." },
@@ -3929,6 +4065,7 @@ async function startServer() {
     }
 
     if (!user.is_active) {
+      logSecurityEvent("AUTH_FAILURE", { reason: "ACCOUNT_DEACTIVATED", user_id: user.id }, req);
       res.status(401).json({
         success: false,
         error: { code: "AUTHENTICATION_ERROR", message: "User account is deactivated." },
@@ -4264,9 +4401,21 @@ async function startServer() {
   // 7. Forgot Password: POST /api/v1/auth/forgot-password
   app.post("/api/v1/auth/forgot-password", (req, res) => {
     const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
-    const { email } = req.body || {};
+    const rateCheck = checkRateLimit(rateLimitStores.forgotPassword, getClientIp(req), 20, 60000);
+    if (!rateCheck.allowed) {
+      res.setHeader("Retry-After", String(rateCheck.resetInSec));
+      logSecurityEvent("RATE_LIMIT_EXCEEDED", { endpoint: "/api/v1/auth/forgot-password" }, req);
+      res.status(429).json({
+        success: false,
+        error: { code: "RATE_LIMIT_EXCEEDED", message: "Too many password reset requests. Please try again later." },
+        correlation_id: correlationId,
+      });
+      return;
+    }
 
-    const user = email ? usersStore.get(email) : null;
+    const { email } = req.body || {};
+    const normalizedEmail = String(email || "").trim().toLowerCase();
+    const user = normalizedEmail ? usersStore.get(normalizedEmail) : null;
     let simulatedToken: string | undefined;
 
     if (user && user.is_active) {
@@ -4280,6 +4429,7 @@ async function startServer() {
         is_used: false,
       });
       simulatedToken = rawToken;
+      logSecurityEvent("PASSWORD_RESET_REQUESTED", { user_id: user.id, email: normalizedEmail }, req);
     }
 
     res.json({
@@ -4446,6 +4596,15 @@ async function startServer() {
         return;
       }
 
+      if (user.id === admin.id && !is_active) {
+        res.status(422).json({
+          success: false,
+          error: { code: "SELF_DEACTIVATION_FORBIDDEN", message: "Administrators cannot deactivate their own active account." },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
       user.is_active = Boolean(is_active);
 
       if (!user.is_active) {
@@ -4457,6 +4616,8 @@ async function startServer() {
           }
         }
       }
+
+      logSecurityEvent("USER_STATUS_CHANGE", { target_user_id: user.id, is_active: user.is_active, admin_id: admin.id }, req);
 
       res.json({
         success: true,
@@ -5855,6 +6016,27 @@ async function startServer() {
       }
 
       const { operational_status, cleanliness_status } = req.body || {};
+      const validOpStatuses = ["available", "occupied", "maintenance", "out_of_order"];
+      const validCleanStatuses = ["clean", "dirty", "inspected", "do_not_disturb"];
+
+      if (operational_status && !validOpStatuses.includes(operational_status)) {
+        res.status(422).json({
+          success: false,
+          error: { code: "VALIDATION_ERROR", message: `Invalid operational_status '${operational_status}'. Must be one of: ${validOpStatuses.join(", ")}` },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      if (cleanliness_status && !validCleanStatuses.includes(cleanliness_status)) {
+        res.status(422).json({
+          success: false,
+          error: { code: "VALIDATION_ERROR", message: `Invalid cleanliness_status '${cleanliness_status}'. Must be one of: ${validCleanStatuses.join(", ")}` },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
       if (operational_status) room.operational_status = operational_status;
       if (cleanliness_status) room.cleanliness_status = cleanliness_status;
       room.updated_at = new Date().toISOString();
@@ -6240,6 +6422,15 @@ async function startServer() {
       }
 
       const { operational_status } = req.body || {};
+      const validBedStatuses = ["available", "occupied", "maintenance", "out_of_order"];
+      if (operational_status && !validBedStatuses.includes(operational_status)) {
+        res.status(422).json({
+          success: false,
+          error: { code: "VALIDATION_ERROR", message: `Invalid operational_status '${operational_status}'. Must be one of: ${validBedStatuses.join(", ")}` },
+          correlation_id: correlationId,
+        });
+        return;
+      }
       if (operational_status) bed.operational_status = operational_status;
       bed.updated_at = new Date().toISOString();
 
@@ -7639,7 +7830,7 @@ async function startServer() {
       // Check Phase 6 Inventory Conflict using Half-Open Interval [check_in, check_out)
       const conflicts = Array.from(allocationsStore.values()).filter(
         (a) =>
-          (a.bed_id === bed_id || a.room_id === room_id) &&
+          (a.bed_id === bed_id || (a.room_id === room_id && !a.bed_id)) &&
           a.is_active &&
           a.check_in_date < check_out_date &&
           a.check_out_date > check_in_date
@@ -7811,7 +8002,7 @@ async function startServer() {
       // Check conflict
       const conflicts = Array.from(allocationsStore.values()).filter(
         (a) =>
-          (a.bed_id === bed_id || a.room_id === room_id) &&
+          (a.bed_id === bed_id || (a.room_id === room_id && !a.bed_id)) &&
           a.is_active &&
           a.check_in_date < check_out_date &&
           a.check_out_date > check_in_date
@@ -11390,14 +11581,14 @@ async function startServer() {
       const { reason } = req.body || {};
       const now = new Date().toISOString();
 
-      // If invoice had payments allocated, reverse allocations back to unallocated
+      // If invoice had payments allocated, reverse all matching allocations back to unallocated
       if (invoice.amount_paid > 0) {
         for (const payment of paymentsStore.values()) {
-          const allocIdx = payment.allocations.findIndex((a) => a.invoice_id === invoice.id);
-          if (allocIdx >= 0) {
-            const alloc = payment.allocations[allocIdx];
-            payment.unallocated_amount = round2(payment.unallocated_amount + alloc.amount);
-            payment.allocations.splice(allocIdx, 1);
+          const matched = payment.allocations.filter((a) => a.invoice_id === invoice.id);
+          if (matched.length > 0) {
+            const restoredTotal = matched.reduce((sum, a) => sum + a.amount, 0);
+            payment.unallocated_amount = round2(payment.unallocated_amount + restoredTotal);
+            payment.allocations = payment.allocations.filter((a) => a.invoice_id !== invoice.id);
             payment.updated_at = now;
             paymentsStore.set(payment.id, payment);
           }
@@ -11705,6 +11896,10 @@ async function startServer() {
 
       const now = new Date().toISOString();
 
+      // Atomic pre-validation phase: check every item before modifying any state
+      const validatedBatch: Array<{ inv: InvoiceRecord; allocAmt: number }> = [];
+      let runningUnallocated = payment.unallocated_amount;
+
       for (const item of allocations) {
         const allocAmt = round2(Number(item.amount));
         if (allocAmt <= 0) continue;
@@ -11743,7 +11938,24 @@ async function startServer() {
           return;
         }
 
-        // Apply allocation
+        if (allocAmt > runningUnallocated) {
+          res.status(422).json({
+            success: false,
+            error: {
+              code: "EXCESSIVE_ALLOCATION",
+              message: `Total allocations exceed available unallocated payment balance.`,
+            },
+            correlation_id: correlationId,
+          });
+          return;
+        }
+
+        runningUnallocated = round2(runningUnallocated - allocAmt);
+        validatedBatch.push({ inv, allocAmt });
+      }
+
+      // Execution phase: apply all allocations atomically
+      for (const { inv, allocAmt } of validatedBatch) {
         payment.allocations.push({
           id: `alloc-${crypto.randomUUID().substring(0, 8)}`,
           invoice_id: inv.id,
@@ -11866,8 +12078,19 @@ async function startServer() {
 
       if (invoice_id) {
         targetInvoice = invoicesStore.get(invoice_id);
-        if (targetInvoice) {
-          // Adjust invoice paid amount and outstanding balance
+        if (!targetInvoice || targetInvoice.property_id !== payment.property_id) {
+          res.status(422).json({
+            success: false,
+            error: {
+              code: "CROSS_PROPERTY_INVOICE",
+              message: `Invoice '${invoice_id}' not found or does not belong to payment property '${payment.property_id}'.`,
+            },
+            correlation_id: correlationId,
+          });
+          return;
+        }
+
+        // Adjust invoice paid amount and outstanding balance
           targetInvoice.amount_paid = round2(Math.max(0, targetInvoice.amount_paid - refundAmt));
           targetInvoice.outstanding_balance = round2(targetInvoice.total_amount - targetInvoice.amount_paid);
           targetInvoice.status = targetInvoice.outstanding_balance > 0 ? "partially_paid" : "paid";
@@ -13195,8 +13418,27 @@ async function startServer() {
       let invoiceId: string | undefined;
 
       // If billing to room folio, issue folio invoice in Phase 9 finance
-      if (bill_to_room && hotel_stay_id) {
+      if (bill_to_room) {
+        if (!hotel_stay_id) {
+          res.status(422).json({
+            success: false,
+            error: { code: "VALIDATION_ERROR", message: "hotel_stay_id is required when bill_to_room is enabled." },
+            correlation_id: correlationId,
+          });
+          return;
+        }
         const stay = hotelStaysStore.get(hotel_stay_id);
+        if (!stay || stay.property_id !== property_id || stay.status !== "checked_in") {
+          res.status(422).json({
+            success: false,
+            error: {
+              code: "INVALID_STAY_STATE",
+              message: `Cannot bill to room: hotel stay '${hotel_stay_id}' not found or not currently checked-in at property '${property_id}'.`,
+            },
+            correlation_id: correlationId,
+          });
+          return;
+        }
         invoiceId = `inv-${crypto.randomUUID().substring(0, 8)}`;
         const invoiceNumber = `INV-2026-${propCode}-${Math.floor(1000 + Math.random() * 9000)}`;
 
@@ -14003,9 +14245,29 @@ async function startServer() {
         return;
       }
 
+      if (!user.is_superuser && user.global_role !== "super_admin") {
+        if (user.global_role === "guest" || !user.assigned_property_ids.includes(property_id)) {
+          res.status(403).json({
+            success: false,
+            error: { code: "PROPERTY_ACCESS_VIOLATION", message: `Access denied to property '${property_id}'.` },
+            correlation_id: correlationId,
+          });
+          return;
+        }
+      }
+
       const staff = staffMembersStore.get(staff_id);
-      const staffName = staff ? `${staff.first_name} ${staff.last_name}` : "Assigned Staff";
-      const department = staff ? staff.department : "general";
+      if (!staff || staff.property_id !== property_id) {
+        res.status(422).json({
+          success: false,
+          error: { code: "STAFF_NOT_FOUND", message: `Staff '${staff_id}' not found in property '${property_id}'.` },
+          correlation_id: correlationId,
+        });
+        return;
+      }
+
+      const staffName = `${staff.first_name} ${staff.last_name}`;
+      const department = staff.department;
 
       const newShift: StaffShiftRecord = {
         id: `shf-${crypto.randomUUID().substring(0, 8)}`,
@@ -14058,6 +14320,17 @@ async function startServer() {
           correlation_id: correlationId,
         });
         return;
+      }
+
+      if (!user.is_superuser && user.global_role !== "super_admin") {
+        if (user.global_role === "guest" || !user.assigned_property_ids.includes(shift.property_id)) {
+          res.status(403).json({
+            success: false,
+            error: { code: "PROPERTY_ACCESS_VIOLATION", message: `Access denied to property '${shift.property_id}'.` },
+            correlation_id: correlationId,
+          });
+          return;
+        }
       }
 
       const updates = req.body;
@@ -14151,11 +14424,22 @@ async function startServer() {
         return;
       }
 
+      if (!user.is_superuser && user.global_role !== "super_admin") {
+        if (user.global_role === "guest" || !user.assigned_property_ids.includes(property_id)) {
+          res.status(403).json({
+            success: false,
+            error: { code: "PROPERTY_ACCESS_VIOLATION", message: `Access denied to property '${property_id}'.` },
+            correlation_id: correlationId,
+          });
+          return;
+        }
+      }
+
       const staff = staffMembersStore.get(staff_id);
-      if (!staff) {
-        res.status(404).json({
+      if (!staff || staff.property_id !== property_id) {
+        res.status(422).json({
           success: false,
-          error: { code: "STAFF_NOT_FOUND", message: `Staff member '${staff_id}' not found.` },
+          error: { code: "STAFF_NOT_FOUND", message: `Staff member '${staff_id}' not found in property '${property_id}'.` },
           correlation_id: correlationId,
         });
         return;
@@ -14244,6 +14528,17 @@ async function startServer() {
           correlation_id: correlationId,
         });
         return;
+      }
+
+      if (!user.is_superuser && user.global_role !== "super_admin") {
+        if (user.global_role === "guest" || !user.assigned_property_ids.includes(att.property_id)) {
+          res.status(403).json({
+            success: false,
+            error: { code: "PROPERTY_ACCESS_VIOLATION", message: `Access denied to property '${att.property_id}'.` },
+            correlation_id: correlationId,
+          });
+          return;
+        }
       }
 
       const nowIso = req.body.clock_out_time || new Date().toISOString();
