@@ -289,7 +289,7 @@ describe("Phase 10: Mess & Restaurant Management Domain Suite", () => {
       setTokens(hostelManagerToken);
       // hstlr-edi-005 (Chloe) on a fresh date has no meal plan
       const unplanHostellerId = "hstlr-edi-005";
-      const freshDate = `2026-11-${String(Math.floor(10 + Math.random() * 18)).padStart(2, "0")}`;
+      const freshDate = new Date(Date.now() + (Math.floor(Math.random() * 20000) + 1000) * 86400000).toISOString().split("T")[0];
       const attendRes = await recordMealAttendance({
         property_id: hostelPropertyId,
         hosteller_id: unplanHostellerId,

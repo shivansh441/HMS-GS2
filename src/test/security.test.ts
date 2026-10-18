@@ -200,8 +200,12 @@ describe("Phase 13 Comprehensive Security & Automated Testing Verification", () 
       const adminLogin = await loginUser("director@grandstay.com", "Admin2026!Secure");
       setTokens(adminLogin.data.access_token);
 
-      const checkIn = "2026-11-01";
-      const checkOut = "2026-11-05";
+      const baseMs = Date.now() + (Math.floor(Math.random() * 20000) + 500) * 86400000;
+      const checkIn = new Date(baseMs).toISOString().split("T")[0];
+      const checkOut = new Date(baseMs + 4 * 86400000).toISOString().split("T")[0];
+      const overlapIn = new Date(baseMs + 2 * 86400000).toISOString().split("T")[0];
+      const overlapOut = new Date(baseMs + 6 * 86400000).toISOString().split("T")[0];
+      const adjacentOut = new Date(baseMs + 7 * 86400000).toISOString().split("T")[0];
 
       // 1. Create first stay for bed-edi-101-a
       const firstStay = await createHostelStay({
@@ -214,15 +218,15 @@ describe("Phase 13 Comprehensive Security & Automated Testing Verification", () 
       });
       expect(firstStay.success).toBe(true);
 
-      // 2. Attempt overlapping stay on same bed (2026-11-03 to 2026-11-07) -> MUST FAIL (409)
+      // 2. Attempt overlapping stay on same bed -> MUST FAIL (409)
       await expect(
         createHostelStay({
           property_id: "prop-hostel-001",
           hosteller_id: "hst-002",
           room_id: "rm-edi-101",
           bed_id: "bed-edi-101-a",
-          check_in_date: "2026-11-03",
-          check_out_date: "2026-11-07",
+          check_in_date: overlapIn,
+          check_out_date: overlapOut,
         })
       ).rejects.toThrow();
 
@@ -232,8 +236,8 @@ describe("Phase 13 Comprehensive Security & Automated Testing Verification", () 
         hosteller_id: "hst-002",
         room_id: "rm-edi-101",
         bed_id: "bed-edi-101-a",
-        check_in_date: "2026-11-05",
-        check_out_date: "2026-11-08",
+        check_in_date: checkOut,
+        check_out_date: adjacentOut,
       });
       expect(adjacentStay.success).toBe(true);
     });
@@ -242,8 +246,11 @@ describe("Phase 13 Comprehensive Security & Automated Testing Verification", () 
       const adminLogin = await loginUser("director@grandstay.com", "Admin2026!Secure");
       setTokens(adminLogin.data.access_token);
 
-      const checkIn = "2026-12-10";
-      const checkOut = "2026-12-15";
+      const baseHotelMs = Date.now() + (Math.floor(Math.random() * 20000) + 25000) * 86400000;
+      const checkIn = new Date(baseHotelMs).toISOString().split("T")[0];
+      const checkOut = new Date(baseHotelMs + 5 * 86400000).toISOString().split("T")[0];
+      const overlapIn = new Date(baseHotelMs + 2 * 86400000).toISOString().split("T")[0];
+      const overlapOut = new Date(baseHotelMs + 7 * 86400000).toISOString().split("T")[0];
 
       // 1. Create hotel stay assigning Room 201
       const firstHotelStay = await createHotelStay({
@@ -263,8 +270,8 @@ describe("Phase 13 Comprehensive Security & Automated Testing Verification", () 
           guest_id: "gst-002",
           room_type_id: "rt-htl-dlx",
           assigned_room_id: "rm-lon-201",
-          check_in_date: "2026-12-12",
-          check_out_date: "2026-12-18",
+          check_in_date: overlapIn,
+          check_out_date: overlapOut,
         })
       ).rejects.toThrow();
     });

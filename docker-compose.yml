@@ -1,4 +1,4 @@
-# Docker Compose for GrandStay Hybrid Hostel-cum-Hotel Management System (Local Development)
+# Docker Compose for GrandStay Hybrid Hostel-cum-Hotel Management System (Development & Self-Hosted)
 version: "3.9"
 
 services:
@@ -7,15 +7,15 @@ services:
     container_name: grandstay_postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-hostel_admin}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-HostelDev_2026_Local!}
-      POSTGRES_DB: ${POSTGRES_DB:-hostel_management}
+      POSTGRES_USER: ${POSTGRES_USER:-grandstay_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-GrandStay_2026_SecureDev!}
+      POSTGRES_DB: ${POSTGRES_DB:-grandstay_hms}
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-hostel_admin} -d $${POSTGRES_DB:-hostel_management}"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-grandstay_admin} -d $${POSTGRES_DB:-grandstay_hms}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -23,53 +23,31 @@ services:
     networks:
       - grandstay_network
 
-  backend:
+  app:
     build:
-      context: ./backend
+      context: .
       dockerfile: Dockerfile
-    container_name: grandstay_backend
+    container_name: grandstay_app
     restart: unless-stopped
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
-    volumes:
-      - ./backend:/app
     environment:
-      ENVIRONMENT: development
-      DEBUG: "true"
-      PROJECT_NAME: "Hostel-Cum-Hotel Management System"
-      API_V1_STR: "/api/v1"
-      DATABASE_URL: "postgresql+psycopg://${POSTGRES_USER:-hostel_admin}:${POSTGRES_PASSWORD:-HostelDev_2026_Local%21}@db:5432/${POSTGRES_DB:-hostel_management}"
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: 3000
+      HOST: 0.0.0.0
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-grandstay_admin}:${POSTGRES_PASSWORD:-GrandStay_2026_SecureDev!}@db:5432/${POSTGRES_DB:-grandstay_hms}"
       SECRET_KEY: ${SECRET_KEY:-8bfaaccd12c436ab89ae60ddfd8a5ab02267fc4b5f45f0616fe678967c909174}
-      ALGORITHM: "HS256"
-      BACKEND_CORS_ORIGINS: '["http://localhost:5173","http://localhost:3000"]'
+      VITE_API_BASE_URL: "/api/v1"
+      VITE_APP_NAME: "GrandStay Hybrid HMS"
     ports:
-      - "8000:8000"
+      - "3000:3000"
     depends_on:
       db:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/healthz"]
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3000/api/v1/health"]
       interval: 15s
       timeout: 5s
       retries: 3
-    networks:
-      - grandstay_network
-
-  frontend:
-    image: node:22-alpine
-    container_name: grandstay_frontend
-    restart: unless-stopped
-    working_dir: /app
-    volumes:
-      - ./:/app
-      - /app/node_modules
-    environment:
-      VITE_API_BASE_URL: "http://localhost:8000/api/v1"
-    ports:
-      - "3000:3000"
-    command: ["npm", "run", "dev"]
-    depends_on:
-      backend:
-        condition: service_started
+      start_period: 20s
     networks:
       - grandstay_network
 

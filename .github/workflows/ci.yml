@@ -1,4 +1,4 @@
-name: GrandStay HMS CI Pipeline
+name: GrandStay HMS Continuous Integration
 
 on:
   push:
@@ -11,44 +11,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  backend-quality-and-tests:
-    name: Backend Lint, Typing & Pytest
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ./backend
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: "pip"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Run Ruff Lint Check
-        run: ruff check app tests
-
-      - name: Run Ruff Format Check
-        run: ruff format --check app tests
-
-      - name: Run Mypy Type Checking
-        run: PYTHONPATH=. mypy --config-file pyproject.toml app
-
-      - name: Run Pytest Test Suite
-        env:
-          ENVIRONMENT: test
-          SECRET_KEY: test_secret_key_min_32_characters_for_ci
-        run: pytest -v
-
-  frontend-quality-and-build:
-    name: Frontend Lint, Typecheck & Build
+  quality-lint-and-typecheck:
+    name: Code Quality & Strict Typecheck
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -61,10 +25,77 @@ jobs:
           cache: "npm"
 
       - name: Install dependencies
-        run: npm ci || npm install
+        run: npm ci
 
       - name: Run TypeScript Strict Check
-        run: npx tsc --noEmit
+        run: npm run lint
 
-      - name: Run Vite Production Build
+  automated-test-suite:
+    name: Vitest Comprehensive Test Suite (184 Tests)
+    runs-on: ubuntu-latest
+    needs: quality-lint-and-typecheck
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run All Domain & Invariant Test Suites
+        env:
+          NODE_ENV: test
+          SECRET_KEY: test_secret_key_minimum_32_characters_for_ci_pipeline
+        run: npm test
+
+  production-build-verification:
+    name: Vite Production Bundle Build
+    runs-on: ubuntu-latest
+    needs: quality-lint-and-typecheck
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Vite Build
         run: npm run build
+
+      - name: Verify Distribution Artifacts
+        run: |
+          test -f dist/index.html || exit 1
+          test -d dist/assets || exit 1
+          echo "Production build output verified successfully."
+
+  container-build-verification:
+    name: Docker Multi-Stage Container Build
+    runs-on: ubuntu-latest
+    needs: [automated-test-suite, production-build-verification]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build GrandStay Production Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          tags: grandstay/hms-app:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

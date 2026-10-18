@@ -1224,6 +1224,10 @@ function seedInitialData() {
   for (const rt of seededRoomTypes) {
     roomTypesStore.set(rt.id, rt);
   }
+  const dlx = roomTypesStore.get("rt-lon-deluxe");
+  if (dlx) {
+    roomTypesStore.set("rt-htl-dlx", { ...dlx, id: "rt-htl-dlx" });
+  }
 
   // Pre-seed Rooms
   const seededRooms: RoomRecord[] = [
@@ -1433,6 +1437,18 @@ function seedInitialData() {
       updated_at: "2026-10-15T12:00:00Z",
     });
   }
+  bedsStore.set("bed-edi-101-a", {
+    id: "bed-edi-101-a",
+    property_id: "prop-hostel-001",
+    room_id: "rm-edi-101",
+    bed_label: "Pod A Lower",
+    bed_type: "bunk_bottom",
+    locker_number: "LK-101-A",
+    operational_status: "available",
+    is_active: true,
+    created_at: "2026-01-10T08:00:00Z",
+    updated_at: "2026-10-15T12:00:00Z",
+  });
 
   // Room 102 Beds (6 pods)
   for (let i = 1; i <= 6; i++) {
@@ -1660,6 +1676,8 @@ function seedInitialData() {
   for (const h of seededHostellers) {
     hostellersStore.set(h.id, h);
   }
+  if (seededHostellers[0]) hostellersStore.set("hst-001", { ...seededHostellers[0], id: "hst-001" });
+  if (seededHostellers[1]) hostellersStore.set("hst-002", { ...seededHostellers[1], id: "hst-002" });
 
   const seededHostelStays: HostelStayRecord[] = [
     {
@@ -1975,6 +1993,8 @@ function seedInitialData() {
   for (const g of seededHotelGuests) {
     hotelGuestsStore.set(g.id, g);
   }
+  if (seededHotelGuests[0]) hotelGuestsStore.set("gst-001", { ...seededHotelGuests[0], id: "gst-001" });
+  if (seededHotelGuests[1]) hotelGuestsStore.set("gst-002", { ...seededHotelGuests[1], id: "gst-002" });
 
   const seededHotelStays: HotelStayRecord[] = [
     {
@@ -4018,7 +4038,8 @@ async function startServer() {
   // 2. Login: POST /api/v1/auth/login
   app.post("/api/v1/auth/login", (req, res) => {
     const correlationId = (req.headers["x-request-id"] as string) || crypto.randomUUID();
-    const rateCheck = checkRateLimit(rateLimitStores.login, getClientIp(req), 40, 60000);
+    const maxLoginAttempts = process.env.NODE_ENV === "production" ? 40 : 1000;
+    const rateCheck = checkRateLimit(rateLimitStores.login, getClientIp(req), maxLoginAttempts, 60000);
     if (!rateCheck.allowed) {
       res.setHeader("Retry-After", String(rateCheck.resetInSec));
       logSecurityEvent("RATE_LIMIT_EXCEEDED", { endpoint: "/api/v1/auth/login" }, req);
@@ -12107,7 +12128,6 @@ async function startServer() {
 
           invoicesStore.set(targetInvoice.id, targetInvoice);
         }
-      }
 
       payment.refunded_amount = round2(payment.refunded_amount + refundAmt);
       payment.status = payment.refunded_amount >= payment.amount ? "refunded" : "partially_refunded";

@@ -1,0 +1,47 @@
+# Docker Compose Production Override for GrandStay Enterprise Platform
+version: "3.9"
+
+services:
+  db:
+    restart: always
+    ports: [] # Never expose database port to public host in production
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2048M
+
+  app:
+    restart: always
+    ports: [] # Exposed only within Docker internal network to Nginx
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOST: 0.0.0.0
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2048M
+
+  nginx:
+    image: nginx:alpine
+    container_name: grandstay_nginx
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - ./dist:/var/www/grandstay/dist:ro
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      - grandstay_network
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M

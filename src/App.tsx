@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { PropertyProvider } from "@/src/contexts/PropertyContext";
 import { AuthProvider } from "@/src/contexts/AuthContext";
+import { ThemeProvider } from "@/src/contexts/ThemeContext";
 import { Header } from "@/src/components/layout/Header";
 import { Sidebar, ActiveTab } from "@/src/components/layout/Sidebar";
 import { DashboardOverview } from "@/src/components/shared/DashboardOverview";
@@ -18,7 +19,6 @@ import { MessRestaurantCard } from "@/src/components/shared/MessRestaurantCard";
 import { StaffOperationsCard } from "@/src/components/shared/StaffOperationsCard";
 import { ReportsAnalyticsCard } from "@/src/components/shared/ReportsAnalyticsCard";
 import { AdminPropertiesPage } from "@/src/pages/admin/AdminPropertiesPage";
-
 import { AdminInventoryPage } from "@/src/pages/admin/AdminInventoryPage";
 import { fetchHealthProbe } from "@/src/services/api-client";
 import { HealthResponse } from "@/src/types/api";
@@ -51,9 +51,7 @@ function MainAppShell() {
         setProbeError(result.message || "Backend responded with non-success envelope");
       }
     } catch (err) {
-      // If direct backend request is blocked or running on port 8001
       setProbeError(err instanceof Error ? err.message : "Failed to connect to backend");
-      // Provide fallback live state observed from uvicorn tests
       setHealthData({
         status: "healthy",
         service: "GrandStay Hybrid HMS",
@@ -72,26 +70,6 @@ function MainAppShell() {
           uptime_seconds: 142.5,
         },
       });
-      setRawEnvelope({
-        success: true,
-        data: {
-          status: "healthy",
-          service: "GrandStay Hybrid HMS",
-          version: "0.1.0",
-          environment: "development",
-          database: {
-            status: "connected",
-            latency_ms: 1.81,
-            dialect: "postgresql",
-          },
-          system: {
-            python_version: "3.11.2",
-            uptime_seconds: 142.5,
-          },
-        },
-        message: "System is operational (verified via direct ASGI test harness)",
-        correlation_id: "53dda77a-bc5c-4c31-b09d-3e0de7bee150",
-      });
     } finally {
       setIsRefreshing(false);
     }
@@ -108,7 +86,7 @@ function MainAppShell() {
   };
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col font-sans selection:bg-indigo-600 selection:text-white">
+    <div className="min-h-screen bg-slate-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 flex flex-col font-sans selection:bg-indigo-600 selection:text-white transition-colors">
       {/* Top Application Header */}
       <Header
         backendStatus={getBackendStatus()}
@@ -121,7 +99,7 @@ function MainAppShell() {
       <div className="flex-1 flex overflow-hidden">
         <Sidebar activeTab={activeTab} onSelectTab={setActiveTab} />
 
-        <main className="flex-1 overflow-y-auto p-6 lg:p-8 max-w-7xl">
+        <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto w-full">
           {activeTab === "overview" && (
             <DashboardOverview healthData={healthData} onNavigateTab={setActiveTab} />
           )}
@@ -129,6 +107,10 @@ function MainAppShell() {
           {activeTab === "properties" && <AdminPropertiesPage />}
 
           {activeTab === "rooms-beds" && <AdminInventoryPage />}
+
+          {activeTab === "hostel-workflow" && <HostelWorkflowCard />}
+
+          {activeTab === "hotel-workflow" && <HotelWorkflowCard />}
 
           {activeTab === "finance" && <FinanceWorkflowCard />}
 
@@ -138,6 +120,9 @@ function MainAppShell() {
 
           {activeTab === "reports" && <ReportsAnalyticsCard />}
 
+          {activeTab === "customer-portal" && <CustomerPortalCard />}
+
+          {activeTab === "admin-users" && <AdminUserManagementCard />}
 
           {activeTab === "health" && (
             <HealthMonitorCard
@@ -151,15 +136,7 @@ function MainAppShell() {
 
           {activeTab === "architecture" && <ArchitectureViewer />}
 
-          {activeTab === "hostel-workflow" && <HostelWorkflowCard />}
-
-          {activeTab === "hotel-workflow" && <HotelWorkflowCard />}
-
           {activeTab === "security" && <SecurityBaselineCard />}
-
-          {activeTab === "customer-portal" && <CustomerPortalCard />}
-
-          {activeTab === "admin-users" && <AdminUserManagementCard />}
 
           {activeTab === "database" && <DatabaseSchemaCard />}
         </main>
@@ -171,11 +148,13 @@ function MainAppShell() {
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <PropertyProvider>
-          <MainAppShell />
-        </PropertyProvider>
-      </AuthProvider>
+      <ThemeProvider>
+        <AuthProvider>
+          <PropertyProvider>
+            <MainAppShell />
+          </PropertyProvider>
+        </AuthProvider>
+      </ThemeProvider>
     </QueryClientProvider>
   );
 }

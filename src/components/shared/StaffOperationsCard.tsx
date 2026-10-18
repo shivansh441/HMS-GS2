@@ -35,9 +35,6 @@ import {
   fetchStaffShifts,
   createStaffShift,
   updateStaffShift,
-  fetchStaffAttendance,
-  clockInStaff,
-  clockOutStaff,
   fetchHousekeepingTasks,
   createHousekeepingTask,
   updateHousekeepingTask,
@@ -55,7 +52,6 @@ import {
   StaffDepartment,
   StaffShift,
   ShiftType,
-  StaffAttendance,
   HousekeepingTask,
   CleaningType,
   TaskPriority,
@@ -71,7 +67,6 @@ type OperationsSubTab =
   | "dashboard"
   | "staff"
   | "shifts"
-  | "attendance"
   | "housekeeping"
   | "maintenance"
   | "logs";
@@ -147,16 +142,6 @@ export const StaffOperationsCard: React.FC = () => {
     queryFn: () => fetchStaffShifts(activeProperty.id, selectedDate),
   });
   const shiftsList: StaffShift[] = shiftsEnvelope?.data || [];
-
-  const {
-    data: attendanceEnvelope,
-    isLoading: isLoadingAtt,
-    refetch: refetchAtt,
-  } = useQuery({
-    queryKey: ["operations-attendance", activeProperty.id, selectedDate],
-    queryFn: () => fetchStaffAttendance(activeProperty.id, selectedDate),
-  });
-  const attendanceList: StaffAttendance[] = attendanceEnvelope?.data || [];
 
   const {
     data: housekeepingEnvelope,
