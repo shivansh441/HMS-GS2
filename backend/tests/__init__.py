@@ -1,1 +1,0 @@
-"""Backend automated test suite."""

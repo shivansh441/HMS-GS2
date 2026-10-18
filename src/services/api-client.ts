@@ -602,3 +602,343 @@ export async function fetchPublicAvailability(
   );
 }
 
+// ---------------------------------------------------------------------------
+// Phase 7: Hostel Operations Client Methods
+// ---------------------------------------------------------------------------
+import type {
+  HostellerProfile,
+  HostelStay,
+  HostelOperationalSummary,
+  HostelFrontDeskQueue,
+  CreateHostellerInput,
+  CreateHostelStayInput,
+  WalkInStayInput,
+} from "@/src/types/hostel";
+
+export async function fetchHostellers(
+  propertyId: string,
+  filters?: { q?: string; status?: string }
+): Promise<ApiResponse<HostellerProfile[]>> {
+  const params = new URLSearchParams({ property_id: propertyId });
+  if (filters?.q) params.set("q", filters.q);
+  if (filters?.status && filters.status !== "all") params.set("status", filters.status);
+  return apiFetch<HostellerProfile[]>(`/hostel/hostellers?${params.toString()}`);
+}
+
+export async function createHosteller(
+  payload: CreateHostellerInput
+): Promise<ApiResponse<HostellerProfile>> {
+  return apiFetch<HostellerProfile>("/hostel/hostellers", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchHostellerById(
+  id: string
+): Promise<ApiResponse<HostellerProfile & { stays: HostelStay[] }>> {
+  return apiFetch<HostellerProfile & { stays: HostelStay[] }>(`/hostel/hostellers/${id}`);
+}
+
+export async function updateHosteller(
+  id: string,
+  payload: Partial<HostellerProfile>
+): Promise<ApiResponse<HostellerProfile>> {
+  return apiFetch<HostellerProfile>(`/hostel/hostellers/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deactivateHosteller(id: string): Promise<ApiResponse<{ id: string; is_active: boolean }>> {
+  return apiFetch<{ id: string; is_active: boolean }>(`/hostel/hostellers/${id}`, {
+    method: "DELETE",
+  });
+}
+
+export async function fetchHostelStays(
+  propertyId: string,
+  filters?: { status?: string; q?: string; date?: string }
+): Promise<ApiResponse<HostelStay[]>> {
+  const params = new URLSearchParams({ property_id: propertyId });
+  if (filters?.status && filters.status !== "all") params.set("status", filters.status);
+  if (filters?.q) params.set("q", filters.q);
+  if (filters?.date) params.set("date", filters.date);
+  return apiFetch<HostelStay[]>(`/hostel/stays?${params.toString()}`);
+}
+
+export async function createHostelStay(
+  payload: CreateHostelStayInput
+): Promise<ApiResponse<HostelStay>> {
+  return apiFetch<HostelStay>("/hostel/stays", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function registerWalkInStay(
+  payload: WalkInStayInput
+): Promise<ApiResponse<HostelStay>> {
+  return apiFetch<HostelStay>("/hostel/stays/walk-in", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchHostelStayById(id: string): Promise<ApiResponse<HostelStay>> {
+  return apiFetch<HostelStay>(`/hostel/stays/${id}`);
+}
+
+export async function checkInHostelStay(
+  id: string,
+  payload?: { keycard_code?: string; locker_number?: string; staff_notes?: string }
+): Promise<ApiResponse<HostelStay>> {
+  return apiFetch<HostelStay>(`/hostel/stays/${id}/check-in`, {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+}
+
+export async function checkOutHostelStay(
+  id: string,
+  payload?: { staff_notes?: string; linen_returned?: boolean; locker_keys_returned?: boolean }
+): Promise<ApiResponse<HostelStay>> {
+  return apiFetch<HostelStay>(`/hostel/stays/${id}/check-out`, {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+}
+
+export async function reassignHostelBed(
+  id: string,
+  payload: { new_bed_id: string; notes?: string }
+): Promise<ApiResponse<HostelStay>> {
+  return apiFetch<HostelStay>(`/hostel/stays/${id}/reassign-bed`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function extendHostelStay(
+  id: string,
+  payload: { new_check_out_date: string; notes?: string }
+): Promise<ApiResponse<HostelStay>> {
+  return apiFetch<HostelStay>(`/hostel/stays/${id}/extend`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function cancelHostelStay(
+  id: string,
+  payload?: { reason?: string }
+): Promise<ApiResponse<HostelStay>> {
+  return apiFetch<HostelStay>(`/hostel/stays/${id}/cancel`, {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+}
+
+export async function fetchHostelDashboard(
+  propertyId: string
+): Promise<ApiResponse<HostelOperationalSummary>> {
+  return apiFetch<HostelOperationalSummary>(`/hostel/dashboard?property_id=${encodeURIComponent(propertyId)}`);
+}
+
+export async function fetchHostelFrontDesk(
+  propertyId: string
+): Promise<ApiResponse<HostelFrontDeskQueue>> {
+  return apiFetch<HostelFrontDeskQueue>(`/hostel/front-desk?property_id=${encodeURIComponent(propertyId)}`);
+}
+
+// ---------------------------------------------------------------------------
+// Phase 8: Hotel Operations Client Methods
+// ---------------------------------------------------------------------------
+import type {
+  HotelGuestProfile,
+  HotelStay,
+  HotelOperationalSummary,
+  HotelFrontDeskQueue,
+  CreateHotelGuestInput,
+  CreateHotelStayInput,
+  WalkInHotelStayInput,
+  AdditionalOccupant,
+} from "@/src/types/hotel";
+import type { Room } from "@/src/types/inventory";
+
+export async function fetchHotelGuests(
+  propertyId: string,
+  filters?: { q?: string; status?: string }
+): Promise<ApiResponse<HotelGuestProfile[]>> {
+  const params = new URLSearchParams({ property_id: propertyId });
+  if (filters?.q) params.set("q", filters.q);
+  if (filters?.status && filters.status !== "all") params.set("status", filters.status);
+  return apiFetch<HotelGuestProfile[]>(`/hotel/guests?${params.toString()}`);
+}
+
+export async function createHotelGuest(
+  payload: CreateHotelGuestInput
+): Promise<ApiResponse<HotelGuestProfile>> {
+  return apiFetch<HotelGuestProfile>("/hotel/guests", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchHotelGuestById(
+  id: string
+): Promise<ApiResponse<HotelGuestProfile & { stays: HotelStay[] }>> {
+  return apiFetch<HotelGuestProfile & { stays: HotelStay[] }>(`/hotel/guests/${id}`);
+}
+
+export async function updateHotelGuest(
+  id: string,
+  payload: Partial<HotelGuestProfile>
+): Promise<ApiResponse<HotelGuestProfile>> {
+  return apiFetch<HotelGuestProfile>(`/hotel/guests/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deactivateHotelGuest(
+  id: string
+): Promise<ApiResponse<{ id: string; is_active: boolean }>> {
+  return apiFetch<{ id: string; is_active: boolean }>(`/hotel/guests/${id}`, {
+    method: "DELETE",
+  });
+}
+
+export async function fetchHotelStays(
+  propertyId: string,
+  filters?: { status?: string; q?: string; date?: string }
+): Promise<ApiResponse<HotelStay[]>> {
+  const params = new URLSearchParams({ property_id: propertyId });
+  if (filters?.status && filters.status !== "all") params.set("status", filters.status);
+  if (filters?.q) params.set("q", filters.q);
+  if (filters?.date) params.set("date", filters.date);
+  return apiFetch<HotelStay[]>(`/hotel/stays?${params.toString()}`);
+}
+
+export async function createHotelStay(
+  payload: CreateHotelStayInput
+): Promise<ApiResponse<HotelStay>> {
+  return apiFetch<HotelStay>("/hotel/stays", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function registerWalkInHotelStay(
+  payload: WalkInHotelStayInput
+): Promise<ApiResponse<HotelStay>> {
+  return apiFetch<HotelStay>("/hotel/stays/walk-in", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchHotelStayById(id: string): Promise<ApiResponse<HotelStay>> {
+  return apiFetch<HotelStay>(`/hotel/stays/${id}`);
+}
+
+export async function assignHotelRoom(
+  id: string,
+  payload: { room_id: string; notes?: string }
+): Promise<ApiResponse<HotelStay>> {
+  return apiFetch<HotelStay>(`/hotel/stays/${id}/assign-room`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function changeHotelRoom(
+  id: string,
+  payload: { new_room_id: string; reason?: string }
+): Promise<ApiResponse<HotelStay>> {
+  return apiFetch<HotelStay>(`/hotel/stays/${id}/change-room`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function checkInHotelStay(
+  id: string,
+  payload?: {
+    keycard_code?: string;
+    staff_notes?: string;
+    additional_occupants?: AdditionalOccupant[];
+  }
+): Promise<ApiResponse<HotelStay>> {
+  return apiFetch<HotelStay>(`/hotel/stays/${id}/check-in`, {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+}
+
+export async function checkOutHotelStay(
+  id: string,
+  payload?: {
+    staff_notes?: string;
+    room_inspected?: boolean;
+    minibar_consumed?: boolean;
+  }
+): Promise<ApiResponse<HotelStay>> {
+  return apiFetch<HotelStay>(`/hotel/stays/${id}/check-out`, {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+}
+
+export async function extendHotelStay(
+  id: string,
+  payload: { new_check_out_date: string; notes?: string }
+): Promise<ApiResponse<HotelStay>> {
+  return apiFetch<HotelStay>(`/hotel/stays/${id}/extend`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function cancelHotelStay(
+  id: string,
+  payload?: { reason?: string }
+): Promise<ApiResponse<HotelStay>> {
+  return apiFetch<HotelStay>(`/hotel/stays/${id}/cancel`, {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+}
+
+export async function fetchHotelAvailableRooms(
+  propertyId: string,
+  startDate: string,
+  endDate: string,
+  roomTypeId?: string
+): Promise<ApiResponse<Room[]>> {
+  const params = new URLSearchParams({
+    property_id: propertyId,
+    start_date: startDate,
+    end_date: endDate,
+  });
+  if (roomTypeId && roomTypeId !== "all") params.set("room_type_id", roomTypeId);
+  return apiFetch<Room[]>(`/hotel/available-rooms?${params.toString()}`);
+}
+
+export async function fetchHotelDashboard(
+  propertyId: string
+): Promise<ApiResponse<HotelOperationalSummary>> {
+  return apiFetch<HotelOperationalSummary>(
+    `/hotel/dashboard?property_id=${encodeURIComponent(propertyId)}`
+  );
+}
+
+export async function fetchHotelFrontDesk(
+  propertyId: string
+): Promise<ApiResponse<HotelFrontDeskQueue>> {
+  return apiFetch<HotelFrontDeskQueue>(
+    `/hotel/front-desk?property_id=${encodeURIComponent(propertyId)}`
+  );
+}
+
+
