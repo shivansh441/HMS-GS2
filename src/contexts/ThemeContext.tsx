@@ -49,11 +49,21 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (active === "dark") {
         root.classList.add("dark");
         root.classList.remove("light");
+        root.setAttribute("data-theme", "dark");
         root.style.colorScheme = "dark";
+        if (document.body) {
+          document.body.classList.add("dark");
+          document.body.classList.remove("light");
+        }
       } else {
         root.classList.remove("dark");
         root.classList.add("light");
+        root.setAttribute("data-theme", "light");
         root.style.colorScheme = "light";
+        if (document.body) {
+          document.body.classList.remove("dark");
+          document.body.classList.add("light");
+        }
       }
     };
 

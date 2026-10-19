@@ -66,7 +66,7 @@ The architecture follows a strict Modular Monolith pattern. Each business domain
 5. **Hotel Operations**: Hotel guest profiles, suite bookings, VIP tiers, additional occupants, stay extensions.
 6. **Finance & Tax Engine**: Invoices, tax rules, multi-jurisdiction calculation snapshots, payments, partial refunds.
 7. **Mess & Restaurant**: Meal plans, dietary flags, hosteller entitlements, dining POS orders, kitchen inventory.
-8. **Staff & Operations**: Employee directories, department shifts, time & attendance, housekeeping tasks, maintenance work orders.
+8. **Staff & Operations**: Employee directories, department shifts, housekeeping tasks, maintenance work orders.
 9. **Reports & Analytics**: Consolidated and property-scoped executive summaries, occupancy performance, cash-flow reconciliation, secure CSV export.
 
 ---

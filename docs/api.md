@@ -128,7 +128,6 @@ Authorization: Bearer <access_token>
 - `POST /api/v1/food/menu-items` — Create menu item.
 - `GET /api/v1/food/meal-plans` — Hostel subscription meal plans.
 - `GET /api/v1/food/entitlements` — Active hosteller meal plans.
-- `POST /api/v1/food/attendance` — Record meal hall swipe / redemption.
 - `POST /api/v1/food/orders` — Dining POS order billed to room or paid direct.
 - `GET /api/v1/food/stock-items` — Kitchen inventory with low-stock alerts.
 - `POST /api/v1/food/stock-movements` — Record consumption, receipt, or wastage.
@@ -139,8 +138,6 @@ Authorization: Bearer <access_token>
 - `POST /api/v1/staff/members` — Onboard staff member.
 - `GET /api/v1/staff/shifts` — Schedule department shifts.
 - `POST /api/v1/staff/shifts` — Create work shift.
-- `GET /api/v1/staff/attendance` — Clock-in/out records.
-- `POST /api/v1/staff/attendance/clock-in` — Record attendance punch.
 - `GET /api/v1/operations/housekeeping` — Room and bed cleaning queues.
 - `PATCH /api/v1/operations/housekeeping/:id` — Update cleaning task status.
 - `GET /api/v1/operations/maintenance` — Work orders (plumbing, electrical, HVAC).

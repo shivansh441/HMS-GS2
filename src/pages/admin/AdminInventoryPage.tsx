@@ -418,16 +418,16 @@ export const AdminInventoryPage: React.FC = () => {
   return (
     <div className="space-y-6">
       {/* Top Banner & Context Switcher */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-zinc-800">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-zinc-200 dark:border-zinc-800">
         <div>
-          <div className="flex items-center gap-2 text-xs text-indigo-400 font-semibold uppercase tracking-wider">
+          <div className="flex items-center gap-2 text-xs text-indigo-600 dark:text-indigo-400 font-semibold uppercase tracking-wider">
             <Layers className="w-4 h-4" />
-            <span>Property-Scoped Inventory & Availability Engine (Phase 6)</span>
+            <span>Rooms, Beds & Physical Inventory</span>
           </div>
-          <h1 className="text-2xl font-extrabold text-zinc-100 tracking-tight mt-1">
+          <h1 className="text-2xl font-extrabold text-zinc-900 dark:text-zinc-100 tracking-tight mt-1">
             {activeProperty.name}
           </h1>
-          <p className="text-xs text-zinc-400 mt-0.5">
+          <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-0.5">
             {activeProperty.property_type === "hostel"
               ? "Hostel Bed-Level Inventory & Dormitory Allocation"
               : activeProperty.property_type === "hotel"
@@ -437,24 +437,24 @@ export const AdminInventoryPage: React.FC = () => {
         </div>
 
         {/* View Switcher Tabs */}
-        <div className="flex items-center gap-1 bg-zinc-900 border border-zinc-800 p-1 rounded-xl">
+        <div className="flex items-center gap-1 bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-1 rounded-xl">
           <button
             onClick={() => setActiveTab("overview")}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-2 transition-all ${
               activeTab === "overview"
                 ? "bg-indigo-600 text-white shadow-sm"
-                : "text-zinc-400 hover:text-zinc-200"
+                : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200"
             }`}
           >
             <Layers className="w-3.5 h-3.5" />
-            <span>Telemetry</span>
+            <span>Summary & KPIs</span>
           </button>
           <button
             onClick={() => setActiveTab("rooms")}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-2 transition-all ${
               activeTab === "rooms"
                 ? "bg-indigo-600 text-white shadow-sm"
-                : "text-zinc-400 hover:text-zinc-200"
+                : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200"
             }`}
           >
             <DoorOpen className="w-3.5 h-3.5" />
@@ -465,11 +465,11 @@ export const AdminInventoryPage: React.FC = () => {
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-2 transition-all ${
               activeTab === "calendar"
                 ? "bg-indigo-600 text-white shadow-sm"
-                : "text-zinc-400 hover:text-zinc-200"
+                : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200"
             }`}
           >
             <CalendarDays className="w-3.5 h-3.5" />
-            <span>Availability Grid</span>
+            <span>Calendar View</span>
           </button>
         </div>
       </div>

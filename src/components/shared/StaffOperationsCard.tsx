@@ -202,26 +202,6 @@ export const StaffOperationsCard: React.FC = () => {
     onError: (err: any) => showFeedback(err.message || "Failed to schedule shift.", true),
   });
 
-  const clockInMut = useMutation({
-    mutationFn: clockInStaff,
-    onSuccess: (res) => {
-      queryClient.invalidateQueries({ queryKey: ["operations-attendance"] });
-      queryClient.invalidateQueries({ queryKey: ["operations-dashboard"] });
-      showFeedback(`Clock-in recorded (${res.data?.status}).`);
-    },
-    onError: (err: any) => showFeedback(err.message || "Clock-in failed.", true),
-  });
-
-  const clockOutMut = useMutation({
-    mutationFn: (attId: string) => clockOutStaff(attId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["operations-attendance"] });
-      queryClient.invalidateQueries({ queryKey: ["operations-dashboard"] });
-      showFeedback("Clock-out recorded successfully.");
-    },
-    onError: (err: any) => showFeedback(err.message || "Clock-out failed.", true),
-  });
-
   const createHkMut = useMutation({
     mutationFn: createHousekeepingTask,
     onSuccess: () => {
@@ -293,7 +273,6 @@ export const StaffOperationsCard: React.FC = () => {
     refetchDash();
     refetchStaff();
     refetchShifts();
-    refetchAtt();
     refetchHk();
     refetchMaint();
     refetchLogs();
@@ -328,7 +307,7 @@ export const StaffOperationsCard: React.FC = () => {
             Staff & Operations Hub
           </h1>
           <p className="text-xs text-zinc-400 mt-1">
-            Rosters, live attendance, housekeeping turnover synchronization, facility maintenance work orders, and shift handovers for {activeProperty.name}.
+            Staff rosters, shift scheduling, housekeeping turnover synchronization, facility maintenance work orders, and shift handovers for {activeProperty.name}.
           </p>
         </div>
 
@@ -405,18 +384,6 @@ export const StaffOperationsCard: React.FC = () => {
         </button>
 
         <button
-          onClick={() => setActiveSubTab("attendance")}
-          className={`flex items-center gap-2 px-3.5 py-2 rounded-lg transition-all ${
-            activeSubTab === "attendance"
-              ? "bg-emerald-600 text-white font-semibold shadow-sm"
-              : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900"
-          }`}
-        >
-          <Clock className="w-4 h-4" />
-          <span>Time Clock & Attendance</span>
-        </button>
-
-        <button
           onClick={() => setActiveSubTab("housekeeping")}
           className={`flex items-center gap-2 px-3.5 py-2 rounded-lg transition-all ${
             activeSubTab === "housekeeping"
@@ -460,14 +427,14 @@ export const StaffOperationsCard: React.FC = () => {
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-4 space-y-1">
               <div className="flex items-center justify-between text-xs text-zinc-400">
-                <span>Active On-Duty Staff</span>
+                <span>Active Staff</span>
                 <UserCheck className="w-4 h-4 text-emerald-400" />
               </div>
               <p className="text-2xl font-bold font-mono text-white">
-                {isLoadingDash ? "..." : dashboardData?.active_staff_on_duty ?? 0}
+                {isLoadingDash ? "..." : dashboardData?.total_staff ?? 0}
               </p>
               <p className="text-[11px] text-zinc-500">
-                out of {dashboardData?.total_staff ?? 0} registered staff
+                Registered operational staff
               </p>
             </div>
 
@@ -517,6 +484,20 @@ export const StaffOperationsCard: React.FC = () => {
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <button
                 onClick={() => {
+                  setActiveSubTab("staff");
+                  setShowAddStaffModal(true);
+                }}
+                className="flex items-center gap-2.5 p-3 rounded-lg border border-zinc-800 bg-zinc-900 hover:bg-zinc-850 hover:border-zinc-700 text-left transition-colors"
+              >
+                <Users className="w-4 h-4 text-emerald-400 shrink-0" />
+                <div>
+                  <div className="text-xs font-semibold text-zinc-200">Add Staff</div>
+                  <div className="text-[10px] text-zinc-500">Employee profile</div>
+                </div>
+              </button>
+
+              <button
+                onClick={() => {
                   setActiveSubTab("shifts");
                   setShowScheduleShiftModal(true);
                 }}
@@ -526,19 +507,6 @@ export const StaffOperationsCard: React.FC = () => {
                 <div>
                   <div className="text-xs font-semibold text-zinc-200">Schedule Shift</div>
                   <div className="text-[10px] text-zinc-500">Assign duty rota</div>
-                </div>
-              </button>
-
-              <button
-                onClick={() => {
-                  setActiveSubTab("attendance");
-                }}
-                className="flex items-center gap-2.5 p-3 rounded-lg border border-zinc-800 bg-zinc-900 hover:bg-zinc-850 hover:border-zinc-700 text-left transition-colors"
-              >
-                <Clock className="w-4 h-4 text-emerald-400 shrink-0" />
-                <div>
-                  <div className="text-xs font-semibold text-zinc-200">Time Clock</div>
-                  <div className="text-[10px] text-zinc-500">Clock in / out staff</div>
                 </div>
               </button>
 
@@ -851,128 +819,6 @@ export const StaffOperationsCard: React.FC = () => {
               </table>
             </div>
           )}
-        </div>
-      )}
-
-      {/* 4. ATTENDANCE & TIME CLOCK TAB */}
-      {activeSubTab === "attendance" && (
-        <div className="space-y-6">
-          {/* Quick Clock-in Panel */}
-          <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-5 space-y-4">
-            <h3 className="text-xs font-semibold text-zinc-200 uppercase tracking-wider flex items-center gap-2">
-              <Clock className="w-4 h-4 text-emerald-400" />
-              Electronic Duty Time Clock
-            </h3>
-            <div className="flex flex-col sm:flex-row items-center gap-3">
-              <select
-                id="clockInStaffSelect"
-                className="flex-1 w-full px-3 py-2 rounded-lg bg-zinc-950 border border-zinc-800 text-xs text-zinc-200"
-                defaultValue=""
-              >
-                <option value="" disabled>
-                  Select employee to clock in...
-                </option>
-                {staffList.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.first_name} {s.last_name} ({deptLabels[s.department]})
-                  </option>
-                ))}
-              </select>
-
-              <button
-                onClick={() => {
-                  const sel = document.getElementById(
-                    "clockInStaffSelect"
-                  ) as HTMLSelectElement | null;
-                  if (sel && sel.value) {
-                    clockInMut.mutate({
-                      property_id: activeProperty.id,
-                      staff_id: sel.value,
-                    });
-                  }
-                }}
-                disabled={clockInMut.isPending}
-                className="w-full sm:w-auto px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-xs font-semibold text-white transition-colors"
-              >
-                Punch Clock-In
-              </button>
-            </div>
-          </div>
-
-          {/* Attendance Log Table */}
-          <div className="space-y-3">
-            <h4 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">
-              Today's Attendance Roster
-            </h4>
-            {isLoadingAtt ? (
-              <div className="p-8 text-center text-xs text-zinc-500">Loading attendance...</div>
-            ) : attendanceList.length === 0 ? (
-              <div className="p-8 rounded-xl border border-zinc-800 bg-zinc-900/30 text-center text-xs text-zinc-400">
-                No attendance punches recorded for {selectedDate}.
-              </div>
-            ) : (
-              <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 overflow-hidden">
-                <table className="w-full text-xs text-left">
-                  <thead className="bg-zinc-900 text-zinc-400 uppercase tracking-wider text-[11px] border-b border-zinc-800">
-                    <tr>
-                      <th className="px-4 py-3">Staff Name</th>
-                      <th className="px-4 py-3">Clock In</th>
-                      <th className="px-4 py-3">Clock Out</th>
-                      <th className="px-4 py-3">Total Work</th>
-                      <th className="px-4 py-3">Status</th>
-                      <th className="px-4 py-3 text-right">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-zinc-800">
-                    {attendanceList.map((att) => (
-                      <tr key={att.id} className="hover:bg-zinc-850/50 transition-colors">
-                        <td className="px-4 py-3 font-semibold text-white">{att.staff_name}</td>
-                        <td className="px-4 py-3 font-mono text-zinc-300">
-                          {new Date(att.clock_in_time).toLocaleTimeString()}
-                        </td>
-                        <td className="px-4 py-3 font-mono text-zinc-300">
-                          {att.clock_out_time
-                            ? new Date(att.clock_out_time).toLocaleTimeString()
-                            : "On Duty"}
-                        </td>
-                        <td className="px-4 py-3 font-mono text-zinc-300">
-                          {att.total_work_minutes > 0
-                            ? `${Math.floor(att.total_work_minutes / 60)}h ${
-                                att.total_work_minutes % 60
-                              }m`
-                            : "In progress"}
-                        </td>
-                        <td className="px-4 py-3">
-                          <span
-                            className={`px-2 py-0.5 rounded text-[10px] font-semibold ${
-                              att.status === "late"
-                                ? "bg-amber-500/20 text-amber-300"
-                                : att.status === "present"
-                                ? "bg-emerald-500/20 text-emerald-300"
-                                : "bg-zinc-800 text-zinc-300"
-                            }`}
-                          >
-                            {att.status} {att.late_minutes > 0 && `(${att.late_minutes}m)`}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 text-right">
-                          {!att.clock_out_time && (
-                            <button
-                              onClick={() => clockOutMut.mutate(att.id)}
-                              disabled={clockOutMut.isPending}
-                              className="px-2.5 py-1 rounded bg-rose-600/30 hover:bg-rose-600/50 text-[11px] text-rose-200 transition-colors"
-                            >
-                              Clock Out
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
         </div>
       )}
 

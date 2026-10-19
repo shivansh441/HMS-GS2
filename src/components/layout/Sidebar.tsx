@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import {
   LayoutDashboard,
   Bed,
@@ -12,9 +12,12 @@ import {
   Server,
   KeyRound,
   Users2,
-  Settings,
+  ChevronDown,
   ChevronRight,
   ShieldCheck,
+  Cpu,
+  Database,
+  Layers,
 } from "lucide-react";
 import { useProperty } from "@/src/contexts/PropertyContext";
 import { useAuth } from "@/src/contexts/AuthContext";
@@ -45,6 +48,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onSelectTab }) => {
   const { activeProperty } = useProperty();
   const { user, canAccessProperty } = useAuth();
   const isAllowed = canAccessProperty(activeProperty.id);
+
+  const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(
+    () => ["health", "architecture", "security", "database"].includes(activeTab)
+  );
 
   const isHostelSupported =
     activeProperty.property_type === "hostel" || activeProperty.property_type === "hybrid";
@@ -122,7 +129,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onSelectTab }) => {
         {isGuest ? (
           <div>
             <div className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
-              Customer Portal
+              Guest Portal
             </div>
             <nav className="space-y-1">
               {renderNavItem("customer-portal", "My Bookings & Stays", Users2, "Active", "emerald")}
@@ -134,21 +141,21 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onSelectTab }) => {
             {/* Core Operations Section */}
             <div>
               <div className="px-3 pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
-                Core Operations
+                Front Desk Operations
               </div>
               <nav className="space-y-1">
-                {renderNavItem("overview", "Dashboard & KPIs", LayoutDashboard)}
+                {renderNavItem("overview", "Overview & KPIs", LayoutDashboard)}
 
                 {isHostelSupported && !isHousekeeping && !isAccountant && (
-                  renderNavItem("hostel-workflow", "Hostel Front Desk", Bed, "Dorms", "amber")
+                  renderNavItem("hostel-workflow", "Residents / Hostelers", Bed, "Hostel", "amber")
                 )}
 
                 {isHotelSupported && !isHousekeeping && !isAccountant && (
-                  renderNavItem("hotel-workflow", "Hotel Front Desk", Hotel, "Suites", "sky")
+                  renderNavItem("hotel-workflow", "Hotel Guests", Hotel, "Hotel", "sky")
                 )}
 
                 {!isAccountant && (
-                  renderNavItem("rooms-beds", "Rooms & Beds", Bed)
+                  renderNavItem("rooms-beds", "Rooms & Beds", Layers)
                 )}
               </nav>
             </div>
@@ -160,48 +167,61 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onSelectTab }) => {
               </div>
               <nav className="space-y-1">
                 {!isHousekeeping && (
-                  renderNavItem("finance", "Billing & Payments", Receipt, "Folios", "purple")
+                  renderNavItem("finance", "Billing & Invoicing", Receipt, "Folios", "purple")
                 )}
 
                 {!isHousekeeping && !isAccountant && (
-                  renderNavItem("mess-restaurant", "Dining & Mess Hall", UtensilsCrossed, "Kitchen", "amber")
+                  renderNavItem("mess-restaurant", "Mess & Dining", UtensilsCrossed, "Kitchen", "amber")
                 )}
 
                 {!isAccountant && (
-                  renderNavItem("staff-operations", "Staff & Facilities", Users, "Tasks", "emerald")
+                  renderNavItem("staff-operations", "Staff & Tasks", Users, "Operations", "emerald")
                 )}
               </nav>
             </div>
 
-            {/* Intelligence & Analytics */}
+            {/* Management & Insights */}
             <div>
               <div className="px-3 pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
-                Management & Reports
+                Management & Analytics
               </div>
               <nav className="space-y-1">
                 {!isHousekeeping && (
                   renderNavItem("reports", "Reports & Analytics", BarChart3, "Export", "sky")
                 )}
-                {renderNavItem("properties", "Properties Registry", Building2)}
+                {renderNavItem("properties", "Properties", Building2)}
+                {isSuperAdmin && (
+                  renderNavItem("admin-users", "Staff Access & Roles", KeyRound, "Admin", "purple")
+                )}
+                {renderNavItem("customer-portal", "Guest Portal", Users2)}
               </nav>
             </div>
 
-            {/* Administration & Security */}
-            {(isSuperAdmin || user.role === "property_manager") && (
-              <div>
-                <div className="px-3 pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
-                  Administration
-                </div>
-                <nav className="space-y-1">
-                  {isSuperAdmin && (
-                    renderNavItem("admin-users", "Staff Access (RBAC)", KeyRound, "Admin", "purple")
+            {/* System Diagnostics (Discreet collapsible section for Super Admins) */}
+            {isSuperAdmin && (
+              <div className="pt-2 border-t border-zinc-200 dark:border-zinc-800/80">
+                <button
+                  onClick={() => setIsDiagnosticsOpen(!isDiagnosticsOpen)}
+                  className="w-full flex items-center justify-between px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-300 transition-colors"
+                >
+                  <span className="flex items-center gap-1.5">
+                    <Server className="w-3.5 h-3.5" />
+                    <span>System Diagnostics</span>
+                  </span>
+                  {isDiagnosticsOpen ? (
+                    <ChevronDown className="w-3.5 h-3.5" />
+                  ) : (
+                    <ChevronRight className="w-3.5 h-3.5" />
                   )}
-                  {renderNavItem("customer-portal", "Customer Portal", Users2)}
-                  {renderNavItem("health", "System Health", Server)}
-                  {isSuperAdmin && (
-                    renderNavItem("security", "Security & Auditing", ShieldCheck)
-                  )}
-                </nav>
+                </button>
+                {isDiagnosticsOpen && (
+                  <nav className="mt-1 space-y-1 pl-1">
+                    {renderNavItem("health", "System Health", Server)}
+                    {renderNavItem("architecture", "Architecture", Cpu)}
+                    {renderNavItem("security", "Security Audit", ShieldCheck)}
+                    {renderNavItem("database", "Database Schema", Database)}
+                  </nav>
+                )}
               </div>
             )}
           </>

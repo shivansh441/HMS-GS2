@@ -29,26 +29,26 @@ export const PageContainer: React.FC<PageContainerProps> = ({
       {/* Top Header Block: Breadcrumbs & Page-level Actions */}
       <div className="space-y-2">
         {breadcrumbs && breadcrumbs.length > 0 && (
-          <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-xs text-zinc-400">
+          <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
             <Link
               to="/admin/dashboard"
-              className="flex items-center gap-1 hover:text-zinc-200 transition-colors"
+              className="flex items-center gap-1 hover:text-zinc-800 dark:hover:text-zinc-200 transition-colors"
             >
               <Home className="w-3.5 h-3.5" />
               <span>Admin</span>
             </Link>
             {breadcrumbs.map((crumb, idx) => (
               <React.Fragment key={`${crumb.label}-${idx}`}>
-                <ChevronRight className="w-3 h-3 text-zinc-600" />
+                <ChevronRight className="w-3 h-3 text-zinc-400 dark:text-zinc-600" />
                 {crumb.href ? (
                   <Link
                     to={crumb.href}
-                    className="hover:text-zinc-200 transition-colors capitalize"
+                    className="hover:text-zinc-800 dark:hover:text-zinc-200 transition-colors capitalize"
                   >
                     {crumb.label}
                   </Link>
                 ) : (
-                  <span className="text-zinc-300 font-medium capitalize">{crumb.label}</span>
+                  <span className="text-zinc-800 dark:text-zinc-300 font-medium capitalize">{crumb.label}</span>
                 )}
               </React.Fragment>
             ))}
@@ -57,9 +57,9 @@ export const PageContainer: React.FC<PageContainerProps> = ({
 
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pt-1">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight text-zinc-100">{title}</h1>
+            <h1 className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-100">{title}</h1>
             {description && (
-              <p className="text-xs sm:text-sm text-zinc-400 mt-1 max-w-3xl leading-relaxed">
+              <p className="text-xs sm:text-sm text-zinc-600 dark:text-zinc-400 mt-1 max-w-3xl leading-relaxed">
                 {description}
               </p>
             )}

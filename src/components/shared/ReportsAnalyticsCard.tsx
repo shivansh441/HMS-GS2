@@ -869,12 +869,12 @@ export const ReportsAnalyticsCard: React.FC = () => {
             <div className="space-y-6">
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 <div className="p-4 rounded-xl border border-zinc-800 bg-zinc-950 space-y-1">
-                  <span className="text-xs text-zinc-400">Meal Attendances</span>
+                  <span className="text-xs text-zinc-400">Total Dining Volume</span>
                   <p className="text-2xl font-bold text-zinc-100 font-mono">
-                    {diningQuery.data.data.total_meal_attendances}
+                    {(diningQuery.data.data.restaurant_orders_count || 0) + (diningQuery.data.data.pay_per_meal_count || 0)}
                   </p>
                   <p className="text-[11px] text-zinc-400">
-                    Plan redemptions: {diningQuery.data.data.entitlement_redemptions}
+                    Orders & resident dining services
                   </p>
                 </div>
 
@@ -934,12 +934,12 @@ export const ReportsAnalyticsCard: React.FC = () => {
             <div className="space-y-6">
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 <div className="p-4 rounded-xl border border-zinc-800 bg-zinc-950 space-y-1">
-                  <span className="text-xs text-zinc-400">Attendance Punctuality</span>
+                  <span className="text-xs text-zinc-400">Scheduled Shifts</span>
                   <p className="text-2xl font-bold text-emerald-400 font-mono">
-                    {staffOpsQuery.data.data.attendance_punctuality_pct}%
+                    {staffOpsQuery.data.data.shifts_completed ?? 0}
                   </p>
                   <p className="text-[11px] text-zinc-400">
-                    Total Hours: {staffOpsQuery.data.data.total_work_hours} hrs
+                    Active operational rosters
                   </p>
                 </div>
 

@@ -45,9 +45,6 @@ import {
   createMealPlan,
   fetchMealEntitlements,
   assignMealPlan,
-  verifyEntitlement,
-  fetchMealAttendance,
-  recordMealAttendance,
   fetchRestaurantOrders,
   createRestaurantOrder,
   updateRestaurantOrderStatus,
@@ -125,12 +122,6 @@ export const MessRestaurantCard: React.FC = () => {
 
   const todayStr = useMemo(() => new Date().toISOString().split("T")[0], []);
 
-  const { data: attendanceData, isLoading: isAttendanceLoading, refetch: refetchAttendance } = useQuery({
-    queryKey: ["food-attendance", activeProperty.id, todayStr],
-    queryFn: () => fetchMealAttendance(activeProperty.id, todayStr),
-    enabled: isAllowed,
-  });
-
   const { data: ordersData, isLoading: isOrdersLoading, refetch: refetchOrders } = useQuery({
     queryKey: ["food-restaurant-orders", activeProperty.id],
     queryFn: () => fetchRestaurantOrders(activeProperty.id, "all"),
@@ -167,7 +158,6 @@ export const MessRestaurantCard: React.FC = () => {
   const menuItems = menuData?.data || [];
   const mealPlans = mealPlansData?.data || [];
   const entitlements = entitlementsData?.data || [];
-  const attendances = attendanceData?.data || [];
   const orders = ordersData?.data || [];
   const stockItems = stockData?.data || [];
   const stockMovements = stockMovementsData?.data || [];
@@ -178,15 +168,7 @@ export const MessRestaurantCard: React.FC = () => {
   // STATE: Modals & Interactive Actions
   // ==========================================
 
-  // 1. Kiosk Attendance & Redemption
-  const [selectedHostellerId, setSelectedHostellerId] = useState<string>("");
-  const [selectedMealPeriod, setSelectedMealPeriod] = useState<MealPeriodId>("lunch");
-  const [verificationResult, setVerificationResult] = useState<any>(null);
-  const [isVerifying, setIsVerifying] = useState<boolean>(false);
-  const [manualOverrideReason, setManualOverrideReason] = useState<string>("");
-  const [showOverrideField, setShowOverrideField] = useState<boolean>(false);
-
-  // 2. Assign Meal Plan Modal
+  // 1. Assign Meal Plan Modal
   const [showAssignPlanModal, setShowAssignPlanModal] = useState<boolean>(false);
   const [assignHostellerId, setAssignHostellerId] = useState<string>("");
   const [assignPlanId, setAssignPlanId] = useState<string>("");
@@ -256,50 +238,6 @@ export const MessRestaurantCard: React.FC = () => {
   }, [foodConfig]);
 
   // Mutations
-  const verifyEligibilityMutation = async () => {
-    if (!selectedHostellerId) {
-      setErrorMessage("Please select a resident hosteller first.");
-      return;
-    }
-    setIsVerifying(true);
-    clearNotifications();
-    try {
-      const res = await verifyEntitlement(activeProperty.id, selectedHostellerId, todayStr, selectedMealPeriod);
-      if (res.success && res.data) {
-        setVerificationResult(res.data);
-      } else {
-        setErrorMessage(res.message || "Failed to verify entitlement");
-      }
-    } catch (e: any) {
-      setErrorMessage(e.message || "Verification request failed");
-    } finally {
-      setIsVerifying(false);
-    }
-  };
-
-  const recordAttendanceMutation = useMutation({
-    mutationFn: (override: boolean) =>
-      recordMealAttendance({
-        property_id: activeProperty.id,
-        hosteller_id: selectedHostellerId,
-        service_date: todayStr,
-        meal_period: selectedMealPeriod,
-        is_manual_override: override,
-        override_reason: override ? manualOverrideReason || "Authorized manager bypass" : undefined,
-      }),
-    onSuccess: (res) => {
-      setSuccessMessage(res.message || "Meal recorded successfully!");
-      setVerificationResult(null);
-      setSelectedHostellerId("");
-      setShowOverrideField(false);
-      setManualOverrideReason("");
-      queryClient.invalidateQueries({ queryKey: ["food-attendance"] });
-      queryClient.invalidateQueries({ queryKey: ["food-dashboard"] });
-    },
-    onError: (err: any) => {
-      setErrorMessage(err.message || "Failed to record meal attendance");
-    },
-  });
 
   const assignPlanMutation = useMutation({
     mutationFn: () =>
@@ -554,11 +492,11 @@ export const MessRestaurantCard: React.FC = () => {
             <button
               onClick={() => {
                 refetchDashboard();
-                refetchAttendance();
                 refetchOrders();
                 refetchStock();
                 refetchMenu();
                 refetchMealPlans();
+                refetchEntitlements();
               }}
               className="p-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs flex items-center gap-1.5 border border-zinc-700 transition"
               title="Refresh operational feeds"
@@ -610,12 +548,12 @@ export const MessRestaurantCard: React.FC = () => {
           <div className="bg-zinc-950/60 p-3 rounded-lg border border-zinc-800/80">
             <span className="text-[11px] text-zinc-500 flex items-center gap-1">
               <UtensilsCrossed className="w-3.5 h-3.5 text-emerald-400" />
-              Today's Meals Served
+              Active Entitlements
             </span>
             <div className="text-lg font-bold text-white mt-1">
-              {dashboard?.today_meal_attendance_count ?? "—"}
+              {entitlements.length}
             </div>
-            <span className="text-[10px] text-emerald-400">Redeemed today</span>
+            <span className="text-[10px] text-emerald-400">Assigned meal plans</span>
           </div>
 
           <div className="bg-zinc-950/60 p-3 rounded-lg border border-zinc-800/80">
@@ -674,8 +612,8 @@ export const MessRestaurantCard: React.FC = () => {
               : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800"
           }`}
         >
-          <UserCheck className="w-4 h-4" />
-          <span>Hostel Mess & Attendance</span>
+          <UtensilsCrossed className="w-4 h-4" />
+          <span>Hostel Meal Plans</span>
         </button>
 
         <button
@@ -728,340 +666,118 @@ export const MessRestaurantCard: React.FC = () => {
       </div>
 
       {/* ==================================================================== */}
-      {/* TAB 1: HOSTEL MESS & ATTENDANCE KIOSK */}
+      {/* TAB 1: HOSTEL MEAL PLANS & RESIDENT ENTITLEMENTS */}
       {/* ==================================================================== */}
       {activeTab === "mess" && (
         <div className="space-y-6">
-          {/* Top Mess Controls */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Kiosk Check-In & Scanner */}
-            <div className="lg:col-span-1 bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <div className="p-1.5 rounded-md bg-amber-500/10 text-amber-400">
-                    <UserCheck className="w-4 h-4" />
-                  </div>
-                  <h3 className="text-sm font-semibold text-white">Mess Attendance Kiosk</h3>
-                </div>
-                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-zinc-800 text-zinc-400">
-                  {todayStr}
-                </span>
+          {/* Meal Plans Available */}
+          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+              <div>
+                <h3 className="text-sm font-semibold text-white">Hostel Meal Plans</h3>
+                <p className="text-xs text-zinc-400">Available meal subscription packages for hostellers and residents</p>
               </div>
-
-              <p className="text-xs text-zinc-400">
-                Verify resident meal plan eligibility and record meal redemption. Duplicate scans are blocked automatically.
-              </p>
-
-              <div className="space-y-3 pt-1">
-                <div>
-                  <label className="text-xs text-zinc-400 block mb-1">Select Hosteller Resident</label>
-                  <select
-                    value={selectedHostellerId}
-                    onChange={(e) => {
-                      setSelectedHostellerId(e.target.value);
-                      setVerificationResult(null);
-                      clearNotifications();
-                    }}
-                    className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-200 focus:outline-none focus:border-amber-500"
-                  >
-                    <option value="">-- Choose Hosteller Resident --</option>
-                    {hostellersList.map((h) => (
-                      <option key={h.id} value={h.id}>
-                        {h.first_name} {h.last_name} ({h.email})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="text-xs text-zinc-400 block mb-1">Meal Service Period</label>
-                  <select
-                    value={selectedMealPeriod}
-                    onChange={(e) => {
-                      setSelectedMealPeriod(e.target.value as MealPeriodId);
-                      setVerificationResult(null);
-                      clearNotifications();
-                    }}
-                    className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-200 focus:outline-none focus:border-amber-500"
-                  >
-                    <option value="breakfast">Breakfast</option>
-                    <option value="lunch">Lunch</option>
-                    <option value="dinner">Dinner</option>
-                    <option value="snacks">Snacks</option>
-                  </select>
-                </div>
-
-                <div className="flex items-center gap-2 pt-1">
-                  <button
-                    onClick={verifyEligibilityMutation}
-                    disabled={!selectedHostellerId || isVerifying}
-                    className="flex-1 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-zinc-200 px-3 py-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 border border-zinc-700 transition"
-                  >
-                    <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
-                    <span>{isVerifying ? "Verifying..." : "Verify Entitlement"}</span>
-                  </button>
-                </div>
-
-                {/* Verification Result Card */}
-                {verificationResult && (
-                  <div className={`p-3 rounded-lg border text-xs space-y-2 ${
-                    verificationResult.already_redeemed
-                      ? "bg-rose-500/10 border-rose-500/30 text-rose-300"
-                      : verificationResult.is_eligible
-                      ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
-                      : "bg-amber-500/10 border-amber-500/30 text-amber-300"
-                  }`}>
-                    <div className="flex items-center justify-between font-semibold">
-                      <span>Status:</span>
-                      <span>
-                        {verificationResult.already_redeemed
-                          ? "ALREADY REDEEMED TODAY"
-                          : verificationResult.is_eligible
-                          ? "ELIGIBLE FOR MEAL"
-                          : "PAY-PER-MEAL REQUIRED"}
-                      </span>
-                    </div>
-
-                    {verificationResult.active_entitlement && (
-                      <div className="text-[11px] text-zinc-300 space-y-0.5">
-                        <p>Plan: <strong>{verificationResult.active_entitlement.meal_plan_name}</strong></p>
-                        <p>Valid: {verificationResult.active_entitlement.start_date} to {verificationResult.active_entitlement.end_date}</p>
-                      </div>
-                    )}
-
-                    {!verificationResult.active_entitlement && verificationResult.allow_pay_per_meal && (
-                      <div className="text-[11px] text-amber-300">
-                        No subscription found. Surcharge applies: <strong>{formatCurrency(verificationResult.pay_per_meal_price, verificationResult.currency)}</strong>
-                      </div>
-                    )}
-
-                    {/* Action Buttons */}
-                    <div className="pt-2 flex flex-col gap-2">
-                      {!verificationResult.already_redeemed && (
-                        <button
-                          onClick={() => recordAttendanceMutation.mutate(false)}
-                          disabled={recordAttendanceMutation.isPending}
-                          className="w-full bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-2 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1.5"
-                        >
-                          <Check className="w-4 h-4" />
-                          <span>Confirm & Redeem Meal</span>
-                        </button>
-                      )}
-
-                      {verificationResult.already_redeemed && (
-                        <div>
-                          {!showOverrideField ? (
-                            <button
-                              onClick={() => setShowOverrideField(true)}
-                              className="w-full text-zinc-400 hover:text-zinc-200 text-[11px] underline text-center"
-                            >
-                              Manager Manual Override?
-                            </button>
-                          ) : (
-                            <div className="space-y-2 pt-1 border-t border-rose-500/20">
-                              <input
-                                type="text"
-                                placeholder="Reason for override..."
-                                value={manualOverrideReason}
-                                onChange={(e) => setManualOverrideReason(e.target.value)}
-                                className="w-full bg-zinc-950 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-200"
-                              />
-                              <button
-                                onClick={() => recordAttendanceMutation.mutate(true)}
-                                disabled={recordAttendanceMutation.isPending}
-                                className="w-full bg-rose-600 hover:bg-rose-500 text-white px-2 py-1.5 rounded text-xs font-semibold"
-                              >
-                                Authorize Second Meal Override
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setShowAssignPlanModal(true)}
+                  className="bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 transition"
+                >
+                  <UserCheck className="w-3.5 h-3.5" />
+                  <span>Assign to Resident</span>
+                </button>
+                <button
+                  onClick={() => setShowCreatePlanModal(true)}
+                  className="bg-zinc-800 hover:bg-zinc-700 text-zinc-200 px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 border border-zinc-700 transition"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>New Plan</span>
+                </button>
               </div>
             </div>
 
-            {/* Meal Plans & Active Subscriptions */}
-            <div className="lg:col-span-2 space-y-6">
-              {/* Meal Plans Available */}
-              <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
-                <div className="flex items-center justify-between mb-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {mealPlans.map((plan) => (
+                <div key={plan.id} className="p-3.5 rounded-lg bg-zinc-950/80 border border-zinc-800 flex flex-col justify-between">
                   <div>
-                    <h3 className="text-sm font-semibold text-white">Hostel Meal Plans</h3>
-                    <p className="text-xs text-zinc-400">Available meal subscription packages for hostellers</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => setShowAssignPlanModal(true)}
-                      className="bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 transition"
-                    >
-                      <UserCheck className="w-3.5 h-3.5" />
-                      <span>Assign to Resident</span>
-                    </button>
-                    <button
-                      onClick={() => setShowCreatePlanModal(true)}
-                      className="bg-zinc-800 hover:bg-zinc-700 text-zinc-200 px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 border border-zinc-700 transition"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      <span>New Plan</span>
-                    </button>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {mealPlans.map((plan) => (
-                    <div key={plan.id} className="p-3.5 rounded-lg bg-zinc-950/80 border border-zinc-800 flex flex-col justify-between">
-                      <div>
-                        <div className="flex items-center justify-between">
-                          <span className="font-semibold text-xs text-white">{plan.name}</span>
-                          <span className="text-xs font-mono font-bold text-amber-400">
-                            {formatCurrency(plan.price, plan.currency)}
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-zinc-400 mt-1">{plan.description || "All meals covered"}</p>
-                        <div className="flex flex-wrap gap-1 mt-2">
-                          {plan.included_meal_periods.map((period) => (
-                            <span key={period} className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300 font-mono">
-                              {period}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                      <div className="mt-3 pt-2 border-t border-zinc-800/80 flex items-center justify-between text-[11px] text-zinc-500">
-                        <span>Validity: {plan.validity_days} days</span>
-                        <span className="text-emerald-400">Active</span>
-                      </div>
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-xs text-white">{plan.name}</span>
+                      <span className="text-xs font-mono font-bold text-amber-400">
+                        {formatCurrency(plan.price, plan.currency)}
+                      </span>
                     </div>
-                  ))}
-                  {mealPlans.length === 0 && (
-                    <div className="col-span-2 text-center py-6 text-xs text-zinc-500">
-                      No meal plans configured yet. Click "New Plan" to create one.
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Active Resident Entitlements Table */}
-              <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
-                <div className="flex items-center justify-between mb-3">
-                  <div>
-                    <h3 className="text-sm font-semibold text-white">Active Resident Entitlements</h3>
-                    <p className="text-xs text-zinc-400">Hostellers with assigned dining plans</p>
-                  </div>
-                  <span className="text-xs text-zinc-400">{entitlements.length} total active</span>
-                </div>
-
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs">
-                    <thead>
-                      <tr className="border-b border-zinc-800 text-zinc-400 font-medium">
-                        <th className="pb-2">Hosteller</th>
-                        <th className="pb-2">Meal Plan</th>
-                        <th className="pb-2">Validity</th>
-                        <th className="pb-2">Status</th>
-                        <th className="pb-2">Finance Folio</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-zinc-800/60">
-                      {entitlements.map((ent) => (
-                        <tr key={ent.id} className="hover:bg-zinc-800/30">
-                          <td className="py-2.5 font-medium text-zinc-200">{ent.hosteller_name}</td>
-                          <td className="py-2.5 text-zinc-300">{ent.meal_plan_name}</td>
-                          <td className="py-2.5 text-zinc-400 font-mono text-[11px]">
-                            {ent.start_date} → {ent.end_date}
-                          </td>
-                          <td className="py-2.5">
-                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium">
-                              {ent.status}
-                            </span>
-                          </td>
-                          <td className="py-2.5">
-                            {ent.invoice_id ? (
-                              <span className="inline-flex items-center gap-1 text-[11px] font-mono text-purple-400 bg-purple-500/10 px-1.5 py-0.5 rounded border border-purple-500/20">
-                                <Receipt className="w-3 h-3" />
-                                {ent.invoice_id}
-                              </span>
-                            ) : (
-                              <span className="text-zinc-600">—</span>
-                            )}
-                          </td>
-                        </tr>
+                    <p className="text-[11px] text-zinc-400 mt-1">{plan.description || "All meals covered"}</p>
+                    <div className="flex flex-wrap gap-1 mt-2">
+                      {plan.included_meal_periods.map((period) => (
+                        <span key={period} className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300 font-mono">
+                          {period}
+                        </span>
                       ))}
-                      {entitlements.length === 0 && (
-                        <tr>
-                          <td colSpan={5} className="py-6 text-center text-xs text-zinc-500">
-                            No active entitlements yet.
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
+                    </div>
+                  </div>
+                  <div className="mt-3 pt-2 border-t border-zinc-800/80 flex items-center justify-between text-[11px] text-zinc-500">
+                    <span>Validity: {plan.validity_days} days</span>
+                    <span className="text-emerald-400 font-medium">Active</span>
+                  </div>
                 </div>
-              </div>
+              ))}
+              {mealPlans.length === 0 && (
+                <div className="col-span-full text-center py-6 text-xs text-zinc-500">
+                  No meal plans configured yet. Click "New Plan" to create one.
+                </div>
+              )}
             </div>
           </div>
 
-          {/* Today's Attendance Logs */}
+          {/* Active Resident Entitlements Table */}
           <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
-            <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center justify-between mb-3">
               <div>
-                <h3 className="text-sm font-semibold text-white">Today's Meal Attendance Logs</h3>
-                <p className="text-xs text-zinc-400">Real-time redemption records for {todayStr}</p>
+                <h3 className="text-sm font-semibold text-white">Active Resident Entitlements</h3>
+                <p className="text-xs text-zinc-400">Hostellers with assigned dining plans</p>
               </div>
-              <span className="text-xs text-zinc-400 font-mono">
-                Total meals logged: {attendances.length}
-              </span>
+              <span className="text-xs text-zinc-400">{entitlements.length} total active</span>
             </div>
 
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs">
                 <thead>
                   <tr className="border-b border-zinc-800 text-zinc-400 font-medium">
-                    <th className="pb-2">Timestamp</th>
-                    <th className="pb-2">Hosteller Resident</th>
-                    <th className="pb-2">Meal Period</th>
-                    <th className="pb-2">Mode</th>
-                    <th className="pb-2">Recorded By</th>
-                    <th className="pb-2">Override Note</th>
+                    <th className="pb-2">Hosteller</th>
+                    <th className="pb-2">Meal Plan</th>
+                    <th className="pb-2">Validity</th>
+                    <th className="pb-2">Status</th>
+                    <th className="pb-2">Finance Folio</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-zinc-800/60">
-                  {attendances.map((att) => (
-                    <tr key={att.id} className="hover:bg-zinc-800/30">
-                      <td className="py-2.5 font-mono text-[11px] text-zinc-400">
-                        {att.timestamp.split("T")[1]?.substring(0, 8)}
+                  {entitlements.map((ent) => (
+                    <tr key={ent.id} className="hover:bg-zinc-800/30">
+                      <td className="py-2.5 font-medium text-zinc-200">{ent.hosteller_name}</td>
+                      <td className="py-2.5 text-zinc-300">{ent.meal_plan_name}</td>
+                      <td className="py-2.5 text-zinc-400 font-mono text-[11px]">
+                        {ent.start_date} → {ent.end_date}
                       </td>
-                      <td className="py-2.5 font-medium text-zinc-200">{att.hosteller_name}</td>
                       <td className="py-2.5">
-                        <span className="text-[10px] px-2 py-0.5 rounded bg-amber-500/10 text-amber-300 font-mono uppercase">
-                          {att.meal_period}
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium">
+                          {ent.status}
                         </span>
                       </td>
                       <td className="py-2.5">
-                        {att.is_manual_override ? (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-300 border border-rose-500/20 font-medium">
-                            Override
-                          </span>
-                        ) : att.is_pay_per_meal ? (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-sky-500/10 text-sky-300 border border-sky-500/20 font-medium">
-                            Pay-per-meal ({formatCurrency(att.price_charged || 0, att.currency)})
+                        {ent.invoice_id ? (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-mono text-purple-400 bg-purple-500/10 px-1.5 py-0.5 rounded border border-purple-500/20">
+                            <Receipt className="w-3 h-3" />
+                            {ent.invoice_id}
                           </span>
                         ) : (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-300 border border-emerald-500/20 font-medium">
-                            Plan Entitlement
-                          </span>
+                          <span className="text-zinc-600">—</span>
                         )}
                       </td>
-                      <td className="py-2.5 text-zinc-400 text-[11px]">{att.recorded_by_name}</td>
-                      <td className="py-2.5 text-zinc-500 text-[11px] italic">{att.override_reason || "—"}</td>
                     </tr>
                   ))}
-                  {attendances.length === 0 && (
+                  {entitlements.length === 0 && (
                     <tr>
-                      <td colSpan={6} className="py-6 text-center text-xs text-zinc-500">
-                        No meals redeemed yet today.
+                      <td colSpan={5} className="py-6 text-center text-xs text-zinc-500">
+                        No active entitlements yet. Click "Assign to Resident" above.
                       </td>
                     </tr>
                   )}
@@ -1475,7 +1191,7 @@ export const MessRestaurantCard: React.FC = () => {
             <div className="flex items-center justify-between p-3.5 rounded-lg bg-zinc-950 border border-zinc-800">
               <div>
                 <span className="text-xs font-semibold text-white block">Hostel Mess Service</span>
-                <span className="text-[11px] text-zinc-400">Enable resident meal plans and communal mess hall attendance</span>
+                <span className="text-[11px] text-zinc-400">Enable resident meal plans and communal dining hall services</span>
               </div>
               <input
                 type="checkbox"

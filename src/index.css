@@ -1,6 +1,6 @@
 @import "tailwindcss";
 
-@custom-variant dark (&:where(.dark, .dark *));
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *, .dark, .dark *));
 
 @layer base {
   :root {
@@ -13,7 +13,7 @@
     --text-muted: #64748b;
   }
 
-  .dark {
+  .dark, [data-theme="dark"] {
     --bg-app: #09090b;
     --bg-surface: #121215;
     --bg-surface-elevated: #18181b;
@@ -27,6 +27,93 @@
     background-color: var(--bg-app);
     color: var(--text-primary);
     transition: background-color 0.15s ease, color 0.15s ease;
+  }
+}
+
+/* Light mode surface & text adaptation for consistent, crystal-clear UX */
+html.light,
+html:not(.dark) {
+  /* Surfaces that were hardcoded dark */
+  .bg-zinc-950:not(button):not([class*="bg-indigo-"]):not([class*="bg-emerald-"]):not([class*="bg-amber-"]):not([class*="bg-sky-"]):not([class*="bg-rose-"]):not([class*="bg-purple-"]) {
+    background-color: #f8fafc;
+  }
+
+  .bg-zinc-900:not(button):not([class*="bg-indigo-"]):not([class*="bg-emerald-"]):not([class*="bg-amber-"]):not([class*="bg-sky-"]):not([class*="bg-rose-"]):not([class*="bg-purple-"]),
+  .bg-zinc-900\/60,
+  .bg-zinc-900\/80,
+  .bg-zinc-900\/50,
+  .bg-zinc-900\/40,
+  .bg-zinc-900\/70,
+  .bg-zinc-900\/90 {
+    background-color: #ffffff;
+  }
+
+  .bg-zinc-850,
+  .bg-zinc-800:not(button):not([class*="bg-indigo-"]):not([class*="bg-emerald-"]):not([class*="bg-amber-"]):not([class*="bg-sky-"]):not([class*="bg-rose-"]):not([class*="bg-purple-"]) {
+    background-color: #f1f5f9;
+  }
+
+  /* Borders */
+  .border-zinc-800,
+  .border-zinc-800\/80,
+  .border-zinc-800\/60,
+  .border-zinc-800\/40,
+  .border-zinc-700 {
+    border-color: #e2e8f0;
+  }
+
+  /* Text colors */
+  .text-zinc-100:not(button):not([class*="bg-indigo-"]):not([class*="bg-emerald-"]):not([class*="bg-amber-"]):not([class*="bg-sky-"]):not([class*="bg-rose-"]):not([class*="bg-purple-"]),
+  .text-zinc-200:not(button):not([class*="bg-indigo-"]):not([class*="bg-emerald-"]):not([class*="bg-amber-"]):not([class*="bg-sky-"]):not([class*="bg-rose-"]):not([class*="bg-purple-"]) {
+    color: #0f172a;
+  }
+
+  .text-zinc-300:not(button):not([class*="bg-indigo-"]):not([class*="bg-emerald-"]):not([class*="bg-amber-"]):not([class*="bg-sky-"]):not([class*="bg-rose-"]):not([class*="bg-purple-"]),
+  .text-zinc-400:not(button):not([class*="bg-indigo-"]):not([class*="bg-emerald-"]):not([class*="bg-amber-"]):not([class*="bg-sky-"]):not([class*="bg-rose-"]):not([class*="bg-purple-"]) {
+    color: #475569;
+  }
+
+  .text-zinc-500 {
+    color: #64748b;
+  }
+
+  h1.text-white,
+  h2.text-white,
+  h3.text-white,
+  h4.text-white {
+    color: #0f172a;
+  }
+
+  /* Inputs, selects, and textareas */
+  input:not([type="checkbox"]):not([type="radio"]),
+  select,
+  textarea {
+    background-color: #ffffff !important;
+    border-color: #cbd5e1 !important;
+    color: #0f172a !important;
+  }
+
+  input::placeholder,
+  textarea::placeholder {
+    color: #94a3b8 !important;
+  }
+
+  /* Tables */
+  thead tr {
+    background-color: #f8fafc !important;
+    border-bottom-color: #e2e8f0 !important;
+  }
+
+  thead th {
+    color: #475569 !important;
+  }
+
+  tbody tr {
+    border-bottom-color: #f1f5f9 !important;
+  }
+
+  tbody tr:hover {
+    background-color: #f8fafc !important;
   }
 }
 

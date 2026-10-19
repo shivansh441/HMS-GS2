@@ -140,10 +140,15 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="h-5 w-[1px] bg-zinc-200 dark:bg-zinc-800" />
 
         {/* Theme Switcher Toggle (Light, Dark, System) */}
-        <div className="flex items-center bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg p-0.5">
+        <div
+          role="group"
+          aria-label="Theme mode switcher"
+          className="flex items-center bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg p-0.5"
+        >
           <button
             onClick={() => setTheme("light")}
-            title="Light Theme"
+            aria-label="Light mode"
+            title="Switch to Light Theme"
             className={`p-1.5 rounded-md transition-colors ${
               theme === "light"
                 ? "bg-white text-indigo-600 shadow-xs font-semibold"
@@ -154,7 +159,8 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
           <button
             onClick={() => setTheme("dark")}
-            title="Dark Theme"
+            aria-label="Dark mode"
+            title="Switch to Dark Theme"
             className={`p-1.5 rounded-md transition-colors ${
               theme === "dark"
                 ? "bg-zinc-800 text-indigo-400 shadow-xs font-semibold"
@@ -165,7 +171,8 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
           <button
             onClick={() => setTheme("system")}
-            title="System Theme"
+            aria-label="System theme mode"
+            title="Follow System Theme"
             className={`p-1.5 rounded-md transition-colors ${
               theme === "system"
                 ? "bg-white dark:bg-zinc-800 text-indigo-600 dark:text-indigo-400 shadow-xs font-semibold"
