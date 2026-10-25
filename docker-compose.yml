@@ -1,0 +1,64 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: haven-stays-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: haven_stays
+      POSTGRES_USER: haven_admin
+      POSTGRES_PASSWORD: HavenPostgresPassword123!
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U haven_admin -d haven_stays"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: haven-stays-backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://haven_admin:HavenPostgresPassword123!@postgres:5432/haven_stays
+      ENVIRONMENT: development
+      DEBUG: "true"
+      CORS_ORIGINS: '["http://localhost:5173","http://localhost:3000","http://127.0.0.1:5173","http://127.0.0.1:3000"]'
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  admin-panel:
+    build:
+      context: ./admin-panel
+      dockerfile: Dockerfile
+    container_name: haven-stays-admin
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_API_URL: http://localhost:8000/api/v1
+    depends_on:
+      - backend
+
+  public-website:
+    build:
+      context: ./public-website
+      dockerfile: Dockerfile
+    container_name: haven-stays-public
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:

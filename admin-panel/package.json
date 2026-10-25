@@ -1,0 +1,31 @@
+{
+  "name": "haven-stays-admin-panel",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port=5173 --host=0.0.0.0",
+    "build": "tsc && vite build",
+    "preview": "vite preview --port=5173",
+    "lint": "tsc --noEmit",
+    "check:no-animation": "node scripts/check-no-animation.js"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.0.0",
+    "axios": "^1.7.0",
+    "lucide-react": "^0.546.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-hook-form": "^7.50.0",
+    "react-router-dom": "^7.0.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.5.0",
+    "vite": "^6.0.0"
+  }
+}
