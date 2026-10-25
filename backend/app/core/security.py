@@ -1,17 +1,21 @@
 import hashlib
 import re
 import secrets
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 import jwt
 import pyotp
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
+from fastapi import Request
 
 from app.core.config import settings
+from app.core.errors import ForbiddenError, UnauthorizedError
 
-# Argon2id hasher with specified parameters
+# Argon2id hasher with specified parameters: memory 65536, time 3, parallelism 4
 ph = PasswordHasher(
     time_cost=settings.ARGON2_TIME_COST,
     memory_cost=settings.ARGON2_MEMORY_COST,
@@ -20,9 +24,13 @@ ph = PasswordHasher(
     salt_len=16,
 )
 
+# Precomputed dummy hash for constant-time verification when account doesn't exist
+DUMMY_ARGON2_HASH = ph.hash("DummyPasswordVerificationForTimingResistance123!")
+
 COMMON_PASSWORDS = {
     "password1234", "password12345", "123456789012", "qwertyuiop12",
-    "admin123456!", "welcome12345!", "letmein12345!", "changeme1234!"
+    "admin123456!", "welcome12345!", "letmein12345!", "changeme1234!",
+    "customerpass1", "adminsecurepass"
 }
 
 def validate_password_strength(password: str) -> None:
@@ -48,31 +56,77 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     except (VerifyMismatchError, Exception):
         return False
 
+def dummy_verify_password() -> None:
+    """Perform dummy argon2 verification to prevent timing side channels on nonexistent accounts."""
+    try:
+        ph.verify(DUMMY_ARGON2_HASH, "WrongPasswordForDummyVerification123!")
+    except Exception:
+        pass
+
+def needs_rehash(hashed_password: str) -> bool:
+    return ph.check_needs_rehash(hashed_password)
+
 def hash_token(raw_token: str) -> str:
-    """SHA-256 hash for database storage of refresh tokens"""
+    """SHA-256 hash for database storage of refresh tokens, one-time tokens, and OTPs."""
     return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
 
 def generate_opaque_token() -> str:
-    """Generates a high-entropy opaque token for refresh tokens"""
+    """Generates a high-entropy opaque token for refresh tokens."""
     return secrets.token_urlsafe(48)
 
-def get_refresh_token_duration_seconds(account_type: str) -> int:
+def generate_one_time_token() -> tuple[str, str]:
+    """Generates a 256-bit random URL-safe token and its SHA-256 hash."""
+    raw_token = secrets.token_urlsafe(32)
+    return raw_token, hash_token(raw_token)
+
+def generate_otp_code() -> tuple[str, str]:
+    """Generates a 6-digit numeric OTP and its SHA-256 hash."""
+    code = "".join(secrets.choice("0123456789") for _ in range(6))
+    return code, hash_token(code)
+
+def generate_recovery_codes(count: int = 10) -> list[tuple[str, str]]:
+    """Generates formatted one-time recovery codes (e.g. ABCD-1234) and their hashes."""
+    codes: list[tuple[str, str]] = []
+    for _ in range(count):
+        part1 = secrets.token_hex(2).upper()
+        part2 = secrets.token_hex(2).upper()
+        plain = f"{part1}-{part2}"
+        codes.append((plain, hash_token(plain)))
+    return codes
+
+def get_refresh_token_duration_seconds(
+    account_type: str,
+    remember: bool = False,
+    stay_end: datetime | None = None,
+) -> int:
     """
-    Refresh durations:
-    - Guest / Resident: 7 days
-    - Staff / Manager: 12 hours
+    Refresh lifetimes:
+    - Guest / Resident: 7 days (30 days with remember_device)
+    - Staff / Manager: 12 hours (never extended)
     - Super Admin: 8 hours
+    - Hostel guest: session ends at stay_end if provided, else 24 hours
     """
     if account_type == "SUPER_ADMIN":
         return 8 * 3600
     if account_type in ("MANAGER", "STAFF"):
         return 12 * 3600
+    if account_type == "SHORT_TERM_HOSTEL_GUEST":
+        if stay_end:
+            now = datetime.now(timezone.utc)
+            diff = int((stay_end - now).total_seconds())
+            return max(3600, diff) # At least 1 hour
+        return 24 * 3600
+    if remember:
+        return 30 * 24 * 3600
     return 7 * 24 * 3600
 
 def create_access_token(
     subject: str,
-    audience: Literal["admin", "customer"],
+    audience: str,
     account_type: str,
+    staff_role: str | None = None,
+    session_id: str | None = None,
+    mfa: bool = False,
     extra_claims: dict[str, Any] | None = None,
     expires_delta: timedelta | None = None,
 ) -> str:
@@ -82,7 +136,10 @@ def create_access_token(
     payload: dict[str, Any] = {
         "sub": subject,
         "aud": audience,
-        "account_type": account_type,
+        "accountType": account_type,
+        "staffRole": staff_role,
+        "sid": session_id or "",
+        "mfa": mfa,
         "iat": int(now.timestamp()),
         "exp": int(expire.timestamp()),
     }
@@ -91,28 +148,54 @@ def create_access_token(
     
     return jwt.encode(payload, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
 
-def decode_access_token(token: str, expected_audience: Literal["admin", "customer"]) -> dict[str, Any]:
+def decode_access_token(token: str, expected_audience: str | list[str]) -> dict[str, Any]:
     """
     Decodes and validates JWT access token enforcing audience separation.
     """
+    expected_audiences = [expected_audience] if isinstance(expected_audience, str) else expected_audience
     try:
+        # First decode unverified to check audience
+        unverified = jwt.decode(token, options={"verify_signature": False})
+        aud = unverified.get("aud")
+        if aud not in expected_audiences:
+            raise UnauthorizedError(
+                f"Invalid audience: token intended for '{aud}', not {expected_audiences}",
+                code="INVALID_AUDIENCE"
+            )
+        
         payload = jwt.decode(
             token,
             settings.JWT_SECRET,
             algorithms=[settings.JWT_ALGORITHM],
-            audience=expected_audience,
+            audience=aud,
         )
         return payload
-    except jwt.InvalidAudienceError as e:
-        raise ValueError(f"Invalid audience: token not intended for {expected_audience}") from e
     except jwt.ExpiredSignatureError as e:
-        raise ValueError("Token has expired") from e
+        raise UnauthorizedError("Token has expired", code="TOKEN_EXPIRED") from e
     except jwt.PyJWTError as e:
-        raise ValueError(f"Invalid token: {e}") from e
+        raise UnauthorizedError(f"Invalid token: {e}", code="INVALID_TOKEN") from e
 
 # MFA / TOTP helpers
 def generate_mfa_secret() -> str:
     return pyotp.random_base32()
+
+def verify_totp_code_with_replay(
+    secret: str,
+    code: str,
+    last_step: int | None = None
+) -> tuple[bool, int | None]:
+    """
+    Verifies TOTP code allowing +/- 1 step drift (30-second window).
+    Prevents replay by checking against last_step.
+    """
+    totp = pyotp.TOTP(secret)
+    now_step = int(time.time() // 30)
+    for step in (now_step, now_step - 1, now_step + 1):
+        if totp.at(step) == code:
+            if last_step is not None and step <= last_step:
+                return False, None # Replay blocked
+            return True, step
+    return False, None
 
 def verify_totp_code(secret: str, code: str) -> bool:
     totp = pyotp.TOTP(secret)
@@ -120,4 +203,25 @@ def verify_totp_code(secret: str, code: str) -> bool:
 
 def get_totp_provisioning_uri(secret: str, username_or_email: str) -> str:
     totp = pyotp.TOTP(secret)
-    return totp.provisioning_uri(name=username_or_email, issuer_name="Haven Stays Admin")
+    return totp.provisioning_uri(name=username_or_email, issuer_name="Haven Stays")
+
+def verify_csrf_and_origin(request: Request) -> None:
+    """
+    CSRF enforcement for refresh and logout endpoints:
+    1. Custom header: X-Requested-With: haven
+    2. Origin / Referer allow-list check
+    """
+    custom_header = request.headers.get("x-requested-with", "").lower()
+    if custom_header != "haven":
+        raise ForbiddenError("CSRF protection: missing or invalid X-Requested-With header", code="CSRF_REJECTED")
+
+    origin = request.headers.get("origin")
+    referer = request.headers.get("referer")
+    candidate = origin or referer
+
+    if candidate:
+        parsed = urlparse(candidate)
+        candidate_base = f"{parsed.scheme}://{parsed.netloc}"
+        allowed_bases = [urlparse(o).netloc for o in settings.CORS_ORIGINS]
+        if parsed.netloc not in allowed_bases and candidate_base not in settings.CORS_ORIGINS:
+            raise ForbiddenError(f"CSRF protection: unauthorized origin/referer '{candidate}'", code="CSRF_REJECTED")

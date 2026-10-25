@@ -1,0 +1,7 @@
+{
+  "tests/test_auth_advanced.py::test_lockout_and_progressive_backoff": true,
+  "tests/test_auth_advanced.py::test_no_account_enumeration": true,
+  "tests/test_auth_advanced.py::test_magic_link_flow_with_nonce": true,
+  "tests/test_auth_advanced.py::test_csrf_protection_and_token_reuse_detection": true,
+  "tests/test_auth_advanced.py::test_admin_user_mutations_and_scoping": true
+}

@@ -61,8 +61,12 @@ class User(Base):
 
     # Security controls
     failed_login_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    lockout_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_totp_step: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    pending_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    pending_phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     created_by_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
@@ -129,21 +133,23 @@ class OtpCode(Base):
     recipient: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
     code_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     channel: Mapped[str] = mapped_column(String(16), default="EMAIL", nullable=False) # EMAIL | SMS
-    purpose: Mapped[str] = mapped_column(String(32), default="LOGIN", nullable=False) # LOGIN | REGISTER | PASSWORD_RESET
+    purpose: Mapped[str] = mapped_column(String(32), default="LOGIN", nullable=False) # LOGIN | VERIFY_PHONE | VERIFY_EMAIL
     attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     is_used: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 class VerificationToken(Base):
     __tablename__ = "verification_tokens"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
-    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=True)
     token_hash: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
-    token_type: Mapped[str] = mapped_column(String(32), nullable=False) # EMAIL_VERIFY | PHONE_VERIFY | PASSWORD_RESET
+    token_type: Mapped[str] = mapped_column(String(32), nullable=False) # EMAIL_VERIFY | PASSWORD_RESET | MAGIC_LINK | ACTIVATION
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     is_used: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    metadata_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 class LinkedIdentity(Base):
@@ -153,6 +159,7 @@ class LinkedIdentity(Base):
     user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     provider: Mapped[str] = mapped_column(String(32), nullable=False) # GOOGLE | APPLE
     provider_user_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
     __table_args__ = (

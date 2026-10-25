@@ -20,6 +20,7 @@ from app.modules.audit.router import audit_router
 from app.modules.auth.deps import limiter
 from app.modules.auth.router import admin_auth_router, auth_router
 from app.modules.me.router import admin_me_router, me_router
+from app.modules.notifier.router import dev_router
 from app.modules.properties.router import properties_router
 from app.modules.users.router import users_router
 
@@ -82,5 +83,6 @@ app.include_router(admin_me_router, prefix=api_v1_prefix)
 app.include_router(properties_router, prefix=api_v1_prefix)
 app.include_router(users_router, prefix=api_v1_prefix)
 app.include_router(audit_router, prefix=api_v1_prefix)
+app.include_router(dev_router, prefix=api_v1_prefix)
 
 logger.info("Haven Stays FastAPI application initialized successfully")

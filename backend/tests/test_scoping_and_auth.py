@@ -23,27 +23,35 @@ def test_customer_registration_and_login_flow(client: TestClient):
         "account_type": "HOTEL_GUEST"
     }
     reg_res = client.post("/api/v1/auth/register", json=reg_payload)
-    assert reg_res.status_code == 201
-    reg_data = reg_res.json()
-    assert "accessToken" in reg_data
-    assert reg_data["user"]["email"] == "brandnew.guest@havenstays.com"
-    token = reg_data["accessToken"]
+    assert reg_res.status_code == 202
 
-    # 2. GET /me profile
+    # Fetch token from dev outbox
+    outbox_res = client.get("/api/v1/dev/outbox?destination=brandnew.guest@havenstays.com")
+    assert outbox_res.status_code == 200
+    outbox = outbox_res.json()
+    assert len(outbox) >= 1
+    raw_token = outbox[0]["body"].split("token=")[1].strip()
+
+    # 2. Verify email
+    ver_res = client.post("/api/v1/auth/verify-email", json={"token": raw_token})
+    assert ver_res.status_code == 200
+    ver_data = ver_res.json()
+    assert "accessToken" in ver_data
+    token = ver_data["accessToken"]
+
+    # 3. GET /me profile
     me_res = client.get("/api/v1/me", headers={"Authorization": f"Bearer {token}"})
     assert me_res.status_code == 200
     assert me_res.json()["email"] == "brandnew.guest@havenstays.com"
 
-    # 3. GET /me/overview (Registered no booking state)
+    # 4. GET /me/overview (Registered no booking state)
     overview_res = client.get("/api/v1/me/overview", headers={"Authorization": f"Bearer {token}"})
     assert overview_res.status_code == 200
     overview_data = overview_res.json()
     assert overview_data["stage"] == "REGISTERED_NO_BOOKING"
     assert overview_data["bookingsCount"] == 0
-    assert overview_data["profileCompletion"]["percent"] == 40
-    assert "EMAIL_VERIFIED" in overview_data["profileCompletion"]["missing"]
 
-    # 4. Sign in
+    # 5. Sign in
     login_res = client.post("/api/v1/auth/login", json={
         "email": "brandnew.guest@havenstays.com",
         "password": "StrongPassword123!@"

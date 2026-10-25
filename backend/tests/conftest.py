@@ -32,6 +32,11 @@ def setup_test_db():
     yield
     Base.metadata.drop_all(bind=test_engine)
 
+@pytest.fixture(autouse=True)
+def reset_rate_limits():
+    from app.core.rate_limit import rate_limiter
+    rate_limiter.clear()
+
 @pytest.fixture
 def db_session():
     db = TestingSessionLocal()

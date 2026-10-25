@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     ARGON2_TIME_COST: int = 3
     ARGON2_PARALLELISM: int = 4
 
+    # OAuth
+    OAUTH_MODE: str = "mock" # mock | production
+    PUBLIC_WEBSITE_URL: str = "http://localhost:3000"
+    ADMIN_PANEL_URL: str = "http://localhost:5173"
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

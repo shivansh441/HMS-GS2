@@ -13,12 +13,18 @@ class AppException(Exception):
         code: str = "BAD_REQUEST",
         message: str = "An error occurred",
         details: list[Any] | None = None,
+        headers: dict[str, str] | None = None,
     ):
         self.status_code = status_code
         self.code = code
         self.message = message
         self.details = details or []
+        self.headers = headers
         super().__init__(message)
+
+class BadRequestError(AppException):
+    def __init__(self, message: str = "Bad request", code: str = "BAD_REQUEST", details: list[Any] | None = None):
+        super().__init__(status_code=status.HTTP_400_BAD_REQUEST, code=code, message=message, details=details)
 
 class NotFoundError(AppException):
     def __init__(self, message: str = "Resource not found", code: str = "NOT_FOUND"):
@@ -45,9 +51,16 @@ class ValidationError(AppException):
             details=details or [],
         )
 
-def format_error_response(status_code: int, code: str, message: str, details: list[Any] | None = None) -> JSONResponse:
+def format_error_response(
+    status_code: int,
+    code: str,
+    message: str,
+    details: list[Any] | None = None,
+    headers: dict[str, str] | None = None,
+) -> JSONResponse:
     return JSONResponse(
         status_code=status_code,
+        headers=headers,
         content={
             "statusCode": status_code,
             "error": {
@@ -59,7 +72,7 @@ def format_error_response(status_code: int, code: str, message: str, details: li
     )
 
 async def app_exception_handler(request: Request, exc: AppException) -> JSONResponse:
-    return format_error_response(exc.status_code, exc.code, exc.message, exc.details)
+    return format_error_response(exc.status_code, exc.code, exc.message, exc.details, headers=exc.headers)
 
 async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     details = []

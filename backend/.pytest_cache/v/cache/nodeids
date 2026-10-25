@@ -1,0 +1,14 @@
+[
+  "tests/test_auth_advanced.py::test_admin_user_mutations_and_scoping",
+  "tests/test_auth_advanced.py::test_csrf_protection_and_token_reuse_detection",
+  "tests/test_auth_advanced.py::test_lockout_and_progressive_backoff",
+  "tests/test_auth_advanced.py::test_magic_link_flow_with_nonce",
+  "tests/test_auth_advanced.py::test_no_account_enumeration",
+  "tests/test_auth_advanced.py::test_otp_flow_and_max_attempts",
+  "tests/test_scoping_and_auth.py::test_admin_mfa_step",
+  "tests/test_scoping_and_auth.py::test_customer_registration_and_login_flow",
+  "tests/test_scoping_and_auth.py::test_customer_token_rejected_on_admin_routes",
+  "tests/test_scoping_and_auth.py::test_health_and_readiness",
+  "tests/test_scoping_and_auth.py::test_manager_scoping_and_cross_property_access",
+  "tests/test_scoping_and_auth.py::test_super_admin_sees_all_and_unassigned_pool"
+]

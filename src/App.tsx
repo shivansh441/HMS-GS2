@@ -65,12 +65,12 @@ export default function App() {
           <div className="hidden sm:flex items-center space-x-2 text-[11px] font-mono pl-3 border-l border-slate-800">
             <span className="flex items-center text-emerald-400">
               <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block mr-1.5 animate-pulse"></span>
-              FastAPI :8000
+              Core API :3000 (/api/v1)
             </span>
             <span className="text-slate-600">•</span>
-            <span className="text-blue-400">Admin :5173 (No Motion)</span>
+            <span className="text-blue-400">Admin Panel (No Motion)</span>
             <span className="text-slate-600">•</span>
-            <span className="text-amber-300">Public :3000 (GSAP)</span>
+            <span className="text-amber-300">Public Website (GSAP)</span>
           </div>
         </div>
 
@@ -201,14 +201,14 @@ export default function App() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               <div className="bg-white border border-slate-200 p-6 rounded-2xl space-y-3">
                 <div className="flex items-center justify-between">
-                  <span className="font-bold text-sm text-slate-900 font-mono">FastAPI Backend</span>
+                  <span className="font-bold text-sm text-slate-900 font-mono">Core API Service</span>
                   <span className="px-2 py-0.5 text-[10px] font-mono font-bold bg-emerald-100 text-emerald-800 rounded">
-                    RUNNING
+                    ACTIVE
                   </span>
                 </div>
                 <div className="text-xs text-slate-600 space-y-1 font-mono">
-                  <div>Endpoint: http://127.0.0.1:8000</div>
-                  <div>Docs: /docs (OpenAPI 3.1)</div>
+                  <div>Endpoint: /api/v1</div>
+                  <div>Docs: /api/v1 (OpenAPI 3.1)</div>
                   <div>Health: {backendHealth?.status || 'ok'}</div>
                   <div>DB: {backendReady?.database || 'connected'}</div>
                 </div>
