@@ -1,6 +1,6 @@
 {
   "name": "Haven Stays Hospitality Platform",
-  "description": "Full-stack hospitality monorepo with FastAPI backend, Next.js public website with GSAP animations, and strictly un-animated React admin panel.",
+  "description": "Full-stack hospitality monorepo with Express backend, Next.js public website with GSAP animations, and strictly un-animated React admin panel.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
