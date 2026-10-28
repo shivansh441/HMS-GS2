@@ -6,10 +6,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const root = path.resolve(__dirname, '..');
 
-const openapiPath = path.join(root, 'backend', 'openapi.json');
-if (!fs.existsSync(openapiPath)) {
-  console.error('[generate-types] backend/openapi.json not found! Exporting schema first...');
-}
 
 const typesTemplate = `/**
  * AUTO-GENERATED TYPED API CLIENT DEFINITIONS
