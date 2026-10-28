@@ -1,4 +1,5 @@
 import json
+import hmac
 import secrets
 import time
 import uuid
@@ -14,7 +15,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.crypto import decrypt_data, encrypt_data
 from app.core.errors import AppException, ConflictError, ForbiddenError, NotFoundError, UnauthorizedError, ValidationError
-from app.core.permissions import AccountType
+from app.core.permissions import Role
 from app.core.rate_limit import get_client_ip, rate_limiter
 from app.core.security import (
     create_access_token,
@@ -97,14 +98,17 @@ def create_user_session(
     audience: Literal["admin", "customer"],
     response: Response,
     remember: bool = False,
-    stay_end: datetime | None = None,
     family_id: str | None = None,
     ip: str | None = None,
     user_agent: str | None = None,
+    absolute_expires_at: datetime | None = None,
 ) -> tuple[str, str, int, SessionModel]:
     now = utc_now()
-    duration = get_refresh_token_duration_seconds(user.account_type, remember=remember, stay_end=stay_end)
+    duration = get_refresh_token_duration_seconds(user.role, remember=remember)
     expires_at = now + timedelta(seconds=duration)
+    if absolute_expires_at is not None:
+        expires_at = min(expires_at, ensure_utc(absolute_expires_at) or expires_at)
+        duration = max(1, int((expires_at - now).total_seconds()))
 
     opaque_refresh = generate_opaque_token()
     token_hashed = hash_token(opaque_refresh)
@@ -127,14 +131,12 @@ def create_user_session(
     access_token = create_access_token(
         subject=user.id,
         audience=audience,
-        account_type=user.account_type,
-        staff_role=user.staff_role,
+        role=user.role,
         session_id=session.id,
         mfa=user.mfa_enabled,
         extra_claims={
             "email": user.email,
-            "role": user.account_type,
-            "staff_role": user.staff_role,
+            "role": user.role,
         },
     )
 
@@ -228,6 +230,9 @@ def rotate_refresh_token(
         family_id=session.family_id,
         ip=ip,
         user_agent=user_agent,
+        absolute_expires_at=(
+            session.expires_at if user.role in (Role.ADMIN, Role.STAFF) else None
+        ),
     )
 
     db.commit()
@@ -276,7 +281,6 @@ def revoke_all_user_sessions(db: Session, user_id: str, reason: str = "ALL_SESSI
 
 def register_customer_flow(
     db: Session,
-    account_type: str,
     email: str,
     password: str,
     first_name: str,
@@ -311,7 +315,7 @@ def register_customer_flow(
         password_hash=hash_password(password),
         full_name=full_name,
         phone=phone.strip() if phone else None,
-        account_type=account_type,
+        role=Role.CUSTOMER,
         status="PENDING_ACTIVATION",
     )
     db.add(user)
@@ -342,7 +346,7 @@ def register_customer_flow(
         action="CUSTOMER_REGISTERED",
         actor_user_id=user.id,
         target_user_id=user.id,
-        details={"account_type": account_type},
+        details={"role": Role.CUSTOMER},
         ip=ip,
         user_agent=user_agent,
     )
@@ -446,34 +450,36 @@ def customer_login_flow(
     ip = get_client_ip(request)
     clean_id = identifier.strip().lower()
 
-    # Rate limit: 5/min per IP + identifier
-    rate_limiter.check(key=f"cust_login:{ip}:{clean_id}", max_requests=5, window_seconds=60)
-
     user = db.scalar(select(User).where(or_(User.email == clean_id, User.phone == clean_id)))
     invalid_err = UnauthorizedError("Invalid email or password", code="INVALID_CREDENTIALS")
 
     if not user:
+        rate_limiter.check(key=f"cust_login:{ip}:{clean_id}", max_requests=5, window_seconds=60)
         dummy_verify_password()
         raise invalid_err
 
     # Staff/admin cannot log in through customer auth
-    if user.account_type in (AccountType.SUPER_ADMIN, AccountType.MANAGER, AccountType.STAFF):
+    if user.role != Role.CUSTOMER:
+        rate_limiter.check(key=f"cust_login:{ip}:{clean_id}", max_requests=5, window_seconds=60)
         dummy_verify_password()
         raise invalid_err
 
     # Suspended or archived accounts get generic error
     if user.status in ("SUSPENDED", "ARCHIVED"):
+        rate_limiter.check(key=f"cust_login:{ip}:{clean_id}", max_requests=5, window_seconds=60)
         dummy_verify_password()
         raise invalid_err
 
     # Pending activation accounts
     if user.status == "PENDING_ACTIVATION":
+        rate_limiter.check(key=f"cust_login:{ip}:{clean_id}", max_requests=5, window_seconds=60)
         dummy_verify_password()
         if user.email:
             try:
                 resend_verification_email(db, user.email, ip)
-            except Exception:
-                pass
+            except AppException as error:
+                if error.status_code != 429:
+                    raise
         raise UnauthorizedError("Please check your email to finish setting up your account.", code="PENDING_ACTIVATION")
 
     # Lockout check
@@ -486,6 +492,10 @@ def customer_login_flow(
             message=f"Account temporarily locked due to multiple failed logins. Try again in {max(1, retry_seconds // 60)} minutes.",
             headers={"Retry-After": str(retry_seconds)}
         )
+
+    # Return an active account lockout before the request-rate limit so clients
+    # receive the account lock's Retry-After value on subsequent attempts.
+    rate_limiter.check(key=f"cust_login:{ip}:{clean_id}", max_requests=5, window_seconds=60)
 
     # Password check
     if not verify_password(password, user.password_hash):
@@ -516,6 +526,7 @@ def customer_login_flow(
 
     # Reset lockout on success
     user.failed_login_count = 0
+    user.lockout_count = 0
     user.locked_until = None
     user.last_login_at = now
 
@@ -529,7 +540,7 @@ def customer_login_flow(
         mfa_token = create_access_token(
             subject=user.id,
             audience="customer-mfa",
-            account_type=user.account_type,
+            role=user.role,
             expires_delta=timedelta(minutes=5),
         )
         db.commit()
@@ -575,11 +586,14 @@ def request_otp_flow(db: Session, target: str, channel: str, purpose: str, reque
     # Validate purpose restrictions
     if purpose in ("VERIFY_PHONE", "VERIFY_EMAIL") and not current_user:
         raise UnauthorizedError("Authentication required for contact verification", code="AUTH_REQUIRED")
+    if current_user and current_user.role != Role.CUSTOMER:
+        raise UnauthorizedError("Customer authentication is required", code="AUTH_REQUIRED")
+    if current_user and purpose == "VERIFY_PHONE":
+        current_user.pending_phone = clean_target
+    elif current_user and purpose == "VERIFY_EMAIL":
+        current_user.pending_email = clean_target
 
-    # Residents: email OTP only for LOGIN
     existing_user = db.scalar(select(User).where(or_(User.email == clean_target, User.phone == clean_target)))
-    if existing_user and existing_user.account_type == AccountType.LONG_TERM_RESIDENT and channel == "SMS" and purpose == "LOGIN":
-        raise ValidationError("Residents may only sign in via Email OTP or Magic Link")
 
     # Invalidate existing unused OTPs for this target & purpose
     db.query(OtpCode).filter(
@@ -636,7 +650,7 @@ def verify_otp_flow(
     if not otp or (ensure_utc(otp.expires_at) or now) < now:
         raise UnauthorizedError("Passcode has expired or does not exist", code="INVALID_OTP")
 
-    if hash_token(code) != otp.code_hash:
+    if not hmac.compare_digest(hash_token(code), otp.code_hash):
         otp.attempts += 1
         if otp.attempts >= 3:
             otp.is_used = True
@@ -647,8 +661,10 @@ def verify_otp_flow(
 
     if purpose == "LOGIN":
         user = db.scalar(select(User).where(or_(User.email == clean_target, User.phone == clean_target)))
+        if user and user.role != Role.CUSTOMER:
+            raise UnauthorizedError("Invalid passcode", code="INVALID_OTP")
         if not user:
-            # Create lightweight ACTIVE account for HOTEL_GUEST
+            # Create a lightweight active customer account.
             is_email = "@" in clean_target
             user = User(
                 email=clean_target if is_email else None,
@@ -656,7 +672,7 @@ def verify_otp_flow(
                 username="guest_" + secrets.token_hex(4),
                 password_hash=hash_password(secrets.token_urlsafe(32)),
                 full_name="Guest " + secrets.token_hex(2).upper(),
-                account_type="HOTEL_GUEST",
+                role=Role.CUSTOMER,
                 status="ACTIVE",
                 email_verified_at=now if is_email else None,
                 phone_verified_at=now if not is_email else None,
@@ -676,25 +692,27 @@ def verify_otp_flow(
         return access_token, exp, user
 
     elif purpose == "VERIFY_PHONE":
-        if not current_user:
+        if not current_user or otp.user_id != current_user.id or current_user.pending_phone != clean_target:
             raise UnauthorizedError("Auth required", code="AUTH_REQUIRED")
         current_user.phone = clean_target
         current_user.phone_verified_at = now
+        current_user.pending_phone = None
         db.commit()
         return "", 0, current_user
 
     elif purpose == "VERIFY_EMAIL":
-        if not current_user:
+        if not current_user or otp.user_id != current_user.id or current_user.pending_email != clean_target:
             raise UnauthorizedError("Auth required", code="AUTH_REQUIRED")
         current_user.email = clean_target
         current_user.email_verified_at = now
+        current_user.pending_email = None
         db.commit()
         return "", 0, current_user
 
     raise ValidationError("Unknown OTP purpose")
 
 # ==========================================
-# 4. MAGIC LINK (RESIDENTS ONLY)
+# 4. CUSTOMER MAGIC LINK
 # ==========================================
 
 def request_magic_link_flow(db: Session, email: str, response: Response, request: Request) -> dict[str, Any]:
@@ -706,8 +724,7 @@ def request_magic_link_flow(db: Session, email: str, response: Response, request
 
     user = db.scalar(select(User).where(User.email == clean_email))
 
-    # Residents only!
-    if user and user.account_type == AccountType.LONG_TERM_RESIDENT and user.status == "ACTIVE":
+    if user and user.role == Role.CUSTOMER and user.status == "ACTIVE":
         # Invalidate old magic links
         db.query(VerificationToken).filter(
             VerificationToken.user_id == user.id,
@@ -743,14 +760,14 @@ def request_magic_link_flow(db: Session, email: str, response: Response, request
             db=db,
             channel="EMAIL",
             destination=clean_email,
-            subject="Your Haven Stays Resident Magic Sign-In Link",
-            body=f"Click here to sign in instantly to your resident portal: {magic_url}. Valid for 10 minutes.",
+            subject="Your Haven Stays Magic Sign-In Link",
+            body=f"Click here to sign in to Haven Stays: {magic_url}",
         )
         db.commit()
     else:
         dummy_verify_password()
 
-    return {"message": "If a resident account is registered for this address, a magic sign-in link has been sent."}
+    return {"message": "If a customer account is registered for this address, a magic sign-in link has been sent."}
 
 def verify_magic_link_flow(db: Session, token: str, request: Request, response: Response) -> tuple[str, int, User]:
     now = utc_now()
@@ -773,7 +790,7 @@ def verify_magic_link_flow(db: Session, token: str, request: Request, response: 
         raise UnauthorizedError("Magic link browser verification failed. Please open the link in the same browser that requested it.", code="NONCE_MISMATCH")
 
     meta = json.loads(ver.metadata_json or "{}")
-    if hash_token(ml_nonce) != meta.get("nonce_hash"):
+    if not hmac.compare_digest(hash_token(ml_nonce), meta.get("nonce_hash", "")):
         raise UnauthorizedError("Magic link browser verification failed. Nonce mismatch.", code="NONCE_MISMATCH")
 
     ver.is_used = True
@@ -781,7 +798,7 @@ def verify_magic_link_flow(db: Session, token: str, request: Request, response: 
 
     user = db.get(User, ver.user_id)
     if not user or user.status != "ACTIVE":
-        raise UnauthorizedError("Resident user is inactive or not found", code="USER_INACTIVE")
+        raise UnauthorizedError("Customer user is inactive or not found", code="USER_INACTIVE")
 
     access_token, _, exp, _ = create_user_session(db, user, "customer", response, ip=get_client_ip(request), user_agent=request.headers.get("user-agent"))
     write_audit_log(db, action="MAGIC_LINK_LOGIN", actor_user_id=user.id, target_user_id=user.id, ip=get_client_ip(request))
@@ -800,17 +817,12 @@ def forgot_password_flow(db: Session, identifier: str, ip: str, is_admin: bool =
     user = db.scalar(select(User).where(or_(User.email == clean_id, User.username == clean_id)))
 
     if user and user.email:
-        # Super Admin reset is CLI only!
-        if user.account_type == AccountType.SUPER_ADMIN:
-            dummy_verify_password()
-            return {"message": "If an eligible account was found, password recovery instructions have been sent."}
-
         # Check audience match
-        if is_admin and user.account_type not in (AccountType.MANAGER, AccountType.STAFF):
+        if is_admin and user.role not in (Role.ADMIN, Role.STAFF):
             dummy_verify_password()
             return {"message": "If an eligible account was found, password recovery instructions have been sent."}
 
-        if not is_admin and user.account_type in (AccountType.SUPER_ADMIN, AccountType.MANAGER, AccountType.STAFF):
+        if not is_admin and user.role != Role.CUSTOMER:
             dummy_verify_password()
             return {"message": "If an eligible account was found, password recovery instructions have been sent."}
 
@@ -824,8 +836,12 @@ def forgot_password_flow(db: Session, identifier: str, ip: str, is_admin: bool =
         db.add(ver)
         db.flush()
 
-        reset_base = settings.ADMIN_PANEL_URL if is_admin else settings.PUBLIC_WEBSITE_URL
-        reset_url = f"{reset_base}/reset-password?token={raw_token}"
+        reset_base = (settings.ADMIN_PANEL_URL if is_admin else settings.PUBLIC_WEBSITE_URL).rstrip("/")
+        reset_url = (
+            f"{reset_base}/?token={raw_token}&mode=reset"
+            if is_admin
+            else f"{reset_base}/reset-password?token={raw_token}"
+        )
         notifier.send_notification(
             db=db,
             channel="EMAIL",
@@ -928,7 +944,15 @@ def activate_invited_account(db: Session, token: str, new_password: str, respons
         ip=get_client_ip(request),
     )
 
-    access_token, _, exp, _ = create_user_session(db, user, "customer", response, ip=get_client_ip(request))
+    audience = "admin" if user.role in (Role.ADMIN, Role.STAFF) else "customer"
+    access_token, _, exp, _ = create_user_session(
+        db,
+        user,
+        audience,
+        response,
+        ip=get_client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+    )
     db.commit()
     return access_token, exp, user
 
@@ -1060,8 +1084,8 @@ def confirm_mfa_enrollment(db: Session, user: User, secret: str, code: str, requ
     return [plain for plain, _ in codes]
 
 def disable_mfa_flow(db: Session, user: User, password: str, code: str, request: Request) -> None:
-    if user.account_type == AccountType.SUPER_ADMIN:
-        raise ForbiddenError("MFA cannot be disabled for Super Administrator accounts", code="MFA_MANDATORY")
+    if user.role == Role.ADMIN:
+        raise ForbiddenError("MFA cannot be disabled for Admin accounts", code="MFA_MANDATORY")
 
     if not verify_password(password, user.password_hash):
         raise UnauthorizedError("Incorrect password", code="INVALID_PASSWORD")
@@ -1100,21 +1124,21 @@ def admin_login_flow(
     clean_id = identifier.strip().lower()
     ip = get_client_ip(request)
 
-    rate_limiter.check(key=f"admin_login:{ip}:{clean_id}", max_requests=5, window_seconds=60)
-
     user = db.scalar(select(User).where(or_(User.email == clean_id, User.username == clean_id)))
     invalid_err = UnauthorizedError("Invalid credentials", code="INVALID_CREDENTIALS")
 
     if not user:
+        rate_limiter.check(key=f"admin_login:{ip}:{clean_id}", max_requests=5, window_seconds=60)
         dummy_verify_password()
         raise invalid_err
 
-    # Only super admin, manager, and staff allowed
-    if user.account_type not in (AccountType.SUPER_ADMIN, AccountType.MANAGER, AccountType.STAFF):
+    if user.role not in (Role.ADMIN, Role.STAFF):
+        rate_limiter.check(key=f"admin_login:{ip}:{clean_id}", max_requests=5, window_seconds=60)
         dummy_verify_password()
         raise invalid_err
 
     if user.status in ("SUSPENDED", "ARCHIVED"):
+        rate_limiter.check(key=f"admin_login:{ip}:{clean_id}", max_requests=5, window_seconds=60)
         dummy_verify_password()
         raise invalid_err
 
@@ -1128,15 +1152,42 @@ def admin_login_flow(
             headers={"Retry-After": str(retry_sec)}
         )
 
+    rate_limiter.check(key=f"admin_login:{ip}:{clean_id}", max_requests=5, window_seconds=60)
+
     if not verify_password(password, user.password_hash):
         user.failed_login_count += 1
         if user.failed_login_count >= 5:
-            user.locked_until = now + timedelta(minutes=15)
-            write_audit_log(db, action="ADMIN_ACCOUNT_LOCKED", target_user_id=user.id, ip=ip)
+            multiplier = 2 ** min(user.lockout_count, 6)
+            lockout_minutes = min(15 * multiplier, 1440)
+            user.lockout_count += 1
+            user.locked_until = now + timedelta(minutes=lockout_minutes)
+            write_audit_log(
+                db,
+                action="ADMIN_ACCOUNT_LOCKED",
+                target_user_id=user.id,
+                details={
+                    "reason": "FAILED_PASSWORD_THRESHOLD",
+                    "lockout_minutes": lockout_minutes,
+                },
+                ip=ip,
+                user_agent=request.headers.get("user-agent"),
+            )
+            if user.email:
+                notifier.send_notification(
+                    db=db,
+                    channel="EMAIL",
+                    destination=user.email,
+                    subject="Security Notice: Account locked",
+                    body=(
+                        "Your account was locked due to multiple failed login attempts. "
+                        f"It will unlock in {lockout_minutes} minutes."
+                    ),
+                )
         db.commit()
         raise invalid_err
 
     user.failed_login_count = 0
+    user.lockout_count = 0
     user.locked_until = None
     user.last_login_at = now
 
@@ -1145,18 +1196,18 @@ def admin_login_flow(
         change_token = create_access_token(
             subject=user.id,
             audience="admin-password-change",
-            account_type=user.account_type,
+            role=user.role,
             expires_delta=timedelta(minutes=15),
         )
         db.commit()
         return "", 0, user, False, None, False, None, True, change_token
 
-    # Check 2: Super Admin forced MFA enrollment gating
-    if user.account_type == AccountType.SUPER_ADMIN and not user.mfa_enabled:
+    # Check 2: Admin forced MFA enrollment gating
+    if user.role == Role.ADMIN and settings.ADMIN_MFA_REQUIRED and not user.mfa_enabled:
         enroll_token = create_access_token(
             subject=user.id,
             audience="admin-enroll",
-            account_type=user.account_type,
+            role=user.role,
             expires_delta=timedelta(minutes=15),
         )
         db.commit()
@@ -1167,7 +1218,7 @@ def admin_login_flow(
         mfa_token = create_access_token(
             subject=user.id,
             audience="admin-mfa",
-            account_type=user.account_type,
+            role=user.role,
             expires_delta=timedelta(minutes=5),
         )
         db.commit()

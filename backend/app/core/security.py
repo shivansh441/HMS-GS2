@@ -95,27 +95,13 @@ def generate_recovery_codes(count: int = 10) -> list[tuple[str, str]]:
     return codes
 
 def get_refresh_token_duration_seconds(
-    account_type: str,
+    role: str,
     remember: bool = False,
-    stay_end: datetime | None = None,
 ) -> int:
-    """
-    Refresh lifetimes:
-    - Guest / Resident: 7 days (30 days with remember_device)
-    - Staff / Manager: 12 hours (never extended)
-    - Super Admin: 8 hours
-    - Hostel guest: session ends at stay_end if provided, else 24 hours
-    """
-    if account_type == "SUPER_ADMIN":
+    if role == "ADMIN":
         return 8 * 3600
-    if account_type in ("MANAGER", "STAFF"):
+    if role == "STAFF":
         return 12 * 3600
-    if account_type == "SHORT_TERM_HOSTEL_GUEST":
-        if stay_end:
-            now = datetime.now(timezone.utc)
-            diff = int((stay_end - now).total_seconds())
-            return max(3600, diff) # At least 1 hour
-        return 24 * 3600
     if remember:
         return 30 * 24 * 3600
     return 7 * 24 * 3600
@@ -123,8 +109,7 @@ def get_refresh_token_duration_seconds(
 def create_access_token(
     subject: str,
     audience: str,
-    account_type: str,
-    staff_role: str | None = None,
+    role: str,
     session_id: str | None = None,
     mfa: bool = False,
     extra_claims: dict[str, Any] | None = None,
@@ -136,8 +121,7 @@ def create_access_token(
     payload: dict[str, Any] = {
         "sub": subject,
         "aud": audience,
-        "accountType": account_type,
-        "staffRole": staff_role,
+        "role": role,
         "sid": session_id or "",
         "mfa": mfa,
         "iat": int(now.timestamp()),
@@ -191,7 +175,7 @@ def verify_totp_code_with_replay(
     totp = pyotp.TOTP(secret)
     now_step = int(time.time() // 30)
     for step in (now_step, now_step - 1, now_step + 1):
-        if totp.at(step) == code:
+        if totp.at(step * totp.interval) == code:
             if last_step is not None and step <= last_step:
                 return False, None # Replay blocked
             return True, step
@@ -218,10 +202,13 @@ def verify_csrf_and_origin(request: Request) -> None:
     origin = request.headers.get("origin")
     referer = request.headers.get("referer")
     candidate = origin or referer
+    if not candidate:
+        raise ForbiddenError("CSRF protection requires an Origin or Referer header", code="CSRF_REJECTED")
 
-    if candidate:
-        parsed = urlparse(candidate)
-        candidate_base = f"{parsed.scheme}://{parsed.netloc}"
-        allowed_bases = [urlparse(o).netloc for o in settings.CORS_ORIGINS]
-        if parsed.netloc not in allowed_bases and candidate_base not in settings.CORS_ORIGINS:
-            raise ForbiddenError(f"CSRF protection: unauthorized origin/referer '{candidate}'", code="CSRF_REJECTED")
+    parsed = urlparse(candidate)
+    allowed_origins = {
+        (urlparse(allowed).scheme.lower(), urlparse(allowed).netloc.lower())
+        for allowed in settings.CORS_ORIGINS
+    }
+    if (parsed.scheme.lower(), parsed.netloc.lower()) not in allowed_origins:
+        raise ForbiddenError("CSRF protection: unauthorized origin/referer", code="CSRF_REJECTED")

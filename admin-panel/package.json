@@ -11,7 +11,9 @@
     "check:no-animation": "node scripts/check-no-animation.js"
   },
   "dependencies": {
+    "@tailwindcss/vite": "^4.3.3",
     "@tanstack/react-query": "^5.0.0",
+    "@vitejs/plugin-react": "^5.2.0",
     "axios": "^1.7.0",
     "lucide-react": "^0.546.0",
     "react": "^19.0.0",
@@ -24,7 +26,7 @@
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "tailwindcss": "^4.0.0",
+    "tailwindcss": "^4.3.3",
     "typescript": "^5.5.0",
     "vite": "^6.0.0"
   }

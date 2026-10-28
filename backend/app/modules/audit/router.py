@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.errors import ForbiddenError
-from app.core.permissions import AccountType
+from app.core.permissions import Role
 from app.db.models import AuditLog, User
 from app.db.session import get_db
 from app.modules.auth.deps import get_current_admin_user
@@ -25,8 +25,8 @@ def list_audit_logs(
     admin_user: User = Depends(get_current_admin_user),
     db: Session = Depends(get_db),
 ):
-    if admin_user.account_type != AccountType.SUPER_ADMIN:
-        raise ForbiddenError("Audit log access is restricted to Super Admin")
+    if admin_user.role != Role.ADMIN:
+        raise ForbiddenError("Audit log access is restricted to Admin")
     
     logs = db.scalars(select(AuditLog).order_by(AuditLog.created_at.desc()).limit(50)).all()
     return [

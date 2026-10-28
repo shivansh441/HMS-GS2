@@ -1,17 +1,25 @@
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
 import { User, Property, AdminMeResponse } from '../types';
-import { apiClient, setAccessToken, getStoredPropertyId, setStoredPropertyId } from './api';
+import {
+  apiClient,
+  getAdminSessionHint,
+  getStoredPropertyId,
+  refreshAdminSession,
+  setAccessToken,
+  setAdminSessionHint,
+  setStoredPropertyId,
+} from './api';
 
 interface AuthContextValue {
   user: User | null;
   permissions: string[];
   allowedPropertyIds: string[];
   properties: Property[];
-  selectedPropertyId: string | null; // null or 'ALL' or specific id
+  selectedPropertyId: string | 'ALL' | null;
   isLoading: boolean;
   theme: 'light' | 'dark';
   setTheme: (t: 'light' | 'dark') => void;
-  setSelectedPropertyId: (id: string | null) => void;
+  setSelectedPropertyId: (id: string | 'ALL' | null) => void;
   login: (token: string, userData: User) => Promise<void>;
   logout: () => Promise<void>;
   refreshProfile: () => Promise<void>;
@@ -27,7 +35,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [permissions, setPermissions] = useState<string[]>([]);
   const [allowedPropertyIds, setAllowedPropertyIds] = useState<string[]>([]);
   const [properties, setProperties] = useState<Property[]>([]);
-  const [selectedPropertyId, setSelectedPropertyState] = useState<string | null>(getStoredPropertyId() || 'ALL');
+  const [selectedPropertyId, setSelectedPropertyState] = useState<string | 'ALL' | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
 
@@ -58,6 +66,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Ignore network errors on logout
     } finally {
       setAccessToken(null);
+      setAdminSessionHint(false);
       setUser(null);
       setPermissions([]);
       setAllowedPropertyIds([]);
@@ -89,22 +98,49 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => clearInterval(interval);
   }, [user, logout]);
 
-  const loadProperties = useCallback(async () => {
+  const loadProperties = useCallback(async (allowedIds: string[]) => {
     try {
       const res = await apiClient.get<Property[]>('/admin/properties');
-      setProperties(res.data);
+      const scopedProperties = res.data.filter((property) => allowedIds.includes(property.id));
+      const storedId = getStoredPropertyId();
+      const restoredId =
+        storedId === 'ALL' && scopedProperties.length > 1
+          ? 'ALL'
+          : storedId && scopedProperties.some((property) => property.id === storedId)
+            ? storedId
+            : scopedProperties.length > 1
+              ? 'ALL'
+              : scopedProperties[0]?.id || null;
+      setProperties(scopedProperties);
+      setStoredPropertyId(restoredId);
+      setSelectedPropertyState(restoredId);
     } catch {
       setProperties([]);
+      setStoredPropertyId(null);
+      setSelectedPropertyState(null);
     }
   }, []);
 
   const refreshProfile = useCallback(async () => {
     try {
       const res = await apiClient.get<AdminMeResponse>('/admin/me');
+      const allowedIds = [...new Set(res.data.allowedPropertyIds)];
+      const storedPropertyId = getStoredPropertyId();
+      const restoredPropertyId =
+        storedPropertyId === 'ALL' && allowedIds.length > 1
+          ? 'ALL'
+          : storedPropertyId && allowedIds.includes(storedPropertyId)
+            ? storedPropertyId
+            : allowedIds.length > 1
+              ? 'ALL'
+              : allowedIds[0] || null;
+
+      setStoredPropertyId(restoredPropertyId);
+      setSelectedPropertyState(restoredPropertyId);
       setUser(res.data.user);
       setPermissions(res.data.permissions);
-      setAllowedPropertyIds(res.data.allowedPropertyIds);
-      await loadProperties();
+      setAllowedPropertyIds(allowedIds);
+      await loadProperties(allowedIds);
     } catch {
       setUser(null);
     }
@@ -115,8 +151,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const initAuth = async () => {
       setIsLoading(true);
       try {
-        const refreshRes = await apiClient.post<{ accessToken: string }>('/admin/auth/refresh');
-        setAccessToken(refreshRes.data.accessToken);
+        if (getAdminSessionHint() === false) {
+          setUser(null);
+          return;
+        }
+        await refreshAdminSession();
         await refreshProfile();
       } catch {
         setUser(null);
@@ -129,11 +168,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const login = async (token: string, userData: User) => {
     setAccessToken(token);
+    setAdminSessionHint(true);
     setUser(userData);
     await refreshProfile();
   };
 
-  const setSelectedPropertyId = (id: string | null) => {
+  const setSelectedPropertyId = (id: string | 'ALL' | null) => {
+    if (id !== null && id !== 'ALL' && !allowedPropertyIds.includes(id)) return;
+    if (id === 'ALL' && allowedPropertyIds.length < 2) {
+      id = allowedPropertyIds[0] || null;
+    }
     setSelectedPropertyState(id);
     setStoredPropertyId(id);
   };

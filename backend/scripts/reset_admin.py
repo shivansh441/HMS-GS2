@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Haven Stays CLI - Out-of-Band Super Admin Password Reset
+Haven Stays CLI - Out-of-Band Admin Password Reset
 Usage:
-    python scripts/reset_superadmin.py <email> <new_password>
+    python scripts/reset_admin.py <email> <new_password>
 """
 import sys
 from pathlib import Path
@@ -14,13 +14,13 @@ sys.path.insert(0, str(backend_dir))
 from sqlalchemy import select
 from app.db.session import SessionLocal
 from app.db.models import User
-from app.core.permissions import AccountType
+from app.core.permissions import Role
 from app.core.security import hash_password, validate_password_strength
 from app.modules.auth.service import revoke_all_user_sessions
 from app.modules.audit.service import write_audit_log
 
 
-def reset_superadmin_password(email: str, new_pass: str) -> None:
+def reset_admin_password(email: str, new_pass: str) -> None:
     clean_email = email.strip().lower()
     try:
         validate_password_strength(new_pass)
@@ -34,8 +34,8 @@ def reset_superadmin_password(email: str, new_pass: str) -> None:
             print(f"Error: User with email '{clean_email}' not found.")
             sys.exit(1)
 
-        if user.account_type != AccountType.SUPER_ADMIN:
-            print(f"Error: User '{clean_email}' has account type '{user.account_type}', not SUPER_ADMIN.")
+        if user.role != Role.ADMIN:
+            print(f"Error: User '{clean_email}' has role '{user.role}', not ADMIN.")
             sys.exit(1)
 
         # Update password and reset lockout state
@@ -46,12 +46,12 @@ def reset_superadmin_password(email: str, new_pass: str) -> None:
         user.must_change_password = False
 
         # Revoke all existing sessions
-        revoke_all_user_sessions(db, user.id, reason="CLI_SUPERADMIN_PASSWORD_RESET")
+        revoke_all_user_sessions(db, user.id, reason="CLI_ADMIN_PASSWORD_RESET")
 
         # Audit log
         write_audit_log(
             db,
-            action="SUPERADMIN_PASSWORD_RESET_CLI",
+            action="ADMIN_PASSWORD_RESET_CLI",
             actor_user_id=user.id,
             target_user_id=user.id,
             details={"email": clean_email, "method": "cli"},
@@ -60,15 +60,15 @@ def reset_superadmin_password(email: str, new_pass: str) -> None:
         )
         db.commit()
 
-        print(f"Successfully reset password for Super Admin: {clean_email}")
+        print(f"Successfully reset password for Admin: {clean_email}")
         print("All existing active sessions have been revoked.")
 
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:
-        print("Usage: python scripts/reset_superadmin.py <email> <new_password>")
+        print("Usage: python scripts/reset_admin.py <email> <new_password>")
         sys.exit(1)
 
     target_email = sys.argv[1]
     new_password = sys.argv[2]
-    reset_superadmin_password(target_email, new_password)
+    reset_admin_password(target_email, new_password)

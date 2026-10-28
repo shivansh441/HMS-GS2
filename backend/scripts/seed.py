@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from sqlalchemy import select
 
 from app.core.crypto import encrypt_data, process_id_document
-from app.core.permissions import AccountType, StaffRole, UserStatus
+from app.core.permissions import Role, StaffRole, UserStatus
 from app.core.security import generate_mfa_secret, generate_one_time_token, hash_password, hash_token
 from app.db.base import Base
 from app.db.models import (
@@ -55,21 +55,21 @@ def seed_database():
 
         now = datetime.now(timezone.utc)
 
-        # 2. Super Admins
-        # Primary spec: superadmin@havenstays.local / SuperAdmin2026!#
-        sa = db.scalar(select(User).where(User.email == "superadmin@havenstays.local"))
+        # 2. Admins
+        # Primary test account: admin@havenstays.local / Admin2026!#
+        sa = db.scalar(select(User).where(User.email == "admin@havenstays.local"))
         if not sa:
             sa = User(
-                email="superadmin@havenstays.local",
-                username="superadmin",
-                full_name="Super Administrator",
-                password_hash=hash_password("SuperAdmin2026!#"),
-                account_type=AccountType.SUPER_ADMIN,
+                email="admin@havenstays.local",
+                username="admin",
+                full_name="Administrator",
+                password_hash=hash_password("Admin2026!#"),
+                role=Role.ADMIN,
                 status=UserStatus.ACTIVE,
                 email_verified_at=now,
             )
             db.add(sa)
-            print("Super Admin: superadmin@havenstays.local / SuperAdmin2026!#")
+            print("Admin: admin@havenstays.local / Admin2026!#")
 
         # Legacy admin with MFA enforced: admin@havenstays.com / AdminSecurePass123!
         legacy_admin = db.scalar(select(User).where(User.email == "admin@havenstays.com"))
@@ -80,7 +80,7 @@ def seed_database():
                 username="admin_legacy",
                 full_name="Admin Legacy",
                 password_hash=hash_password("AdminSecurePass123!"),
-                account_type=AccountType.SUPER_ADMIN,
+                role=Role.ADMIN,
                 status=UserStatus.ACTIVE,
                 mfa_enabled=True,
                 mfa_enforced=True,
@@ -89,57 +89,7 @@ def seed_database():
             )
             db.add(legacy_admin)
 
-        # 3. Managers
-        # manager.grand@havenstays.local / ManagerGrand2026!# (HQ-01)
-        mgr = db.scalar(select(User).where(User.email == "manager.grand@havenstays.local"))
-        if not mgr:
-            mgr = User(
-                email="manager.grand@havenstays.local",
-                username="manager_grand",
-                full_name="Marcus Vance (Manager)",
-                password_hash=hash_password("ManagerGrand2026!#"),
-                account_type=AccountType.MANAGER,
-                status=UserStatus.ACTIVE,
-                email_verified_at=now,
-            )
-            db.add(mgr)
-            db.flush()
-            db.add(UserPropertyAccess(user_id=mgr.id, property_id=p1.id))
-
-        # manager.hq01@havenstays.com / ManagerSecurePass123!
-        mgr1 = db.scalar(select(User).where(User.email == "manager.hq01@havenstays.com"))
-        if not mgr1:
-            mgr1 = User(
-                email="manager.hq01@havenstays.com",
-                username="manager_hq01",
-                full_name="Marcus Vance (HQ-01 Mgr)",
-                password_hash=hash_password("ManagerSecurePass123!"),
-                account_type=AccountType.MANAGER,
-                status=UserStatus.ACTIVE,
-                email_verified_at=now,
-            )
-            db.add(mgr1)
-            db.flush()
-            db.add(UserPropertyAccess(user_id=mgr1.id, property_id=p1.id))
-
-        # manager.all@havenstays.com / ManagerSecurePass123!
-        mgr_all = db.scalar(select(User).where(User.email == "manager.all@havenstays.com"))
-        if not mgr_all:
-            mgr_all = User(
-                email="manager.all@havenstays.com",
-                username="manager_all",
-                full_name="Elena Rostova (Dual Mgr)",
-                password_hash=hash_password("ManagerSecurePass123!"),
-                account_type=AccountType.MANAGER,
-                status=UserStatus.ACTIVE,
-                email_verified_at=now,
-            )
-            db.add(mgr_all)
-            db.flush()
-            db.add(UserPropertyAccess(user_id=mgr_all.id, property_id=p1.id))
-            db.add(UserPropertyAccess(user_id=mgr_all.id, property_id=p2.id))
-
-        # 4. Staff
+        # 3. Staff
         # staff.desk@havenstays.local / StaffDesk2026!# (HQ-01)
         stf = db.scalar(select(User).where(User.email == "staff.desk@havenstays.local"))
         if not stf:
@@ -148,7 +98,7 @@ def seed_database():
                 username="staff_desk",
                 full_name="Chloe Bennett (Front Desk)",
                 password_hash=hash_password("StaffDesk2026!#"),
-                account_type=AccountType.STAFF,
+                role=Role.STAFF,
                 staff_role=StaffRole.FRONT_DESK,
                 status=UserStatus.ACTIVE,
                 email_verified_at=now,
@@ -165,7 +115,7 @@ def seed_database():
                 username="frontdesk_hq01",
                 full_name="Chloe Bennett (Front Desk)",
                 password_hash=hash_password("StaffSecurePass123!"),
-                account_type=AccountType.STAFF,
+                role=Role.STAFF,
                 staff_role=StaffRole.FRONT_DESK,
                 status=UserStatus.ACTIVE,
                 email_verified_at=now,
@@ -182,7 +132,7 @@ def seed_database():
                 username="housekeeping_hq02",
                 full_name="David Chen (Housekeeping)",
                 password_hash=hash_password("StaffSecurePass123!"),
-                account_type=AccountType.STAFF,
+                role=Role.STAFF,
                 staff_role=StaffRole.HOUSEKEEPING,
                 status=UserStatus.ACTIVE,
                 email_verified_at=now,
@@ -199,7 +149,7 @@ def seed_database():
                 username="staff_temp",
                 full_name="Temp Staff Member",
                 password_hash=hash_password("TempStaff2026!#"),
-                account_type=AccountType.STAFF,
+                role=Role.STAFF,
                 staff_role=StaffRole.FRONT_DESK,
                 status=UserStatus.ACTIVE,
                 email_verified_at=now,
@@ -209,7 +159,7 @@ def seed_database():
             db.flush()
             db.add(UserPropertyAccess(user_id=temp_staff.id, property_id=p1.id))
 
-        # 5. Customers
+        # 4. Customers
         # guest.alice@example.com / AliceGuest2026!# (HQ-01)
         alice = db.scalar(select(User).where(User.email == "guest.alice@example.com"))
         if not alice:
@@ -219,7 +169,7 @@ def seed_database():
                 full_name="Alice Smith",
                 phone="+15551234567",
                 password_hash=hash_password("AliceGuest2026!#"),
-                account_type=AccountType.HOTEL_GUEST,
+                role=Role.CUSTOMER,
                 status=UserStatus.ACTIVE,
                 email_verified_at=now,
                 phone_verified_at=now,
@@ -237,7 +187,7 @@ def seed_database():
                 full_name="Bob Jones",
                 phone="+15559876543",
                 password_hash=hash_password("BobResident2026!#"),
-                account_type=AccountType.LONG_TERM_RESIDENT,
+                role=Role.CUSTOMER,
                 status=UserStatus.ACTIVE,
                 email_verified_at=now,
                 phone_verified_at=now,
@@ -254,7 +204,7 @@ def seed_database():
                 username="guest_nobook1",
                 full_name="Sophia Martinez",
                 password_hash=hash_password("CustomerPass123!@"),
-                account_type=AccountType.HOTEL_GUEST,
+                role=Role.CUSTOMER,
                 status=UserStatus.ACTIVE,
                 email_verified_at=now,
             )
@@ -268,7 +218,7 @@ def seed_database():
                 username="guest_nobook2",
                 full_name="Liam Gallagher",
                 password_hash=hash_password("CustomerPass123!@"),
-                account_type=AccountType.SHORT_TERM_HOSTEL_GUEST,
+                role=Role.CUSTOMER,
                 status=UserStatus.ACTIVE,
                 email_verified_at=now,
             )
@@ -283,7 +233,7 @@ def seed_database():
                 username="resident_alex",
                 full_name="Alex Rivera",
                 password_hash=hash_password("CustomerPass123!@"),
-                account_type=AccountType.LONG_TERM_RESIDENT,
+                role=Role.CUSTOMER,
                 status=UserStatus.PENDING_ACTIVATION,
                 id_document_type="PASSPORT",
                 id_document_number_encrypted=enc_doc,
@@ -302,7 +252,7 @@ def seed_database():
                 username="guest_hotel",
                 full_name="Grace Hopper",
                 password_hash=hash_password("CustomerPass123!@"),
-                account_type=AccountType.HOTEL_GUEST,
+                role=Role.CUSTOMER,
                 status=UserStatus.ACTIVE,
                 email_verified_at=now,
             )
@@ -318,7 +268,7 @@ def seed_database():
                 username="guest_hostel",
                 full_name="Julian Thorne",
                 password_hash=hash_password("CustomerPass123!@"),
-                account_type=AccountType.SHORT_TERM_HOSTEL_GUEST,
+                role=Role.CUSTOMER,
                 status=UserStatus.ACTIVE,
                 email_verified_at=now,
             )
@@ -326,7 +276,7 @@ def seed_database():
             db.flush()
             db.add(CustomerPropertyLink(user_id=hostel_guest.id, property_id=p2.id, source="BOOKING"))
 
-        # 6. Additional Required Test Accounts
+        # 5. Additional Required Test Accounts
         # unverified.carol@example.com
         carol = db.scalar(select(User).where(User.email == "unverified.carol@example.com"))
         if not carol:
@@ -335,7 +285,7 @@ def seed_database():
                 username="unverified_carol",
                 full_name="Carol Miller",
                 password_hash=hash_password("CarolUnverified2026!#"),
-                account_type=AccountType.HOTEL_GUEST,
+                role=Role.CUSTOMER,
                 status=UserStatus.PENDING_ACTIVATION,
                 email_verified_at=None,
             )
@@ -357,7 +307,7 @@ def seed_database():
                 username="locked_dan",
                 full_name="Dan Locked",
                 password_hash=hash_password("DanLocked2026!#"),
-                account_type=AccountType.HOTEL_GUEST,
+                role=Role.CUSTOMER,
                 status=UserStatus.ACTIVE,
                 email_verified_at=now,
                 failed_login_count=5,
@@ -376,7 +326,7 @@ def seed_database():
                 username="mfa_eve",
                 full_name="Eve Authenticator",
                 password_hash=hash_password("EveMfa2026!#"),
-                account_type=AccountType.HOTEL_GUEST,
+                role=Role.CUSTOMER,
                 status=UserStatus.ACTIVE,
                 email_verified_at=now,
                 mfa_enabled=True,
@@ -399,7 +349,7 @@ def seed_database():
                 username="pending_frank",
                 full_name="Frank Residence",
                 password_hash=hash_password("FrankPending2026!#"),
-                account_type=AccountType.LONG_TERM_RESIDENT,
+                role=Role.CUSTOMER,
                 status=UserStatus.PENDING_ACTIVATION,
             )
             db.add(frank)

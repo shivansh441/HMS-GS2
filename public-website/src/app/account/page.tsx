@@ -35,7 +35,7 @@ export default function AccountDashboardPage() {
     return (
       <div className="min-h-[70vh] flex items-center justify-center">
         <div className="text-center space-y-2">
-          <div className="inline-block w-8 h-8 border-2 border-slate-900 border-t-transparent rounded-full animate-spin"></div>
+          <div className="inline-block w-8 h-8 border-2 border-slate-900 border-t-transparent rounded-full" aria-hidden="true"></div>
           <div className="text-xs font-mono text-slate-500">Retrieving Haven guest profile...</div>
         </div>
       </div>
@@ -48,6 +48,12 @@ export default function AccountDashboardPage() {
 
   return (
     <div className="max-w-6xl mx-auto px-6 py-12 space-y-10">
+      <div className="flex justify-end">
+        <Link href="/account/security" className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700 underline">
+          <ShieldCheck className="w-4 h-4" aria-hidden="true" />
+          Security & sessions
+        </Link>
+      </div>
       {/* Welcome Banner */}
       <div className="bg-white border border-slate-200/90 rounded-3xl p-8 sm:p-10 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-6">
         <div className="space-y-2">

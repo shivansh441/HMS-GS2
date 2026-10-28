@@ -9,8 +9,8 @@ export interface UserResponse {
   username: string | null;
   full_name: string | null;
   phone: string | null;
-  account_type: 'SUPER_ADMIN' | 'MANAGER' | 'STAFF' | 'LONG_TERM_RESIDENT' | 'SHORT_TERM_HOSTEL_GUEST' | 'HOTEL_GUEST';
-  staff_role: 'FRONT_DESK' | 'MAINTENANCE' | 'HOUSEKEEPING' | null;
+  role: 'ADMIN' | 'STAFF' | 'CUSTOMER';
+  staffRole: 'FRONT_DESK' | 'MAINTENANCE' | 'HOUSEKEEPING' | null;
   status: 'PENDING_ACTIVATION' | 'ACTIVE' | 'SUSPENDED' | 'ARCHIVED';
   must_change_password: boolean;
   mfa_enabled: boolean;
@@ -23,8 +23,13 @@ export interface PropertyItemResponse {
   id: string;
   code: string;
   name: string;
-  timezone: string;
+  type: string;
   status: string;
+  timezone: string;
+  currency: string;
+  floors: number;
+  floorCount: number;
+  unitCount: number;
   createdAt: string;
 }
 
@@ -32,9 +37,15 @@ export interface AuthSuccessResponse {
   accessToken: string;
   tokenType: string;
   expiresIn: number;
-  user: UserResponse;
+  user: UserResponse | null;
+  mfaRequired?: boolean;
   requiresMfa?: boolean;
+  mfaToken?: string | null;
   mfaChallengeToken?: string;
+  mfaEnrollmentRequired?: boolean;
+  enrollToken?: string | null;
+  passwordChangeRequired?: boolean;
+  changeToken?: string | null;
 }
 
 export interface ProfileCompletion {

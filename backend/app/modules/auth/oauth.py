@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.errors import ConflictError, ForbiddenError, UnauthorizedError, ValidationError
-from app.core.permissions import AccountType
+from app.core.permissions import Role
 from app.db.models import LinkedIdentity, User
 from app.modules.audit.service import write_audit_log
 from app.modules.auth.service import create_user_session, utc_now
@@ -92,12 +92,6 @@ def render_mock_consent_page(provider: str, state: str) -> HTMLResponse:
           <br><small style="color:#64748b">guest.hotel@gmail.com</small>
         </a>
 
-        <a class="btn" href="/api/v1/auth/oauth/{provider}/callback?state={state}&mock_user=resident">
-          <strong>Long-Term Resident</strong>
-          <span class="badge">BLOCKED LINK</span>
-          <br><small style="color:#64748b">resident.pending@gmail.com</small>
-        </a>
-
         <a class="btn" href="/api/v1/auth/oauth/{provider}/callback?state={state}&mock_user=apple_relay">
           <strong>Apple Private Relay</strong>
           <span class="badge">NO MERGE</span>
@@ -129,11 +123,6 @@ def handle_oauth_callback(
         sub = "google_sub_101"
         email_verified = True
         name = "Grace Hopper"
-    elif mock_user == "resident":
-        email = "resident.pending@gmail.com"
-        sub = "google_sub_202"
-        email_verified = True
-        name = "Alex Rivera"
     elif mock_user == "apple_relay":
         email = "user123@privaterelay.appleid.com"
         sub = "apple_sub_303"
@@ -177,10 +166,10 @@ def handle_oauth_callback(
         if "privaterelay.appleid.com" in email.lower():
             # Create a separate lightweight user
             existing_user = None
-        # Rule: auto-link ONLY if account's email is verified AND its type is HOTEL_GUEST or SHORT_TERM_HOSTEL_GUEST
+        # Auto-link only verified customer accounts.
         elif (
             existing_user.email_verified_at is not None and
-            existing_user.account_type in (AccountType.HOTEL_GUEST, AccountType.SHORT_TERM_HOSTEL_GUEST)
+            existing_user.role == Role.CUSTOMER
         ):
             # Auto-link!
             new_link = LinkedIdentity(
@@ -194,18 +183,18 @@ def handle_oauth_callback(
             access_token, _, exp, _ = create_user_session(db, existing_user, "customer", response)
             return RedirectResponse(url=f"{settings.PUBLIC_WEBSITE_URL}/oauth/callback?token={access_token}")
         else:
-            # Blocked: never auto-link to residents, staff, managers, super admins
+            # Never auto-link accounts that are not customers.
             return RedirectResponse(
                 url=f"{settings.PUBLIC_WEBSITE_URL}/oauth/callback?error=cannot_autolink&message=Please+sign+in+with+your+usual+method,+then+link+from+Settings."
             )
 
-    # Create new ACTIVE HOTEL_GUEST
+    # Create new active customer.
     new_user = User(
         email=email.lower(),
         username=email.split("@")[0] + "_" + secrets.token_hex(2),
         full_name=name,
         password_hash=secrets.token_urlsafe(32), # No usable password; OAuth primary
-        account_type="HOTEL_GUEST",
+        role=Role.CUSTOMER,
         status="ACTIVE",
         email_verified_at=now,
     )

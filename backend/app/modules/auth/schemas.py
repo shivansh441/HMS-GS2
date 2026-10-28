@@ -1,17 +1,18 @@
 from datetime import datetime
-from typing import Any, Literal
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from typing import Literal
+
+from pydantic import AliasChoices, BaseModel, ConfigDict, EmailStr, Field
+
+from app.core.permissions import Role
+
 
 class CustomerRegisterRequest(BaseModel):
-    accountType: Literal["HOTEL_GUEST", "SHORT_TERM_HOSTEL_GUEST", "LONG_TERM_RESIDENT"] | None = None
-    account_type: Literal["HOTEL_GUEST", "SHORT_TERM_HOSTEL_GUEST", "LONG_TERM_RESIDENT"] | None = None
     email: EmailStr
     password: str = Field(..., min_length=12)
-    firstName: str | None = None
-    lastName: str | None = None
-    full_name: str | None = None
+    firstName: str
+    lastName: str
     phone: str | None = None
-    consent: bool = Field(True, description="Terms of service and privacy consent")
+    consent: Literal[True] = Field(description="Terms of service and privacy consent")
 
 class VerifyEmailRequest(BaseModel):
     token: str
@@ -96,8 +97,16 @@ class UserResponse(BaseModel):
     username: str | None
     full_name: str | None
     phone: str | None
-    account_type: str
-    staff_role: str | None
+    gender: str | None
+    customer_persona: str | None = Field(
+        validation_alias=AliasChoices("customer_persona", "customerPersona"),
+        serialization_alias="customerPersona",
+    )
+    role: Role
+    staff_role: str | None = Field(
+        validation_alias=AliasChoices("staff_role", "staffRole"),
+        serialization_alias="staffRole",
+    )
     status: str
     must_change_password: bool
     mfa_enabled: bool
@@ -105,7 +114,7 @@ class UserResponse(BaseModel):
     phone_verified_at: datetime | None
     created_at: datetime
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
 class AuthSuccessResponse(BaseModel):
     accessToken: str = ""

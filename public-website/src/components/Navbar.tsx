@@ -33,6 +33,9 @@ export const Navbar: React.FC = () => {
           <Link href="/#stays" className="hover:text-slate-900 transition-colors">
             Our Stays
           </Link>
+          <Link href="/properties" className="hover:text-slate-900 transition-colors">
+            Properties
+          </Link>
           <Link href="/#living" className="hover:text-slate-900 transition-colors">
             Co-Living
           </Link>

@@ -1,4 +1,5 @@
 from datetime import timedelta
+import hmac
 from typing import Any
 import jwt
 from fastapi import APIRouter, Depends, Request, Response, status
@@ -7,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.errors import ConflictError, ForbiddenError, NotFoundError, UnauthorizedError, ValidationError
-from app.core.permissions import AccountType, get_user_permissions
+from app.core.permissions import get_user_permissions
 from app.core.rate_limit import get_client_ip
 from app.core.scoping import get_allowed_property_ids
 from app.core.security import generate_one_time_token, generate_recovery_codes, hash_token, verify_password, verify_totp_code_with_replay
@@ -87,7 +88,10 @@ def update_customer_profile(
                     OtpCode.is_used == False,
                 ).order_by(OtpCode.created_at.desc())
             )
-            if not otp or otp.expires_at < utc_now() or hash_token(payload.phoneOtpCode) != otp.code_hash:
+            if not otp or otp.expires_at < utc_now() or not hmac.compare_digest(
+                hash_token(payload.phoneOtpCode),
+                otp.code_hash,
+            ):
                 raise UnauthorizedError("Invalid or expired phone verification code", code="INVALID_OTP")
             
             otp.is_used = True
@@ -353,14 +357,14 @@ def get_admin_me(
     admin_user: User = Depends(get_current_admin_user),
     db: Session = Depends(get_db),
 ):
-    permissions = get_user_permissions(admin_user.account_type, admin_user.staff_role)
+    permissions = get_user_permissions(admin_user.role)
     allowed_props = get_allowed_property_ids(db, admin_user)
 
     return {
         "user": UserResponse.model_validate(admin_user),
         "permissions": sorted([p.value for p in permissions]),
         "allowedPropertyIds": sorted(list(allowed_props)),
-        "isSuperAdmin": admin_user.account_type == "SUPER_ADMIN",
+        "isAdmin": admin_user.role == "ADMIN",
     }
 
 @admin_me_router.get("/sessions", response_model=list[SessionItemResponse], summary="List active admin sessions")

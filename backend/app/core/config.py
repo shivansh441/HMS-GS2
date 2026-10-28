@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     JWT_SECRET: str = "haven_stays_jwt_secret_must_be_at_least_32_bytes_long_random_key_12345"
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
+    ADMIN_MFA_REQUIRED: bool = False
     
     # AES-256-GCM key (32 bytes urlsafe base64 encoded or raw 32 bytes)
     # Default is 32 byte key urlsafe base64: base64.urlsafe_b64encode(b"01234567890123456789012345678901").decode()

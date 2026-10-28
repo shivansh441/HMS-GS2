@@ -2,13 +2,19 @@ from typing import Annotated
 from fastapi import APIRouter, Cookie, Depends, Request, Response, status
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
-from app.core.errors import UnauthorizedError
-from app.core.permissions import AccountType
+from app.core.errors import ForbiddenError, NotFoundError, UnauthorizedError
+from app.core.permissions import Role
 from app.core.rate_limit import get_client_ip
+from app.core.security import decode_access_token, hash_password, validate_password_strength
 from app.db.models import User
 from app.db.session import get_db
-from app.modules.auth.deps import get_current_admin_user, get_current_customer
+from app.modules.audit.service import write_audit_log
+from app.modules.auth.deps import (
+    get_admin_enrollment_user,
+    get_current_admin_user,
+    get_current_customer,
+    get_optional_current_customer,
+)
 from app.modules.auth.oauth import handle_oauth_callback, render_mock_consent_page, start_oauth_flow
 from app.modules.auth.schemas import (
     ActivateRequest,
@@ -28,6 +34,7 @@ from app.modules.auth.schemas import (
     MfaVerifyRequest,
     OtpRequestPayload,
     OtpVerifyPayload,
+    ResendVerificationRequest,
     ResetPasswordRequest,
     UserResponse,
     VerifyEmailRequest,
@@ -37,6 +44,7 @@ from app.modules.auth.service import (
     admin_login_flow,
     change_password_authenticated,
     confirm_mfa_enrollment,
+    create_user_session,
     customer_login_flow,
     enroll_mfa_flow,
     forgot_password_flow,
@@ -73,16 +81,12 @@ def register(
 ):
     ip = get_client_ip(request)
     user_agent = request.headers.get("user-agent")
-    acc_type = payload.accountType or payload.account_type or "HOTEL_GUEST"
-    fn = payload.firstName or (payload.full_name.split()[0] if payload.full_name else "Guest")
-    ln = payload.lastName or (payload.full_name.split()[1] if payload.full_name and len(payload.full_name.split()) > 1 else "Guest")
     res = register_customer_flow(
         db=db,
-        account_type=acc_type,
         email=payload.email,
         password=payload.password,
-        first_name=fn,
-        last_name=ln,
+        first_name=payload.firstName,
+        last_name=payload.lastName,
         phone=payload.phone,
         ip=ip,
         user_agent=user_agent,
@@ -168,9 +172,17 @@ def customer_login(
 def request_otp(
     request: Request,
     payload: OtpRequestPayload,
+    current_user: User | None = Depends(get_optional_current_customer),
     db: Session = Depends(get_db),
 ):
-    res = request_otp_flow(db, payload.target, payload.channel, payload.purpose, request)
+    res = request_otp_flow(
+        db,
+        payload.target,
+        payload.channel,
+        payload.purpose,
+        request,
+        current_user=current_user,
+    )
     return GenericResponse(message=res["message"])
 
 @auth_router.post(
@@ -182,10 +194,17 @@ def verify_otp(
     request: Request,
     response: Response,
     payload: OtpVerifyPayload,
+    current_user: User | None = Depends(get_optional_current_customer),
     db: Session = Depends(get_db),
 ):
     access_token, exp, user = verify_otp_flow(
-        db, payload.target, payload.code, payload.purpose, response, request
+        db,
+        payload.target,
+        payload.code,
+        payload.purpose,
+        response,
+        request,
+        current_user=current_user,
     )
     return AuthSuccessResponse(
         accessToken=access_token,
@@ -470,12 +489,11 @@ def admin_mfa_verify(
     summary="Start forced or voluntary admin MFA enrollment",
 )
 def admin_mfa_enroll(
-    request: Request,
-    enroll_token: str | None = None,
-    current_admin: User = Depends(get_current_admin_user),
+    current_admin: User = Depends(get_admin_enrollment_user),
 ):
-    user = current_admin
-    data = enroll_mfa_flow(user)
+    if current_admin.mfa_enabled:
+        raise ForbiddenError("MFA is already enrolled", code="MFA_ALREADY_ENROLLED")
+    data = enroll_mfa_flow(current_admin)
     return MfaEnrollResponse(**data)
 
 @admin_auth_router.post(
@@ -487,7 +505,7 @@ def admin_mfa_confirm(
     request: Request,
     payload: MfaConfirmRequest,
     secret: str,
-    current_admin: User = Depends(get_current_admin_user),
+    current_admin: User = Depends(get_admin_enrollment_user),
     db: Session = Depends(get_db),
 ):
     recovery_codes = confirm_mfa_enrollment(db, current_admin, secret, payload.code, request)
@@ -508,7 +526,12 @@ def admin_forced_change_password(
     token_payload = decode_access_token(payload.changeToken, expected_audience="admin-password-change")
     user_id = token_payload.get("sub")
     user = db.get(User, user_id)
-    if not user:
+    if (
+        not user
+        or user.role not in (Role.ADMIN, Role.STAFF)
+        or user.status != "ACTIVE"
+        or not user.must_change_password
+    ):
         raise NotFoundError("Admin user not found")
 
     validate_password_strength(payload.newPassword)
@@ -516,6 +539,14 @@ def admin_forced_change_password(
     user.must_change_password = False
 
     access_token, _, exp, _ = create_user_session(db, user, "admin", response, ip=get_client_ip(request))
+    write_audit_log(
+        db,
+        action="ADMIN_FORCED_PASSWORD_CHANGED",
+        actor_user_id=user.id,
+        target_user_id=user.id,
+        ip=get_client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+    )
     db.commit()
     return AuthSuccessResponse(accessToken=access_token, expiresIn=exp, user=UserResponse.model_validate(user))
 
@@ -579,7 +610,7 @@ def admin_logout_all(
 @admin_auth_router.post(
     "/forgot-password",
     response_model=GenericResponse,
-    summary="Admin staff/manager forgot password",
+    summary="Admin or staff forgot password",
 )
 def admin_forgot_password(
     request: Request,
@@ -593,7 +624,7 @@ def admin_forgot_password(
 @admin_auth_router.post(
     "/reset-password",
     response_model=GenericResponse,
-    summary="Admin staff/manager reset password",
+    summary="Admin or staff reset password",
 )
 def admin_reset_password(
     request: Request,

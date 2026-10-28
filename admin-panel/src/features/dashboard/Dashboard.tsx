@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '../../lib/auth-context';
 import { apiClient } from '../../lib/api';
-import { UserListResponse, Property } from '../../types';
+import { UserListResponse } from '../../types';
 import { LoadingIndicator } from '../../components/ui/LoadingIndicator';
 import { Users, Building2, UserX, ShieldCheck, Hotel } from 'lucide-react';
 
@@ -21,11 +21,11 @@ export const Dashboard: React.FC = () => {
         setTotalUsers(usersRes.data.total);
 
         // Guest count
-        const guestsRes = await apiClient.get<UserListResponse>('/admin/users?account_type=HOTEL_GUEST&limit=1');
-        setActiveGuests(guestsRes.data.total);
+        const customersRes = await apiClient.get<UserListResponse>('/admin/users?role=CUSTOMER&limit=1');
+        setActiveGuests(customersRes.data.total);
 
-        // Unassigned no-booking pool (Super Admin only)
-        if (user?.account_type === 'SUPER_ADMIN') {
+        // Unassigned customer pool is restricted to admins.
+        if (user?.role === 'ADMIN') {
           try {
             const noBookRes = await apiClient.get<UserListResponse>('/admin/users?segment=registered_no_booking&limit=1');
             setUnassignedNoBooking(noBookRes.data.total);
@@ -51,7 +51,7 @@ export const Dashboard: React.FC = () => {
           System Overview & Metrics
         </h1>
         <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-          Real-time metrics scoped to authorized property tenant boundary: <span className="font-mono text-slate-800 dark:text-slate-200 font-semibold">{selectedPropertyId === 'ALL' ? 'ALL ACCESSIBLE PROPERTIES' : selectedPropertyId}</span>
+          Real-time metrics scoped to authorized property tenant boundary: <span className="font-mono text-slate-800 dark:text-slate-200 font-semibold">{selectedPropertyId === 'ALL' ? 'ALL ACCESSIBLE PROPERTIES' : selectedPropertyId || 'NO ASSIGNED PROPERTY'}</span>
         </p>
       </div>
 
@@ -81,20 +81,20 @@ export const Dashboard: React.FC = () => {
               {properties.length}
             </div>
             <div className="text-[11px] text-slate-400 mt-1">
-              {user?.account_type === 'SUPER_ADMIN' ? 'Global Access (Super Admin)' : 'Explicitly Assigned'}
+              {user?.role === 'ADMIN' ? 'Organization access' : 'Explicitly assigned'}
             </div>
           </div>
 
           <div className="bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 p-4">
             <div className="flex items-center justify-between text-slate-500 dark:text-slate-400 text-xs font-semibold uppercase tracking-wider">
-              <span>Hotel Guests</span>
+              <span>Customers</span>
               <Hotel className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
             </div>
             <div className="text-2xl font-bold font-mono text-slate-900 dark:text-white mt-2">
               {activeGuests ?? 0}
             </div>
             <div className="text-[11px] text-slate-400 mt-1">
-              Short-term hotel guest records
+              Customer accounts within scope
             </div>
           </div>
 
@@ -104,10 +104,10 @@ export const Dashboard: React.FC = () => {
               <UserX className="w-4 h-4 text-amber-600 dark:text-amber-400" />
             </div>
             <div className="text-2xl font-bold font-mono text-slate-900 dark:text-white mt-2">
-              {user?.account_type === 'SUPER_ADMIN' ? (unassignedNoBooking ?? 0) : 'RESTRICTED'}
+              {user?.role === 'ADMIN' ? (unassignedNoBooking ?? 0) : 'RESTRICTED'}
             </div>
             <div className="text-[11px] text-slate-400 mt-1">
-              {user?.account_type === 'SUPER_ADMIN' ? 'Registered with no property link' : 'Super Admin visibility only'}
+              {user?.role === 'ADMIN' ? 'Registered with no property link' : 'Admin visibility only'}
             </div>
           </div>
         </div>
@@ -120,7 +120,7 @@ export const Dashboard: React.FC = () => {
           <span>Tenant Boundary Enforcement</span>
         </div>
         <p className="text-slate-600 dark:text-slate-400 leading-relaxed">
-          Every query and mutation to the backend API automatically passes through the <span className="font-mono font-semibold">ScopedQuery</span> layer. Managers and front-desk staff are isolated strictly to their assigned locations. Access to out-of-scope records responds with HTTP 404 to avoid leaking existence.
+          Property-scoped API reads are limited to the properties assigned to your account. Out-of-scope records are not available from this panel.
         </p>
       </div>
     </div>

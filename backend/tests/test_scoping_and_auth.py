@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from app.core.permissions import ActionPermission, get_user_permissions
 from app.core.security import create_access_token
 from app.db.models import Property, User
 
@@ -19,8 +20,9 @@ def test_customer_registration_and_login_flow(client: TestClient):
     reg_payload = {
         "email": "brandnew.guest@havenstays.com",
         "password": "StrongPassword123!@",
-        "full_name": "New Guest",
-        "account_type": "HOTEL_GUEST"
+        "firstName": "New",
+        "lastName": "Guest",
+        "consent": True,
     }
     reg_res = client.post("/api/v1/auth/register", json=reg_payload)
     assert reg_res.status_code == 202
@@ -70,7 +72,6 @@ def test_customer_token_rejected_on_admin_routes(client: TestClient):
         client.post("/api/v1/auth/register", json={
             "email": "aud.test@customer.com",
             "password": "CustomerPass123!@",
-            "account_type": "HOTEL_GUEST"
         })
         login_res = client.post("/api/v1/auth/login", json={
             "email": "aud.test@customer.com",
@@ -100,22 +101,22 @@ def test_admin_mfa_step(client: TestClient):
     assert data["requiresMfa"] is True
     assert "mfaChallengeToken" in data
 
-def test_manager_scoping_and_cross_property_access(client: TestClient, db_session):
+def test_staff_scoping_and_cross_property_access(client: TestClient, db_session):
     """
-    Manager on HQ-01 only:
+    Staff assigned to HQ-01 only:
     - sees only HQ-01 in GET /admin/properties
     - accessing out-of-scope user returns 404 (not 403)
     - invalid X-Property-Id returns 403
-    - no-booking user does NOT appear for Manager
+    - no-booking user does NOT appear for Staff
     """
-    # Manager on HQ-01
-    mgr_res = client.post("/api/v1/admin/auth/login", json={
-        "identifier": "manager.hq01@havenstays.com",
-        "password": "ManagerSecurePass123!"
+    # Staff assigned to HQ-01
+    staff_res = client.post("/api/v1/admin/auth/login", json={
+        "identifier": "staff.desk@havenstays.local",
+        "password": "StaffDesk2026!#"
     })
-    assert mgr_res.status_code == 200
-    mgr_token = mgr_res.json()["accessToken"]
-    headers = {"Authorization": f"Bearer {mgr_token}"}
+    assert staff_res.status_code == 200
+    staff_token = staff_res.json()["accessToken"]
+    headers = {"Authorization": f"Bearer {staff_token}"}
 
     # 1. Properties: should only return 1 property (HQ-01)
     props_res = client.get("/api/v1/admin/properties", headers=headers)
@@ -130,7 +131,7 @@ def test_manager_scoping_and_cross_property_access(client: TestClient, db_sessio
 
     # 2. Sending invalid or out-of-scope X-Property-Id (HQ-02) returns 403
     res_forbidden = client.get("/api/v1/admin/users", headers={
-        "Authorization": f"Bearer {mgr_token}",
+        "Authorization": f"Bearer {staff_token}",
         "X-Property-Id": hq02.id
     })
     assert res_forbidden.status_code == 403
@@ -144,29 +145,70 @@ def test_manager_scoping_and_cross_property_access(client: TestClient, db_sessio
     assert cross_res.status_code == 404
     assert cross_res.json()["error"]["code"] == "NOT_FOUND"
 
-    # 4. No-booking user should NOT appear in Manager's user list
+    # 4. No-booking user should NOT appear in Staff's user list
     users_res = client.get("/api/v1/admin/users", headers=headers)
     assert users_res.status_code == 200
     user_emails = [u["email"] for u in users_res.json()["items"]]
     assert "guest.nobooking1@gmail.com" not in user_emails
     assert "guest.nobooking2@gmail.com" not in user_emails
 
-    # 5. Manager trying to filter by 'registered_no_booking' segment gets 403
+    # 5. Staff trying to filter by 'registered_no_booking' segment gets 403
     seg_res = client.get("/api/v1/admin/users?segment=registered_no_booking", headers=headers)
     assert seg_res.status_code == 403
 
-def test_super_admin_sees_all_and_unassigned_pool(client: TestClient, db_session):
+
+def test_staff_permissions_ignore_staff_role_and_empty_scope_is_empty(client: TestClient, db_session):
+    front_desk_permissions = get_user_permissions("STAFF", "FRONT_DESK")
+    maintenance_permissions = get_user_permissions("STAFF", "MAINTENANCE")
+    assert front_desk_permissions == maintenance_permissions
+    assert ActionPermission.VIEW_USERS in front_desk_permissions
+    assert ActionPermission.MANAGE_PROPERTIES not in front_desk_permissions
+    assert ActionPermission.ONBOARD_CUSTOMER not in front_desk_permissions
+
+    staff = User(
+        email="staff.unassigned@example.com",
+        username="staff_unassigned",
+        password_hash="not-used-in-this-test",
+        role="STAFF",
+        status="ACTIVE",
+    )
+    db_session.add(staff)
+    db_session.commit()
+    token = create_access_token(subject=staff.id, audience="admin", role="STAFF")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    properties = client.get("/api/v1/admin/properties", headers=headers)
+    users = client.get("/api/v1/admin/users", headers=headers)
+    assert properties.status_code == 200
+    assert properties.json() == []
+    assert users.status_code == 200
+    assert users.json()["items"] == []
+    assert users.json()["total"] == 0
+
+
+def test_staff_write_routes_are_blocked_globally(client: TestClient, db_session):
+    staff = db_session.scalar(select(User).where(User.email == "frontdesk@havenstays.com"))
+    token = create_access_token(subject=staff.id, audience="admin", role="STAFF")
+    response = client.post(
+        f"/api/v1/admin/users/{staff.id}/force-logout",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "STAFF_READ_ONLY"
+
+
+def test_admin_sees_all_and_unassigned_pool(client: TestClient, db_session):
     """
-    Super Admin:
+    Admin:
     - sees all properties
     - sees all users, including the no-booking unassigned pool
     """
-    # Create super admin access token directly
+    # Create Admin access token directly
     admin_user = db_session.scalar(select(User).where(User.email == "admin@havenstays.com"))
     token = create_access_token(
         subject=admin_user.id,
         audience="admin",
-        account_type="SUPER_ADMIN",
+        role="ADMIN",
     )
     headers = {"Authorization": f"Bearer {token}"}
 

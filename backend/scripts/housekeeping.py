@@ -6,7 +6,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from sqlalchemy import and_, select
 
-from app.core.permissions import AccountType, UserStatus
+from app.core.permissions import Role, UserStatus
 from app.db.models import User
 from app.db.session import SessionLocal
 from app.modules.audit.service import write_audit_log
@@ -29,11 +29,7 @@ def run_housekeeping():
         unverified_customers = db.scalars(
             select(User).where(
                 and_(
-                    User.account_type.in_([
-                        AccountType.HOTEL_GUEST,
-                        AccountType.SHORT_TERM_HOSTEL_GUEST,
-                        AccountType.LONG_TERM_RESIDENT,
-                    ]),
+                    User.role == Role.CUSTOMER,
                     User.status == UserStatus.ACTIVE,
                     User.email_verified_at.is_(None),
                     User.phone_verified_at.is_(None),
