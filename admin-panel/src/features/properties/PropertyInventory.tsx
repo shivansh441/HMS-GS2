@@ -4,6 +4,7 @@ import { Link, useParams } from 'react-router-dom';
 import { ArrowLeft, BedDouble, Building2, Plus, Save, UserRoundPlus, X } from 'lucide-react';
 import { useAuth } from '../../lib/auth-context';
 import { apiClient } from '../../lib/api';
+import { LoadingIndicator } from '../../components/ui/LoadingIndicator';
 import { Property } from '../../types';
 
 interface InventoryBed {
@@ -347,7 +348,7 @@ export const PropertyInventory: React.FC = () => {
   }
 
   if (loading) {
-    return <p className="p-8 text-sm text-slate-500">Loading property inventory…</p>;
+    return <LoadingIndicator label="Loading property inventory" className="p-8" />;
   }
 
   if (!property) {
@@ -531,7 +532,7 @@ export const PropertyInventory: React.FC = () => {
           </label>
           <button type="submit" disabled={saving} className="inline-flex items-center justify-center gap-2 bg-blue-700 px-3 py-2 text-xs font-bold uppercase text-white hover:bg-blue-800 disabled:opacity-60">
             {saving ? <Save className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
-            {saving ? 'Saving…' : 'Create room'}
+            Create room
           </button>
           </form>
         </section>
@@ -609,7 +610,7 @@ export const PropertyInventory: React.FC = () => {
               <input required={Boolean(feeAmounts.waterRate)} maxLength={32} value={feeAmounts.waterUnit} onChange={(event) => setFeeAmounts((current) => ({ ...current, waterUnit: event.target.value.toUpperCase() }))} className={inputClass} />
             </label>
             <button type="submit" disabled={savingFees} className="inline-flex items-center justify-center gap-2 self-end bg-blue-700 px-3 py-2 text-xs font-bold uppercase text-white disabled:opacity-60">
-              <Save className="h-4 w-4" /> {savingFees ? 'Saving…' : 'Save fee settings'}
+              <Save className="h-4 w-4" /> Save fee settings
             </button>
             <p className="text-[11px] text-slate-500 lg:col-span-3">Enter 0 to deactivate fixed fees. Utility rates are applied only to actual month-end readings and billed as arrears.</p>
           </form>
@@ -667,7 +668,7 @@ export const PropertyInventory: React.FC = () => {
               </>
             ) : <p className="text-xs text-slate-500">No security deposit is configured for this property.</p>}
             <button type="submit" disabled={deskSaving || availableDeskUnits.length === 0 || (deskHasRateOverride && !deskRateOverrideReason.trim())} className="w-full bg-blue-700 px-3 py-2 text-sm font-bold text-white disabled:opacity-60">
-              {deskSaving ? 'Checking in…' : 'Assign walk-in'}
+              Assign walk-in
             </button>
           </form>
         </div>

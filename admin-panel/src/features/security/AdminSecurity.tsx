@@ -144,7 +144,7 @@ export const AdminSecurity: React.FC = () => {
             Revoke other sessions
           </button>
         </div>
-        {loading ? <LoadingIndicator label="Loading sessions..." /> : sessions.length === 0 ? (
+        {loading ? <LoadingIndicator label="Loading sessions" /> : sessions.length === 0 ? (
           <p className="text-xs text-slate-500">No active session details are available.</p>
         ) : (
           <ul className="divide-y divide-slate-200 dark:divide-slate-700">
@@ -195,7 +195,7 @@ export const AdminSecurity: React.FC = () => {
               aria-label="Authenticator code"
               className={textInput}
             />
-            <button type="submit" disabled={busy} className={actionButton}>{busy ? 'Confirming...' : 'Confirm MFA setup'}</button>
+            <button type="submit" disabled={busy} className={actionButton}>Confirm MFA setup</button>
           </form>
         )}
         {recoveryCodes.length > 0 && (

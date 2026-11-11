@@ -240,6 +240,9 @@ class PropertyItemResponse(BaseModel):
     floors: int
     floor_count: int = Field(alias="floorCount")
     unit_count: int = Field(alias="unitCount")
+    room_count: int = Field(alias="roomCount")
+    bed_count: int = Field(alias="bedCount")
+    available_bed_count: int = Field(alias="availableBedCount")
     created_at: datetime = Field(alias="createdAt")
 
 

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { AxiosError } from 'axios';
 import { RefreshCw, Save } from 'lucide-react';
 import { apiClient } from '../../lib/api';
+import { LoadingIndicator } from '../../components/ui/LoadingIndicator';
 
 interface Invoice {
   id: string;
@@ -215,14 +216,14 @@ export const PropertyLedger: React.FC<{
             <input type="month" value={month} onChange={(event) => setMonth(event.target.value)} className={inputClass} />
           </label>
           <button type="button" onClick={() => void generateInvoices()} disabled={working || !month} className="bg-blue-700 px-3 py-2 text-xs font-bold uppercase text-white disabled:opacity-60">
-            {working ? 'Working…' : 'Generate monthly invoices'}
+            Generate monthly invoices
           </button>
         </div>
       )}
 
       <div className="space-y-3">
         <h3 className="text-xs font-bold uppercase">Invoices</h3>
-        {loading ? <p className="text-xs text-slate-500">Loading ledger…</p> : invoices.length === 0 ? (
+        {loading ? <LoadingIndicator label="Loading ledger" /> : invoices.length === 0 ? (
           <p className="border border-slate-200 bg-white p-4 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-800">No invoices have been generated.</p>
         ) : invoices.map((invoice) => (
           <article key={invoice.id} className="space-y-3 border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">

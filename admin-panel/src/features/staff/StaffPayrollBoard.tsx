@@ -3,6 +3,7 @@ import { AxiosError } from 'axios';
 import { Banknote, Pencil, Plus, RefreshCw, Users, X } from 'lucide-react';
 import { useAuth } from '../../lib/auth-context';
 import { apiClient } from '../../lib/api';
+import { LoadingIndicator } from '../../components/ui/LoadingIndicator';
 import { Property } from '../../types';
 
 type PaymentMode = 'CASH' | 'BANK_TRANSFER' | 'UPI';
@@ -365,7 +366,7 @@ export const StaffPayrollBoard: React.FC = () => {
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={7} className="p-8 text-center text-slate-500">Loading staff…</td></tr>
+              <tr><td colSpan={7} className="p-8 text-center text-slate-500"><LoadingIndicator label="Loading staff" /></td></tr>
             ) : staff.length === 0 ? (
               <tr><td colSpan={7} className="p-8 text-center text-slate-500">No staff profiles in this property scope.</td></tr>
             ) : staff.map((member) => {

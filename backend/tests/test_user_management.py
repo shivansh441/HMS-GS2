@@ -602,6 +602,41 @@ def test_admin_can_deactivate_users_and_only_primary_admin_can_manage_admins(cli
     assert secondary_force_logout.status_code == 403
 
 
+def test_admin_can_soft_delete_users_and_cannot_delete_self(client: TestClient, db_session):
+    headers = _admin_headers(db_session)
+    admin = db_session.scalar(select(User).where(User.email == "admin@havenstays.local"))
+    assert admin is not None
+    target = User(
+        email=f"archived-{uuid4().hex[:8]}@example.com",
+        full_name="Archived User",
+        phone=f"+1555{uuid4().int % 10000000:07d}",
+        password_hash="unused",
+        role=Role.CUSTOMER,
+        status="ACTIVE",
+    )
+    db_session.add(target)
+    db_session.commit()
+
+    archived = client.delete(f"/api/v1/admin/users/{target.id}", headers=headers)
+    assert archived.status_code == 204, archived.text
+    db_session.refresh(target)
+    assert target.status == "ARCHIVED"
+
+    audit = db_session.scalar(
+        select(AuditLog).where(
+            AuditLog.target_user_id == target.id,
+            AuditLog.action == "USER_ARCHIVED",
+        )
+    )
+    assert audit is not None
+
+    repeated = client.delete(f"/api/v1/admin/users/{target.id}", headers=headers)
+    assert repeated.status_code == 400
+
+    self_delete = client.delete(f"/api/v1/admin/users/{admin.id}", headers=headers)
+    assert self_delete.status_code == 403
+
+
 def test_guest_subtype_must_match_initial_stay_property_type(client: TestClient, db_session):
     headers = _admin_headers(db_session)
     hostel = _create_property(db_session, "Subtype Mismatch Hostel", "HOSTEL_BOYS")

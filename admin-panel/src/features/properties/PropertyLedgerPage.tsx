@@ -4,6 +4,7 @@ import { Link, useParams } from 'react-router-dom';
 import { ArrowLeft, Receipt } from 'lucide-react';
 import { useAuth } from '../../lib/auth-context';
 import { apiClient } from '../../lib/api';
+import { LoadingIndicator } from '../../components/ui/LoadingIndicator';
 import { PropertyLedger } from './PropertyLedger';
 
 interface LedgerProperty {
@@ -124,7 +125,7 @@ export const PropertyLedgerPage: React.FC = () => {
         </section>
       )}
 
-      {loading && <p className="p-6 text-sm text-slate-500">Loading property ledger…</p>}
+      {loading && <LoadingIndicator label="Loading property ledger" className="p-6" />}
       {canViewLedger && !loading && property && hostelTypes.includes(property.type) && (
         <PropertyLedger
           propertyId={property.id}

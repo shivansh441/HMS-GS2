@@ -380,7 +380,7 @@ export const AdminMessPage: React.FC = () => {
                   </fieldset>
                 ))}
                 <button type="submit" disabled={isLockedDate || saving || !scheduledDate} className="bg-blue-700 px-4 py-2 text-xs font-bold uppercase text-white disabled:opacity-50">
-                  {saving ? 'Saving…' : 'Save future menu'}
+                  Save future menu
                 </button>
               </form>
             </section>

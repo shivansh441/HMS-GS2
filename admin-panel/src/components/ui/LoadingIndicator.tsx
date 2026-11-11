@@ -2,16 +2,26 @@ import React from 'react';
 
 interface LoadingIndicatorProps {
   label?: string;
+  className?: string;
 }
 
-export const LoadingIndicator: React.FC<LoadingIndicatorProps> = ({ label = 'Loading...' }) => {
+export const LoadingIndicator: React.FC<LoadingIndicatorProps> = ({
+  label = 'Loading',
+  className = '',
+}) => {
   return (
-    <div className="flex items-center space-x-2 py-4 px-3 bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-200 text-xs font-mono select-none" role="status">
-      <span>{label}</span>
-      <span aria-hidden="true" className="flex gap-0.5 text-slate-500 dark:text-slate-400">
-        <span className="animate-pulse motion-reduce:animate-none">.</span>
-        <span className="animate-pulse [animation-delay:200ms] motion-reduce:animate-none">.</span>
-        <span className="animate-pulse [animation-delay:400ms] motion-reduce:animate-none">.</span>
+    <div
+      className={`pointer-events-none fixed inset-0 z-[90] flex items-center justify-center ${className}`}
+      role="status"
+      aria-label={label}
+    >
+      <span className="inline-flex items-center gap-1 font-mono text-xs font-semibold uppercase text-slate-700 dark:text-slate-200">
+        <span>{label}</span>
+        <span aria-hidden="true" className="operation-overlay-dots">
+          <span className="operation-overlay-dot">.</span>
+          <span className="operation-overlay-dot">.</span>
+          <span className="operation-overlay-dot">.</span>
+        </span>
       </span>
     </div>
   );

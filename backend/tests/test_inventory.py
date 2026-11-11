@@ -137,6 +137,15 @@ def test_admin_can_list_all_properties_and_update_any_property(client: TestClien
     assert detail.status_code == 200, detail.text
     assert detail.json()["address"] == "2 Updated Road"
     assert detail.json()["facilities"] == ["Wi-Fi", "Laundry"]
+    lightweight_detail = client.get(
+        f"/api/v1/admin/properties/{second_property['id']}",
+        headers=scoped_headers,
+        params={"include_unit_matrix": "false"},
+    )
+    assert lightweight_detail.status_code == 200, lightweight_detail.text
+    assert lightweight_detail.json()["unitMatrix"] == []
+    assert lightweight_detail.json()["roomCount"] == detail.json()["roomCount"]
+    assert lightweight_detail.json()["bedCount"] == detail.json()["bedCount"]
 
     audit = db_session.scalar(
         select(AuditLog).where(
@@ -223,6 +232,63 @@ def test_fee_config_addition_and_staff_redaction(client: TestClient, db_session)
     )
     assert staff_response.status_code == 200
     assert staff_response.json() == []
+
+
+def test_changing_property_from_hostel_deactivates_and_hides_fees(client: TestClient, db_session):
+    headers = _headers(db_session)
+    prop = _create_property(client, headers, "HOSTEL_COED")
+    fee_response = client.post(
+        f"/api/v1/properties/{prop['id']}/fees",
+        headers=headers,
+        json={
+            "feeType": "SECURITY_DEPOSIT",
+            "name": "Security Deposit",
+            "amount": "5000.00",
+            "isActive": True,
+        },
+    )
+    assert fee_response.status_code == 201, fee_response.text
+
+    update_response = client.put(
+        f"/api/v1/admin/properties/{prop['id']}",
+        headers=headers,
+        json={
+            "name": prop["name"],
+            "type": "HOTEL",
+            "status": "ACTIVE",
+            "floors": 3,
+            "address": "123 Test Street",
+            "city": "Test City",
+            "state": "Test State",
+            "pincode": "12345",
+            "contactPhone": "1234567890",
+            "currency": "INR",
+            "timezone": "Asia/Kolkata",
+            "facilities": [],
+        },
+    )
+    assert update_response.status_code == 200, update_response.text
+
+    fee_list = client.get(
+        f"/api/v1/properties/{prop['id']}/fees",
+        headers=headers,
+    )
+    property_details = client.get(
+        f"/api/v1/admin/properties/{prop['id']}",
+        headers=headers,
+    )
+    assert fee_list.status_code == 200
+    assert fee_list.json() == []
+    assert property_details.status_code == 200
+    assert property_details.json()["feeConfigs"] == []
+    stored_fee = db_session.scalar(
+        select(PropertyFeeConfig).where(
+            PropertyFeeConfig.property_id == prop["id"],
+            PropertyFeeConfig.fee_type == "SECURITY_DEPOSIT",
+        )
+    )
+    assert stored_fee is not None
+    assert stored_fee.is_active is False
 
 
 def test_bulk_preview_create_collision_and_matrix(client: TestClient, db_session):
@@ -328,6 +394,66 @@ def test_hostel_room_creation_generates_configured_child_beds(client: TestClient
         Decimal(bed["baseRateMonthly"]) == Decimal("9000.00")
         for bed in four_bed_room_data["beds"]
     )
+
+
+def test_property_summary_separates_hostel_rooms_and_available_beds(client: TestClient, db_session):
+    headers = _headers(db_session)
+    prop = _create_property(client, headers, "HOSTEL_COED")
+    created = client.post(
+        f"/api/v1/properties/{prop['id']}/units",
+        headers=headers,
+        json={
+            "unitNumber": "A101",
+            "floor": 1,
+            "type": "ROOM",
+            "category": "CLASSIC",
+            "capacity": 2,
+            "bedsPerRoom": 2,
+        },
+    )
+    assert created.status_code == 201, created.text
+
+    full_details = client.get(
+        f"/api/v1/admin/properties/{prop['id']}",
+        headers=headers,
+    )
+    assert full_details.status_code == 200, full_details.text
+    assert len(full_details.json()["unitMatrix"][0]["rooms"][0]["beds"]) == 2
+    lightweight_details = client.get(
+        f"/api/v1/admin/properties/{prop['id']}",
+        headers=headers,
+        params={"include_unit_matrix": "false"},
+    )
+    assert lightweight_details.status_code == 200, lightweight_details.text
+    assert lightweight_details.json()["unitMatrix"] == []
+    assert lightweight_details.json()["roomCount"] == 1
+    assert lightweight_details.json()["bedCount"] == 2
+
+    summary = client.get("/api/v1/admin/properties", headers=headers)
+    assert summary.status_code == 200, summary.text
+    property_summary = next(item for item in summary.json() if item["id"] == prop["id"])
+    assert property_summary["unitCount"] == 3
+    assert property_summary["roomCount"] == 1
+    assert property_summary["bedCount"] == 2
+    assert property_summary["availableBedCount"] == 2
+
+    matrix = client.get(
+        f"/api/v1/properties/{prop['id']}/units/matrix",
+        headers=headers,
+    )
+    bed_id = matrix.json()["floors"][0]["rooms"][0]["beds"][0]["id"]
+    status_update = client.patch(
+        f"/api/v1/units/{bed_id}/status",
+        headers=headers,
+        json={"status": "DIRTY"},
+    )
+    assert status_update.status_code == 200, status_update.text
+
+    updated_summary = client.get("/api/v1/admin/properties", headers=headers)
+    property_summary = next(item for item in updated_summary.json() if item["id"] == prop["id"])
+    assert property_summary["roomCount"] == 1
+    assert property_summary["bedCount"] == 2
+    assert property_summary["availableBedCount"] == 1
 
 
 def test_unit_status_and_staff_scope(client: TestClient, db_session):

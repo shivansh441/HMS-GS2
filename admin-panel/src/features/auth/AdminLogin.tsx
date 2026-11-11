@@ -364,7 +364,7 @@ export const AdminLogin: React.FC = () => {
               />
             </label>
             <button type="submit" disabled={isSubmitting} className={buttonClass}>
-              {isSubmitting ? 'Saving...' : step === 'activate' ? 'Activate Account' : step === 'reset' ? 'Reset Password' : 'Change Password'}
+              {step === 'activate' ? 'Activate Account' : step === 'reset' ? 'Reset Password' : 'Change Password'}
             </button>
           </form>
         )}
@@ -395,7 +395,7 @@ export const AdminLogin: React.FC = () => {
               />
             </label>
             <button type="submit" disabled={isSubmitting} className={buttonClass}>
-              {isSubmitting ? 'Confirming...' : 'Confirm MFA Enrollment'}
+              Confirm MFA Enrollment
             </button>
           </form>
         )}

@@ -221,7 +221,7 @@ export const AuditLogs: React.FC = () => {
         <button type="button" onClick={() => setActiveTab('privileged')} className={`px-3 py-2 text-xs font-bold uppercase ${tab === 'privileged' ? 'border-b-2 border-blue-700 text-blue-700 dark:text-blue-300' : 'text-slate-500'}`}>Privileged actions</button>
       </div>
 
-      {loading ? <LoadingIndicator label="Loading audit and security events..." /> : logs.length === 0 ? (
+      {loading ? <LoadingIndicator label="Loading audit and security events" /> : logs.length === 0 ? (
         <div className="border border-slate-300 bg-white p-8 text-center text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-800">
           No events match the current filters.
         </div>
@@ -278,7 +278,7 @@ export const AuditLogs: React.FC = () => {
             </label>
             <div className="flex justify-end gap-2">
               <button type="button" onClick={() => setResolvingAlert(null)} className="border border-slate-300 px-3 py-2 text-xs font-bold uppercase dark:border-slate-700">Cancel</button>
-              <button disabled={saving} className="bg-red-700 px-3 py-2 text-xs font-bold uppercase text-white disabled:opacity-60">{saving ? 'Saving…' : 'Confirm resolution'}</button>
+              <button disabled={saving} className="bg-red-700 px-3 py-2 text-xs font-bold uppercase text-white disabled:opacity-60">Confirm resolution</button>
             </div>
           </form>
         </div>

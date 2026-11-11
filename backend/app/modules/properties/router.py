@@ -7,7 +7,7 @@ from app.db.models import Property, User
 from app.db.session import get_db
 from app.modules.auth.deps import get_current_admin_user, get_property_scope
 from app.modules.inventory.schemas import PropertyItemResponse
-from app.modules.inventory.service import property_summary
+from app.modules.inventory.service import property_summaries
 
 properties_router = APIRouter(prefix="/admin/properties", tags=["Admin Properties"])
 
@@ -28,4 +28,7 @@ def list_properties(
         query = query.where(Property.id.in_(property_scope))
 
     props = db.scalars(query.order_by(Property.code.asc())).all()
-    return [PropertyItemResponse.model_validate(property_summary(db, prop)) for prop in props]
+    return [
+        PropertyItemResponse.model_validate(summary)
+        for summary in property_summaries(db, list(props))
+    ]

@@ -77,6 +77,7 @@ from app.modules.inventory.schemas import (
 )
 from app.modules.inventory.service import (
     BED_LEVEL_TYPES,
+    HOSTEL_TYPES,
     bulk_create_units,
     create_fee_config,
     create_property,
@@ -84,6 +85,7 @@ from app.modules.inventory.service import (
     get_scoped_property,
     property_matrix,
     property_summary,
+    property_summaries,
     require_admin,
     soft_delete_property,
     unit_public_record,
@@ -216,7 +218,10 @@ def list_properties_endpoint(
             Property.is_deleted.is_(False),
         ).order_by(Property.code)
     ).all()
-    return [_property_response(db, prop) for prop in properties]
+    return [
+        PropertyItemResponse.model_validate(summary)
+        for summary in property_summaries(db, list(properties))
+    ]
 
 
 @inventory_router.get("/public/properties", response_model=list[PublicPropertyResponse])
@@ -272,6 +277,7 @@ def list_public_properties_endpoint(
 @inventory_router.get("/admin/properties/{property_id}")
 def get_property_endpoint(
     property_id: str,
+    include_unit_matrix: bool = Query(default=True),
     actor: User = Depends(get_current_admin_user),
     db: Session = Depends(get_db),
     property_scope: set[str] = Depends(get_property_scope),
@@ -284,10 +290,10 @@ def get_property_endpoint(
             .where(PropertyFeeConfig.property_id == prop.id)
             .order_by(PropertyFeeConfig.fee_type)
         ).all()
-        if reveal_internal
+        if reveal_internal and prop.type in HOSTEL_TYPES
         else []
     )
-    floors = property_matrix(db, prop, reveal_internal)
+    floors = property_matrix(db, prop, reveal_internal) if include_unit_matrix else []
     return {
         **property_summary(db, prop),
         "address": prop.address,
@@ -455,6 +461,8 @@ def list_property_fees_endpoint(
         prop = _scoped_property(db, actor, property_id, property_scope)
     if prop is None:
         raise NotFoundError("Property not found")
+    if prop.type not in HOSTEL_TYPES:
+        return []
     if actor.role == Role.STAFF and actor.staff_role != "FRONT_DESK":
         return []
     configs = db.scalars(
@@ -1205,6 +1213,14 @@ def create_utility_meter_reading_endpoint(
     unit = db.get(Unit, assignment.unit_id)
     if not unit or unit.property_id != prop.id:
         raise NotFoundError("Stay assignment is not in this property")
+    if (
+        prop.type not in HOSTEL_TYPES
+        or assignment.billing_strategy != "RECURRING_MONTHLY"
+    ):
+        raise BadRequestError(
+            "Metered property fees only apply to hosteler stays in hostel properties",
+            code="INVALID_FEE_ASSIGNMENT",
+        )
     config = db.scalar(
         select(PropertyFeeConfig).where(
             PropertyFeeConfig.property_id == prop.id,

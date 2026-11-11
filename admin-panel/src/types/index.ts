@@ -36,6 +36,9 @@ export interface Property {
   floors: number;
   floorCount: number;
   unitCount: number;
+  roomCount: number;
+  bedCount: number;
+  availableBedCount: number;
   createdAt: string;
 }
 

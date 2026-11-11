@@ -15,6 +15,7 @@ import { StaffPayrollBoard } from '../features/staff/StaffPayrollBoard';
 import { AdminMessPage } from '../features/mess/AdminMessPage';
 import { canAccess, PermissionKey } from '../lib/permissions';
 import { LoadingIndicator } from '../components/ui/LoadingIndicator';
+import { OperationOverlay } from '../components/ui/OperationOverlay';
 import {
   LayoutDashboard,
   Users,
@@ -40,7 +41,7 @@ const RequireAuth: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-100 dark:bg-slate-900">
-        <LoadingIndicator label="Authenticating session..." />
+        <LoadingIndicator label="Authenticating session" />
       </div>
     );
   }
@@ -352,7 +353,7 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           </nav>
 
           <div className="mt-auto p-3 border-t border-slate-200 dark:border-slate-700 text-[10px] text-slate-400 font-mono">
-            <div>NO-ANIMATION ENFORCED</div>
+            <div>STATIC UI · PROGRESS INDICATOR</div>
             <div className="text-slate-500">v0.1.0 • React + Vite</div>
           </div>
         </aside>
@@ -375,9 +376,10 @@ export const App: React.FC = () => {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <RequireAuth>
-          <AdminLayout>
-            <Routes>
+        <>
+          <RequireAuth>
+            <AdminLayout>
+              <Routes>
               <Route path="/" element={<Dashboard />} />
               <Route
                 path="/users"
@@ -508,9 +510,11 @@ export const App: React.FC = () => {
                   </div>
                 }
               />
-            </Routes>
-          </AdminLayout>
-        </RequireAuth>
+              </Routes>
+            </AdminLayout>
+          </RequireAuth>
+          <OperationOverlay />
+        </>
       </AuthProvider>
     </BrowserRouter>
   );

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { userInputClass, userLabelClass } from './userStyles';
+import { LoadingIndicator } from '../../components/ui/LoadingIndicator';
 
 export interface AddressParts {
   addressCountry: string;
@@ -245,7 +246,7 @@ export const AddressFields: React.FC<AddressFieldsProps> = ({ value, onChange, d
               value={value.addressState}
               onChange={(event) => updateField(key, event.target.value)}
             >
-              <option value="">{statesLoading ? 'Loading states...' : 'Select state'}</option>
+              <option value="">Select state</option>
               {value.addressState && !states.includes(value.addressState) && (
                 <option value={value.addressState}>{value.addressState}</option>
               )}
@@ -258,7 +259,7 @@ export const AddressFields: React.FC<AddressFieldsProps> = ({ value, onChange, d
               value={value.addressCity}
               onChange={(event) => updateField(key, event.target.value)}
             >
-              <option value="">{citiesLoading ? 'Loading cities...' : 'Select city'}</option>
+              <option value="">Select city</option>
               {value.addressCity && !cities.includes(value.addressCity) && (
                 <option value={value.addressCity}>{value.addressCity}</option>
               )}
@@ -283,12 +284,20 @@ export const AddressFields: React.FC<AddressFieldsProps> = ({ value, onChange, d
           className={`text-xs sm:col-span-2 lg:col-span-6 ${statesError || citiesError || postalError ? 'text-red-700 dark:text-red-300' : 'text-slate-500 dark:text-slate-400'}`}
           role={statesError || citiesError || postalError ? 'alert' : 'status'}
         >
-          {postalLoading ? 'Looking up pincode…' : null}
-          {statesLoading ? ' Loading states…' : null}
-          {citiesLoading ? ' Loading cities…' : null}
-          {postalError ? ` ${postalError}` : null}
-          {statesError ? ` ${statesError}` : null}
-          {citiesError ? ` ${citiesError}` : null}
+          {(postalLoading || statesLoading || citiesLoading) && (
+            <LoadingIndicator
+              label={
+                postalLoading
+                  ? 'Looking up pincode'
+                  : statesLoading
+                    ? 'Loading states'
+                    : 'Loading cities'
+              }
+            />
+          )}
+          {postalError && <p>{postalError}</p>}
+          {statesError && <p>{statesError}</p>}
+          {citiesError && <p>{citiesError}</p>}
         </div>
       )}
     </div>

@@ -3,6 +3,7 @@ import { AxiosError } from 'axios';
 import { BedDouble, DoorOpen, RefreshCw, Search, X } from 'lucide-react';
 import { useAuth } from '../../lib/auth-context';
 import { apiClient } from '../../lib/api';
+import { LoadingIndicator } from '../../components/ui/LoadingIndicator';
 import { Property } from '../../types';
 
 interface StayAssignment {
@@ -423,7 +424,7 @@ export const ActiveStaysBoard: React.FC = () => {
               </tr>
             ))}
             {!loading && stays.length === 0 && <tr><td className="p-8 text-center text-slate-500" colSpan={7}>No active stays in this property scope.</td></tr>}
-            {loading && <tr><td className="p-8 text-center text-slate-500" colSpan={7}>Loading active stays…</td></tr>}
+            {loading && <tr><td className="p-8 text-center text-slate-500" colSpan={7}><LoadingIndicator label="Loading active stays" /></td></tr>}
           </tbody>
         </table>
       </div>
@@ -475,7 +476,7 @@ export const ActiveStaysBoard: React.FC = () => {
                 </label>
               </>}
             </div>
-            <button disabled={saving || !unitId || !selectedCustomerId || (hasRateOverride && !overrideReason.trim())} className="w-full bg-blue-700 px-3 py-2 text-sm font-bold text-white disabled:opacity-50">{saving ? 'Checking in…' : 'Confirm check-in'}</button>
+            <button disabled={saving || !unitId || !selectedCustomerId || (hasRateOverride && !overrideReason.trim())} className="w-full bg-blue-700 px-3 py-2 text-sm font-bold text-white disabled:opacity-50">Confirm check-in</button>
           </form>
         </div>
       )}
@@ -502,7 +503,7 @@ export const ActiveStaysBoard: React.FC = () => {
                     <div><h3 className="text-sm font-bold">Actual occupants in this unit</h3><p className="text-xs text-slate-500">Record the people who will stay in this specific room or bed. Government ID numbers are encrypted.</p></div>
                     <button type="button" onClick={() => setStayOccupants((current) => [...current, { fullName: '', dateOfBirth: '', gender: '', email: '', phone: '', permanentAddress: '', idDocumentType: '', idDocumentNumber: '' }])} className="shrink-0 border border-slate-300 px-2 py-1 text-xs font-semibold dark:border-slate-700">Add occupant</button>
                   </header>
-                  {occupantsLoading ? <p className="text-xs text-slate-500">Loading occupants…</p> : stayOccupants.map((occupant, index) => (
+                  {occupantsLoading ? <LoadingIndicator label="Loading occupants" /> : stayOccupants.map((occupant, index) => (
                     <fieldset key={occupant.id || `new-${index}`} className="grid gap-3 border border-slate-200 p-3 sm:grid-cols-2 dark:border-slate-700">
                       <legend className="px-1 text-xs font-bold">Occupant {index + 1}</legend>
                       <label className="space-y-1 text-xs font-semibold sm:col-span-2">Full name
@@ -536,7 +537,7 @@ export const ActiveStaysBoard: React.FC = () => {
                     </fieldset>
                   ))}
                   <div className="flex flex-wrap gap-2">
-                    <button type="button" onClick={() => void saveStayOccupants()} disabled={occupantsLoading || occupantsSaving} className="bg-blue-700 px-3 py-2 text-xs font-bold text-white disabled:opacity-50">{occupantsSaving ? 'Saving occupants…' : 'Save occupants'}</button>
+                    <button type="button" onClick={() => void saveStayOccupants()} disabled={occupantsLoading || occupantsSaving} className="bg-blue-700 px-3 py-2 text-xs font-bold text-white disabled:opacity-50">Save occupants</button>
                     <button type="button" onClick={() => { setStayModalMode('check-out'); setFolioSettled(false); setKeycardReturned(false); }} className="border border-slate-300 px-3 py-2 text-xs font-bold dark:border-slate-700">Start check-out</button>
                   </div>
                 </section>

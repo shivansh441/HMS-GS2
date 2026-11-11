@@ -4,7 +4,7 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import pycountry
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
@@ -162,30 +162,80 @@ def update_property(
     prop.facilities = payload.facilities
     prop.currency = payload.currency.upper()
     prop.timezone = payload.timezone
+    if prop.type not in HOSTEL_TYPES:
+        fee_configs = db.scalars(
+            select(PropertyFeeConfig).where(PropertyFeeConfig.property_id == prop.id)
+        ).all()
+        for fee_config in fee_configs:
+            fee_config.is_active = False
     if prop.has_mess_facility and not prop.mess_facilities:
         db.add(MessFacility(property_id=prop.id, name="Main Mess", is_default=True))
     return prop
 
 
-def property_summary(db: Session, prop: Property) -> dict[str, Any]:
-    floor_count = db.scalar(select(func.count(Floor.id)).where(Floor.property_id == prop.id)) or 0
-    unit_count = db.scalar(
-        select(func.count(Unit.id)).where(Unit.property_id == prop.id, Unit.is_active.is_(True))
-    ) or 0
-    return {
-        "id": prop.id,
-        "code": prop.code,
-        "name": prop.name,
-        "type": prop.type,
-        "status": prop.status,
-        "hasMessFacility": prop.has_mess_facility,
-        "timezone": prop.timezone,
-        "currency": prop.currency,
-        "floors": prop.floors,
-        "floorCount": floor_count,
-        "unitCount": unit_count,
-        "createdAt": prop.created_at,
+def property_summaries(db: Session, properties: list[Property]) -> list[dict[str, Any]]:
+    if not properties:
+        return []
+
+    property_ids = [prop.id for prop in properties]
+    floor_counts = dict(
+        db.execute(
+            select(Floor.property_id, func.count(Floor.id))
+            .where(Floor.property_id.in_(property_ids))
+            .group_by(Floor.property_id)
+        ).all()
+    )
+    inventory_counts = {
+        row[0]: row[1:]
+        for row in db.execute(
+            select(
+                Unit.property_id,
+                func.count(Unit.id),
+                func.sum(case((Unit.type != UnitType.BED.value, 1), else_=0)),
+                func.sum(case((Unit.type == UnitType.BED.value, 1), else_=0)),
+                func.sum(
+                    case(
+                        (
+                            (Unit.type == UnitType.BED.value)
+                            & (Unit.status == UnitStatus.AVAILABLE.value),
+                            1,
+                        ),
+                        else_=0,
+                    )
+                ),
+            )
+            .where(Unit.property_id.in_(property_ids), Unit.is_active.is_(True))
+            .group_by(Unit.property_id)
+        ).all()
     }
+
+    summaries = []
+    for prop in properties:
+        counts = inventory_counts.get(prop.id, (0, 0, 0, 0))
+        summaries.append(
+            {
+                "id": prop.id,
+                "code": prop.code,
+                "name": prop.name,
+                "type": prop.type,
+                "status": prop.status,
+                "hasMessFacility": prop.has_mess_facility,
+                "timezone": prop.timezone,
+                "currency": prop.currency,
+                "floors": prop.floors,
+                "floorCount": floor_counts.get(prop.id, 0),
+                "unitCount": counts[0] or 0,
+                "roomCount": counts[1] or 0,
+                "bedCount": counts[2] or 0,
+                "availableBedCount": counts[3] or 0,
+                "createdAt": prop.created_at,
+            }
+        )
+    return summaries
+
+
+def property_summary(db: Session, prop: Property) -> dict[str, Any]:
+    return property_summaries(db, [prop])[0]
 
 
 def _floor_record(db: Session, prop: Property, number: int) -> Floor:

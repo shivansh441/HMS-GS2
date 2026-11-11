@@ -3,6 +3,7 @@ import { Pencil, Save } from 'lucide-react';
 import { AddressFields } from './AddressFields';
 import { AdditionalOccupants } from './AdditionalOccupants';
 import { LoadingIndicator } from '../../components/ui/LoadingIndicator';
+import { BackLinkButton } from '../../components/ui/BackLinkButton';
 import { CustomerPersona, Property } from '../../types';
 import { addressPartsFromString, emptyAdditionalGuestForm, guestPersonaForProperty, isPropertyCompatibleWithGuest, localDateToday } from './userForm';
 import { userInputClass, userLabelClass, userSectionClass } from './userStyles';
@@ -62,13 +63,9 @@ export const UserEditor: React.FC<UserEditorProps> = ({
                   </p>
                 )}
               </div>
-              <button
-                type="button"
-                onClick={closeEditor}
-                className="text-sm font-medium text-blue-700 hover:underline dark:text-blue-300"
-              >
+              <BackLinkButton onClick={closeEditor}>
                 Back to directory
-              </button>
+              </BackLinkButton>
             </div>
 
             {editorError && (
@@ -77,7 +74,7 @@ export const UserEditor: React.FC<UserEditorProps> = ({
               </div>
             )}
             {editorLoading ? (
-              <LoadingIndicator label="Loading user details..." />
+              <LoadingIndicator label="Loading user details" />
             ) : (
               <form onSubmit={saveUser} className="flex w-full flex-col gap-4 font-mono">
                 <fieldset className={`${userSectionClass} md:col-span-2 lg:col-span-3`}>
@@ -506,7 +503,7 @@ export const UserEditor: React.FC<UserEditorProps> = ({
                       className="inline-flex h-10 items-center gap-2 rounded-md bg-blue-700 px-4 text-sm font-medium text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       <Save className="h-4 w-4" />
-                      {editorSaving ? 'Saving…' : editorMode === 'create' ? 'Create account' : 'Save changes'}
+                      {editorMode === 'create' ? 'Create account' : 'Save changes'}
                     </button>
                   )}
                 </div>

@@ -3,6 +3,7 @@ import { AxiosError } from 'axios';
 import { Check, CircleDollarSign, Plus, RefreshCw, X } from 'lucide-react';
 import { useAuth } from '../../lib/auth-context';
 import { apiClient } from '../../lib/api';
+import { LoadingIndicator } from '../../components/ui/LoadingIndicator';
 
 type ReservationStatus =
   | 'PENDING'
@@ -515,7 +516,7 @@ export const ReservationsBoard: React.FC = () => {
                   disabled={loadingLeadInventory || leadInventoryOptions.length === 0}
                   className={inputClass}
                 >
-                  {loadingLeadInventory && <option value="">Loading available inventory…</option>}
+                  {loadingLeadInventory && <option value="" />}
                   {!loadingLeadInventory && leadInventoryOptions.length === 0 && (
                     <option value="">No available {leadIsHostel ? 'beds' : 'rooms'}</option>
                   )}
@@ -525,6 +526,7 @@ export const ReservationsBoard: React.FC = () => {
                     </option>
                   ))}
                 </select>
+                {loadingLeadInventory && <LoadingIndicator label="Loading available inventory" />}
                 {!loadingLeadInventory && leadInventoryOptions.length === 0 && !leadErrorMessage && (
                   <span className="block font-normal text-amber-700">
                     This property has no currently available {leadIsHostel ? 'beds' : 'rooms'}.
@@ -598,14 +600,14 @@ export const ReservationsBoard: React.FC = () => {
               }
               className="w-full bg-blue-700 px-3 py-2 text-sm font-bold text-white disabled:opacity-50"
             >
-              {creatingLead ? 'Creating…' : 'Create lead'}
+              Create lead
             </button>
           </form>
         </div>
       )}
 
       {loading ? (
-        <p className="p-8 text-center text-sm text-slate-500">Loading reservation pipeline…</p>
+        <LoadingIndicator label="Loading reservations" className="p-8" />
       ) : (
         <div className="grid gap-4 xl:grid-cols-4 2xl:grid-cols-7">
           {columns.map((status) => {

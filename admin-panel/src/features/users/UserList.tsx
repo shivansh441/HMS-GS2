@@ -3,7 +3,8 @@ import { useAuth } from '../../lib/auth-context';
 import { apiClient } from '../../lib/api';
 import { User, UserListResponse } from '../../types';
 import { LoadingIndicator } from '../../components/ui/LoadingIndicator';
-import { Search, Filter, UserCheck, Eye, Plus, DoorOpen } from 'lucide-react';
+import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
+import { Search, Filter, UserCheck, Eye, Plus, DoorOpen, Trash2 } from 'lucide-react';
 import { UserEditor } from './UserEditor';
 import {
   addressStringFromParts,
@@ -40,6 +41,18 @@ interface DeskInventory {
   floors: Array<{ floorNumber: number; rooms: DeskRoom[] }>;
 }
 
+type UserAction = 'deactivate' | 'force-logout' | 'reset-mfa' | 'reactivate' | 'resend-invite' | 'issue-reset-link' | 'archive';
+
+const userActionLabels: Record<UserAction, string> = {
+  deactivate: 'set this account inactive',
+  'force-logout': 'force logout this admin',
+  'reset-mfa': 'reset MFA for this user',
+  reactivate: 'reactivate this account',
+  'resend-invite': 'resend this activation invite',
+  'issue-reset-link': 'resend an invite to this user',
+  archive: 'delete this account',
+};
+
 export const UserList: React.FC = () => {
   const { user: currentAdmin, selectedPropertyId, properties } = useAuth();
   const [users, setUsers] = useState<User[]>([]);
@@ -51,6 +64,7 @@ export const UserList: React.FC = () => {
   const [actionUserId, setActionUserId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [pendingAction, setPendingAction] = useState<{ target: User; action: UserAction } | null>(null);
   const [page, setPage] = useState(0);
   const [editorMode, setEditorMode] = useState<UserEditorMode>(null);
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
@@ -360,39 +374,40 @@ export const UserList: React.FC = () => {
     }
   };
 
-  const runAction = async (target: User, action: 'deactivate' | 'force-logout' | 'reset-mfa' | 'reactivate' | 'resend-invite' | 'issue-reset-link') => {
+  const runAction = (target: User, action: UserAction) => {
     if (!isAdmin || !currentAdmin || target.id === currentAdmin.id) return;
-    const labels = {
-      deactivate: 'set this account inactive',
-      'force-logout': 'force logout this admin',
-      'reset-mfa': 'reset MFA for this user',
-      reactivate: 'reactivate this account',
-      'resend-invite': 'resend this activation invite',
-      'issue-reset-link': 'resend an invite to this user',
-    };
-    if (!window.confirm(`Are you sure you want to ${labels[action]}?`)) return;
+    setPendingAction({ target, action });
+  };
 
+  const confirmAction = async () => {
+    if (!pendingAction) return;
+    const { target, action } = pendingAction;
     setActionUserId(target.id);
     setActionError(null);
     setActionNotice(null);
     try {
-      const response = await apiClient.post<{
-        message: string;
-        resetUrl?: string | null;
-        activationUrl?: string | null;
-      }>(
-        `/admin/users/${encodeURIComponent(target.id)}/${action}`,
-      );
-      setActionNotice(response.data.message);
-      if (action === 'issue-reset-link' && response.data.resetUrl) {
-        console.log('Password reset link:', response.data.resetUrl);
+      if (action === 'archive') {
+        await apiClient.delete(`/admin/users/${encodeURIComponent(target.id)}`);
+        setActionNotice('User account deleted.');
+      } else {
+        const response = await apiClient.post<{
+          message: string;
+          resetUrl?: string | null;
+          activationUrl?: string | null;
+        }>(`/admin/users/${encodeURIComponent(target.id)}/${action}`);
+        setActionNotice(response.data.message);
+        if (action === 'issue-reset-link' && response.data.resetUrl) {
+          console.log('Password reset link:', response.data.resetUrl);
+        }
+        if (action === 'resend-invite' && response.data.activationUrl) {
+          console.log('New activation link:', response.data.activationUrl);
+        }
       }
-      if (action === 'resend-invite' && response.data.activationUrl) {
-        console.log('New activation link:', response.data.activationUrl);
-      }
+      setPendingAction(null);
       await fetchUsers();
     } catch (err: any) {
-      setActionError(err.response?.data?.error?.message || `Unable to ${labels[action]}.`);
+      setPendingAction(null);
+      setActionError(err.response?.data?.error?.message || `Unable to ${userActionLabels[action]}.`);
     } finally {
       setActionUserId(null);
     }
@@ -601,7 +616,7 @@ export const UserList: React.FC = () => {
 
       {/* Users Table */}
       {loading ? (
-        <LoadingIndicator label="Loading scoped user records..." />
+        <LoadingIndicator label="Loading user records" />
       ) : users.length === 0 ? (
         <div className="bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 p-8 text-center text-xs text-slate-500 dark:text-slate-400">
           No users match the active filter criteria within the selected property scope.
@@ -702,6 +717,18 @@ export const UserList: React.FC = () => {
                               Set inactive
                             </button>
                           )}
+                          {u.status !== 'ARCHIVED' && (u.role !== 'ADMIN' || primaryAdminId === currentAdmin?.id) && (
+                            <button
+                              type="button"
+                              disabled={actionUserId === u.id}
+                              onClick={() => runAction(u, 'archive')}
+                              aria-label={`Delete ${u.full_name || u.email || 'user account'}`}
+                              className={`${actionButton} text-rose-700 dark:text-rose-300`}
+                            >
+                              <Trash2 className="mr-1 inline h-3 w-3" />
+                              Delete
+                            </button>
+                          )}
                           {u.status === 'ACTIVE' && (
                             <>
                               <button type="button" disabled={actionUserId === u.id} onClick={() => runAction(u, 'issue-reset-link')} className={actionButton}>
@@ -800,6 +827,7 @@ export const UserList: React.FC = () => {
                     <option key={property.id} value={property.id}>{property.name} · {property.type}</option>
                   ))}
                 </select>
+                {deskLoading && <LoadingIndicator label="Loading inventory" />}
               </label>
               <label className="space-y-1 text-xs font-semibold">
                 Available {deskIsHostel ? 'bed' : 'room / suite'} *
@@ -810,7 +838,7 @@ export const UserList: React.FC = () => {
                   disabled={!deskPropertyId || deskLoading || deskAvailableUnits.length === 0}
                   className={userInputClass}
                 >
-                  <option value="">{deskLoading ? 'Loading inventory…' : 'Select available unit'}</option>
+                  <option value="">Select available unit</option>
                   {deskAvailableUnits.map((unit) => (
                     <option key={unit.id} value={unit.id}>
                       {unit.label}{unit.standardRate != null ? ` · standard ${unit.standardRate}` : ''}
@@ -873,7 +901,7 @@ export const UserList: React.FC = () => {
                   className="inline-flex items-center gap-2 bg-blue-700 px-4 py-2 text-xs font-bold uppercase text-white hover:bg-blue-800 disabled:opacity-60"
                 >
                   <DoorOpen className="h-3.5 w-3.5" />
-                  {deskSaving ? 'Checking in…' : 'Complete check-in'}
+                  Complete check-in
                 </button>
               </div>
             </form>
@@ -899,6 +927,16 @@ export const UserList: React.FC = () => {
           saveUser={saveUser}
           toggleProperty={toggleProperty}
           setEditorMode={setEditorMode}
+        />
+      )}
+      {pendingAction && (
+        <ConfirmDialog
+          title={pendingAction.action === 'archive' ? 'Delete user account?' : 'Confirm account action?'}
+          description={`Are you sure you want to ${userActionLabels[pendingAction.action]} for ${pendingAction.target.full_name || pendingAction.target.email || 'this user'}?`}
+          confirmLabel={pendingAction.action === 'archive' ? 'Delete account' : 'Confirm'}
+          isConfirming={actionUserId === pendingAction.target.id}
+          onConfirm={() => void confirmAction()}
+          onCancel={() => setPendingAction(null)}
         />
       )}
     </div>

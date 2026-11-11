@@ -1,9 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import { AxiosError } from 'axios';
-import { Building2, CheckCircle, Globe, Pencil, Plus, Save } from 'lucide-react';
+import { Building2, CheckCircle, Globe, Pencil, Plus, Save, Trash2, X } from 'lucide-react';
 import { useAuth } from '../../lib/auth-context';
 import { apiClient } from '../../lib/api';
 import { Property } from '../../types';
+import { userInputClass, userLabelClass, userSectionClass } from '../users/userStyles';
+import { BackLinkButton } from '../../components/ui/BackLinkButton';
+import { LoadingIndicator } from '../../components/ui/LoadingIndicator';
+import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 
 const propertyTypes = ['HOTEL', 'HOSTEL_BOYS', 'HOSTEL_GIRLS', 'HOSTEL_COED', 'CO_LIVING'];
 const propertyStatuses = ['ACTIVE', 'INACTIVE', 'MAINTENANCE', 'CLOSED'];
@@ -38,37 +42,8 @@ interface FeeForm {
   feeType: FeeType | '';
   name: string;
   amount: string;
-  isMandatory: boolean;
-  isActive: boolean;
   ratePerUnit: string;
   unitOfMeasure: string;
-}
-
-interface InventoryRoom {
-  id: string;
-  unitNumber: string;
-  type: 'ROOM' | 'SUITE' | 'BED';
-  category: string;
-  sharingType: string | null;
-  capacity: number;
-  status: string;
-  baseRateMonthly: number | string | null;
-  defaultPricePerNight: number | string | null;
-  beds: InventoryBed[];
-}
-
-interface InventoryBed {
-  id: string;
-  unitNumber: string;
-  category: string;
-  sharingType: string | null;
-  status: string;
-  baseRateMonthly: number | string | null;
-}
-
-interface InventoryFloor {
-  floorNumber: number;
-  rooms: InventoryRoom[];
 }
 
 interface PropertyDetails extends Property {
@@ -80,7 +55,6 @@ interface PropertyDetails extends Property {
   contactEmail: string | null;
   facilities: string[];
   feeConfigs: PropertyFee[];
-  unitMatrix: InventoryFloor[];
 }
 
 interface PropertyForm {
@@ -117,19 +91,37 @@ const emptyForm: PropertyForm = {
   timezone: 'Asia/Kolkata',
 };
 
-const isMeteredFee = (feeType: FeeType | string) => feeType === 'ELECTRICITY_FEE';
+const isMeteredFee = (feeType: FeeType | string) =>
+  feeType === 'ELECTRICITY_FEE' || feeType === 'WATER_CHARGE';
 const isAssignmentFee = (feeType: FeeType | string) => feeType === 'UNIT_FEE';
-const isConfigurationOnlyFee = (feeType: FeeType | string) => feeType === 'WATER_CHARGE';
 const hasFlatAmount = (feeType: FeeType | string) =>
-  !isMeteredFee(feeType) && !isAssignmentFee(feeType) && !isConfigurationOnlyFee(feeType);
+  !isMeteredFee(feeType) && !isAssignmentFee(feeType);
+const sortFeesHostelRentFirst = <T extends { feeType: string }>(fees: T[]) =>
+  [...fees].sort((a, b) => {
+    if (a.feeType === 'UNIT_FEE') return b.feeType === 'UNIT_FEE' ? 0 : -1;
+    if (b.feeType === 'UNIT_FEE') return 1;
+    return a.feeType.localeCompare(b.feeType);
+  });
 
 const inputClass =
   'w-full border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-white focus:border-blue-600 focus:outline-none';
 
 function getErrorMessage(error: unknown): string {
-  const axiosError = error as AxiosError<{ error?: { message?: string } }>;
+  const axiosError = error as AxiosError<{
+    error?: {
+      message?: string;
+      details?: Array<{ field?: string; issue?: string }>;
+    };
+  }>;
+  const apiError = axiosError.response?.data?.error;
+  const firstDetail = apiError?.details?.[0];
+  const detailMessage = firstDetail
+    ? [firstDetail.field, firstDetail.issue].filter(Boolean).join(': ')
+    : '';
   return (
-    axiosError.response?.data?.error?.message ||
+    (apiError?.message && detailMessage
+      ? `${apiError.message} (${detailMessage})`
+      : apiError?.message) ||
     axiosError.message ||
     'Unable to save property. Please try again.'
   );
@@ -161,32 +153,53 @@ export const PropertyList: React.FC = () => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<PropertyForm>(emptyForm);
   const [feeConfigs, setFeeConfigs] = useState<PropertyFee[]>([]);
-  const [newFee, setNewFee] = useState<FeeForm | null>(null);
-  const [savingFeeType, setSavingFeeType] = useState<FeeType | null>(null);
-  const [inventoryUnits, setInventoryUnits] = useState<InventoryFloor[]>([]);
+  const [dirtyFeeTypes, setDirtyFeeTypes] = useState<Set<FeeType>>(() => new Set());
+  const [newFees, setNewFees] = useState<FeeForm[]>([]);
+  const [inventoryCounts, setInventoryCounts] = useState({
+    roomCount: 0,
+    bedCount: 0,
+    availableBedCount: 0,
+  });
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [deletingPropertyId, setDeletingPropertyId] = useState<string | null>(null);
+  const [propertyToDelete, setPropertyToDelete] = useState<Property | null>(null);
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
-  const inventoryRooms = inventoryUnits.flatMap((floor) => floor.rooms).filter((unit) => unit.type !== 'BED');
-  const inventoryBedCount = inventoryUnits
-    .flatMap((floor) => floor.rooms)
-    .reduce((total, room) => total + room.beds.length, 0);
 
+  const deleteProperty = async (property: Property) => {
+    setDeletingPropertyId(property.id);
+    setErrorMessage('');
+    setSuccessMessage('');
+    try {
+      await apiClient.delete(`/properties/${encodeURIComponent(property.id)}`);
+      setPropertyToDelete(null);
+      if (editingId === property.id) closeEditor();
+      await refreshProfile();
+      setSuccessMessage(`${property.name} was deleted.`);
+    } catch (error: unknown) {
+      setErrorMessage(getErrorMessage(error));
+    } finally {
+      setDeletingPropertyId(null);
+    }
+  };
   useEffect(() => {
     let active = true;
-    if (!editorMode || editorMode === 'create' || !editingId) return () => { active = false; };
+    if (!editingId) return () => { active = false; };
 
     setIsLoadingDetails(true);
-    setErrorMessage('');
     apiClient
-      .get<PropertyDetails>(`/admin/properties/${editingId}`)
+      .get<PropertyDetails>(`/admin/properties/${editingId}?include_unit_matrix=false`)
       .then(({ data }) => {
         if (active) {
           setForm(formFromDetails(data));
-          setFeeConfigs(data.feeConfigs || []);
-          setInventoryUnits(data.unitMatrix || []);
-          setNewFee(null);
+          setFeeConfigs(sortFeesHostelRentFirst(data.feeConfigs || []));
+          setDirtyFeeTypes(new Set());
+          setInventoryCounts({
+            roomCount: data.roomCount,
+            bedCount: data.bedCount,
+            availableBedCount: data.availableBedCount,
+          });
         }
       })
       .catch((error: unknown) => {
@@ -199,15 +212,16 @@ export const PropertyList: React.FC = () => {
     return () => {
       active = false;
     };
-  }, [editingId, editorMode]);
+  }, [editingId]);
 
   const startCreate = () => {
     setEditorMode('create');
     setEditingId(null);
     setForm(emptyForm);
     setFeeConfigs([]);
-    setNewFee(null);
-    setInventoryUnits([]);
+    setDirtyFeeTypes(new Set());
+    setNewFees([]);
+    setInventoryCounts({ roomCount: 0, bedCount: 0, availableBedCount: 0 });
     setErrorMessage('');
     setSuccessMessage('');
   };
@@ -215,6 +229,7 @@ export const PropertyList: React.FC = () => {
   const startEdit = (propertyId: string) => {
     setEditorMode('view');
     setEditingId(propertyId);
+    setNewFees([]);
     setErrorMessage('');
     setSuccessMessage('');
   };
@@ -222,13 +237,23 @@ export const PropertyList: React.FC = () => {
   const closeEditor = () => {
     setEditorMode(null);
     setEditingId(null);
-    setNewFee(null);
+    setNewFees([]);
     setErrorMessage('');
     setSuccessMessage('');
   };
 
   const updateField = <K extends keyof PropertyForm>(key: K, value: PropertyForm[K]) => {
     setForm((current) => ({ ...current, [key]: value }));
+  };
+
+  const updateFeeConfig = (
+    feeType: FeeType,
+    update: (fee: PropertyFee) => PropertyFee,
+  ) => {
+    setFeeConfigs((current) =>
+      current.map((fee) => (fee.feeType === feeType ? update(fee) : fee)),
+    );
+    setDirtyFeeTypes((current) => new Set(current).add(feeType));
   };
 
   const saveProperty = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -259,11 +284,82 @@ export const PropertyList: React.FC = () => {
     try {
       if (editingId) {
         await apiClient.put(`/admin/properties/${editingId}`, payload);
-        setSuccessMessage('Property updated successfully.');
+        if (hostelTypes.includes(form.type)) {
+          const feesToSave: Array<PropertyFee | FeeForm> = [
+            ...feeConfigs.filter((fee) => dirtyFeeTypes.has(fee.feeType)),
+            ...newFees,
+          ];
+          const savedFees: PropertyFee[] = [];
+          for (const fee of feesToSave) {
+            if (!fee.feeType) continue;
+            const { data } = await apiClient.post<PropertyFee>(`/properties/${editingId}/fee-configs`, {
+              feeType: fee.feeType,
+              name: fee.name.trim(),
+              amount: hasFlatAmount(fee.feeType) ? fee.amount : '0',
+              isMandatory: true,
+              isActive: true,
+              pricingBasis: isAssignmentFee(fee.feeType)
+                ? 'ASSIGNMENT'
+                : isMeteredFee(fee.feeType)
+                  ? 'METERED'
+                  : 'FIXED_FLAT',
+              billingTiming: isAssignmentFee(fee.feeType)
+                ? 'AT_ASSIGNMENT'
+                : isMeteredFee(fee.feeType)
+                  ? 'ARREARS'
+                  : 'ADVANCE',
+              ratePerUnit: isMeteredFee(fee.feeType) ? fee.ratePerUnit : null,
+              unitOfMeasure: isMeteredFee(fee.feeType) ? fee.unitOfMeasure : null,
+            });
+            savedFees.push(data);
+          }
+          if (savedFees.length > 0) {
+            const savedByType = new Map(savedFees.map((fee) => [fee.feeType, fee]));
+            setFeeConfigs((current) =>
+              sortFeesHostelRentFirst(
+                current.map((fee) => savedByType.get(fee.feeType) || fee),
+              ),
+            );
+          }
+          setDirtyFeeTypes(new Set());
+        }
+        setSuccessMessage('Property and fee configuration updated successfully.');
         setEditorMode('view');
+        setNewFees([]);
+        setDirtyFeeTypes(new Set());
       } else {
-        await apiClient.post('/admin/properties', payload);
+        const { data: createdProperty } = await apiClient.post<Property>(
+          '/admin/properties',
+          payload,
+        );
+        setEditingId(createdProperty.id);
+        setEditorMode('edit');
+        if (hostelTypes.includes(form.type)) {
+          for (const fee of newFees) {
+            if (!fee.feeType) continue;
+            await apiClient.post(`/properties/${createdProperty.id}/fee-configs`, {
+              feeType: fee.feeType,
+              name: fee.name.trim(),
+              amount: hasFlatAmount(fee.feeType) ? fee.amount : '0',
+              isMandatory: true,
+              isActive: true,
+              pricingBasis: isAssignmentFee(fee.feeType)
+                ? 'ASSIGNMENT'
+                : isMeteredFee(fee.feeType)
+                  ? 'METERED'
+                  : 'FIXED_FLAT',
+              billingTiming: isAssignmentFee(fee.feeType)
+                ? 'AT_ASSIGNMENT'
+                : isMeteredFee(fee.feeType)
+                  ? 'ARREARS'
+                  : 'ADVANCE',
+              ratePerUnit: isMeteredFee(fee.feeType) ? fee.ratePerUnit : null,
+              unitOfMeasure: isMeteredFee(fee.feeType) ? fee.unitOfMeasure : null,
+            });
+          }
+        }
         setSuccessMessage('Property created successfully.');
+        setNewFees([]);
       }
       await refreshProfile();
       if (!editingId) {
@@ -281,62 +377,17 @@ export const PropertyList: React.FC = () => {
   const addFeeDraft = (feeType: FeeType) => {
     const fee = feeTypes.find((item) => item.value === feeType);
     if (!fee) return;
-    setNewFee({
+    setNewFees((current) => [...current, {
       feeType,
       name: fee.name,
       amount: '0',
-      isMandatory: feeType === 'UNIT_FEE' || feeType === 'SECURITY_DEPOSIT',
-      isActive: feeType === 'UNIT_FEE',
       ratePerUnit: '',
-      unitOfMeasure: feeType === 'ELECTRICITY_FEE' ? 'KWH' : '',
-    });
-  };
-
-  const saveFee = async (fee: FeeForm) => {
-    if (!editingId || !fee.feeType) return;
-    setSavingFeeType(fee.feeType);
-    setErrorMessage('');
-    setSuccessMessage('');
-    try {
-      const { data } = await apiClient.post<PropertyFee>(
-        `/properties/${editingId}/fee-configs`,
-        {
-          feeType: fee.feeType,
-          name: fee.name.trim(),
-          amount: hasFlatAmount(fee.feeType) ? fee.amount : '0',
-          isMandatory: fee.feeType === 'UNIT_FEE' || fee.feeType === 'SECURITY_DEPOSIT' || fee.isMandatory,
-          isActive: isAssignmentFee(fee.feeType) ? true : fee.isActive,
-          pricingBasis: isAssignmentFee(fee.feeType)
-            ? 'ASSIGNMENT'
-            : isMeteredFee(fee.feeType)
-              ? 'METERED'
-              : isConfigurationOnlyFee(fee.feeType)
-                ? 'CONFIG_ONLY'
-                : 'FIXED_FLAT',
-          billingTiming: isAssignmentFee(fee.feeType)
-            ? 'AT_ASSIGNMENT'
-            : isMeteredFee(fee.feeType)
-              ? 'ARREARS'
-              : isConfigurationOnlyFee(fee.feeType)
-                ? 'NONE'
-                : 'ADVANCE',
-          ratePerUnit: isMeteredFee(fee.feeType) ? fee.ratePerUnit : null,
-          unitOfMeasure: isMeteredFee(fee.feeType) ? fee.unitOfMeasure : null,
-        },
-      );
-      setFeeConfigs((current) =>
-        [
-          ...current.filter((item) => item.feeType !== data.feeType),
-          data,
-        ].sort((a, b) => a.feeType.localeCompare(b.feeType)),
-      );
-      if (newFee?.feeType === data.feeType) setNewFee(null);
-      setSuccessMessage(`${data.name} configuration saved.`);
-    } catch (error: unknown) {
-      setErrorMessage(getErrorMessage(error));
-    } finally {
-      setSavingFeeType(null);
-    }
+      unitOfMeasure: feeType === 'ELECTRICITY_FEE'
+        ? 'KWH'
+        : feeType === 'WATER_CHARGE'
+          ? 'LITER'
+          : '',
+    }]);
   };
 
   return (
@@ -404,7 +455,11 @@ export const PropertyList: React.FC = () => {
                       {property.name}
                     </h2>
                     <p className="mt-1 text-[10px] font-mono text-slate-500">
-                      {property.type} · {property.unitCount} units · {property.floorCount} floors
+                      {property.type} · {property.roomCount} {property.roomCount === 1 ? 'room' : 'rooms'}
+                      {bedLevelPropertyTypes.includes(property.type)
+                        ? ` · ${property.bedCount} beds · ${property.availableBedCount} available`
+                        : ''}
+                      {' · '}{property.floorCount} {property.floorCount === 1 ? 'floor' : 'floors'}
                     </p>
                   </div>
                   <span className="flex items-center text-[10px] font-bold uppercase text-emerald-600 dark:text-emerald-400">
@@ -418,14 +473,27 @@ export const PropertyList: React.FC = () => {
                     {property.timezone}
                   </span>
                   {isAdmin && (
-                    <button
-                      type="button"
-                      onClick={() => startEdit(property.id)}
-                      className="inline-flex items-center gap-1.5 font-sans font-bold text-blue-700 hover:text-blue-900 dark:text-blue-300"
-                    >
-                      <Pencil className="h-3.5 w-3.5" />
-                      View / edit
-                    </button>
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => startEdit(property.id)}
+                        className="inline-flex items-center gap-1.5 font-sans font-bold text-blue-700 hover:text-blue-900 dark:text-blue-300"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                        View / edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPropertyToDelete(property)}
+                        disabled={deletingPropertyId !== null}
+                        aria-label={`Delete ${property.name}`}
+                        title="Soft-delete property"
+                        className="inline-flex items-center gap-1.5 font-sans font-bold text-rose-700 hover:text-rose-900 disabled:cursor-not-allowed disabled:opacity-50 dark:text-rose-300"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                        Delete
+                      </button>
+                    </div>
                   )}
                   {!isAdmin && <span>ID: {property.id.slice(0, 8)}...</span>}
                 </div>
@@ -438,34 +506,20 @@ export const PropertyList: React.FC = () => {
       )}
 
       {isAdmin && editorMode && (
-        <div className="border border-slate-300 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
-          <div className="mb-4 flex items-center justify-between">
-            <h2 className="flex items-center gap-2 text-sm font-bold uppercase tracking-wide">
-              <Building2 className="h-4 w-4" />
+        <section aria-labelledby="property-editor-title" className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900 sm:p-6">
+          <div className="mb-5 flex items-center justify-between gap-4">
+            <h2 id="property-editor-title" className="flex items-center gap-2 text-xl font-semibold text-slate-900 dark:text-white">
+              <Building2 className="h-5 w-5" />
               {editorMode === 'create'
                 ? 'Create property'
                 : editorMode === 'edit'
                   ? 'Edit property'
                   : 'Property details'}
             </h2>
-            <div className="flex items-center gap-3">
-              {editorMode === 'view' && (
-                <button
-                  type="button"
-                  onClick={() => setEditorMode('edit')}
-                  className="inline-flex items-center gap-2 bg-blue-700 px-3 py-2 text-xs font-bold uppercase text-white hover:bg-blue-800"
-                >
-                  <Pencil className="h-3.5 w-3.5" />
-                  Edit property
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={closeEditor}
-                className="text-xs font-bold uppercase text-blue-700 hover:text-blue-900 dark:text-blue-300"
-              >
+            <div className="flex items-center">
+              <BackLinkButton onClick={closeEditor}>
                 Back to properties
-              </button>
+              </BackLinkButton>
             </div>
           </div>
 
@@ -480,137 +534,131 @@ export const PropertyList: React.FC = () => {
             </div>
           )}
           {isLoadingDetails ? (
-            <p className="text-sm text-slate-500">Loading property details…</p>
+            <LoadingIndicator label="Loading property details" className="py-4" />
           ) : (
-            <form onSubmit={saveProperty} className="grid grid-cols-1 gap-4 md:grid-cols-2">
-              <label className="space-y-1 text-xs font-semibold">
-                Name
-                <input required maxLength={128} disabled={editorMode === 'view' || isSaving} className={inputClass} value={form.name} onChange={(e) => updateField('name', e.target.value)} />
-              </label>
-              <label className="space-y-1 text-xs font-semibold">
-                Type
-                <select disabled={editorMode === 'view' || isSaving} className={inputClass} value={form.type} onChange={(e) => {
-                  updateField('type', e.target.value);
-                  if (!hostelTypes.includes(e.target.value)) updateField('hasMessFacility', false);
-                }}>
-                  {propertyTypes.map((type) => <option key={type} value={type}>{type.replaceAll('_', ' ')}</option>)}
-                </select>
-              </label>
-              {hostelTypes.includes(form.type) && (
-                <label className="flex items-center gap-2 text-xs font-semibold">
-                  <input
-                    type="checkbox"
-                    disabled={editorMode === 'view' || isSaving}
-                    checked={form.hasMessFacility}
-                    onChange={(e) => updateField('hasMessFacility', e.target.checked)}
-                  />
-                  Enable mess management
-                </label>
-              )}
-              {editingId && editorMode !== 'create' && (
-                <section className="space-y-4 border border-slate-200 p-4 dark:border-slate-700 md:col-span-2">
-                  <div>
-                    <h3 className="text-xs font-bold uppercase tracking-wide">Property inventory</h3>
-                    <p className="mt-1 text-xs text-slate-500">
-                      Inventory is managed separately so room and bed setup stays focused.
-                    </p>
-                  </div>
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <div className="border border-slate-200 p-3 dark:border-slate-700">
-                      <p className="text-xl font-bold">{inventoryRooms.length}</p>
-                      <p className="text-xs uppercase text-slate-500">Rooms / suites</p>
-                    </div>
-                    {bedLevelPropertyTypes.includes(form.type) && (
-                      <div className="border border-slate-200 p-3 dark:border-slate-700">
-                        <p className="text-xl font-bold">{inventoryBedCount}</p>
-                        <p className="text-xs uppercase text-slate-500">Total configured beds</p>
-                      </div>
-                    )}
-                  </div>
+            <form onSubmit={saveProperty} className="flex w-full flex-col gap-4 font-mono">
+              {editingId && (
+                <section className={`${userSectionClass} md:col-span-2 lg:col-span-3`}>
+                  <h3 className="col-span-full mb-1 text-base font-semibold text-slate-900 dark:text-white">Property inventory</h3>
+                  <label className={userLabelClass}>
+                    Rooms / suites
+                    <input
+                      readOnly
+                      className={userInputClass}
+                      value={inventoryCounts.roomCount}
+                      aria-label="Total rooms and suites"
+                    />
+                  </label>
+                  <label className={userLabelClass}>
+                    Total beds
+                    <input
+                      readOnly
+                      className={userInputClass}
+                      value={inventoryCounts.bedCount}
+                      aria-label="Total configured beds"
+                    />
+                  </label>
+                  <label className={userLabelClass}>
+                    Available beds
+                    <input
+                      readOnly
+                      className={userInputClass}
+                      value={inventoryCounts.availableBedCount}
+                      aria-label="Available beds"
+                    />
+                  </label>
+                  <p className="col-span-full text-xs font-normal text-slate-500 dark:text-slate-400">
+                    Inventory is managed separately and cannot be changed here.
+                  </p>
                 </section>
               )}
-              {editingId && (
-                <label className="space-y-1 text-xs font-semibold">
-                  Status
-                  <select disabled={editorMode === 'view' || isSaving} className={inputClass} value={form.status} onChange={(e) => updateField('status', e.target.value)}>
-                    {propertyStatuses.map((status) => <option key={status} value={status}>{status}</option>)}
-                  </select>
+              <fieldset className={`${userSectionClass} md:col-span-2 lg:col-span-3`}>
+                <legend className="col-span-full mb-1 text-base font-semibold text-slate-900 dark:text-white">Property information</legend>
+                <div className="col-span-full grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  <label className={userLabelClass}>
+                    <span>Name <span className="text-red-600" aria-hidden="true">*</span></span>
+                    <input required maxLength={128} disabled={editorMode === 'view' || isSaving} className={userInputClass} value={form.name} onChange={(e) => updateField('name', e.target.value)} />
+                  </label>
+                  <label className={userLabelClass}>
+                    <span>Type <span className="text-red-600" aria-hidden="true">*</span></span>
+                    <select required disabled={editorMode === 'view' || isSaving} className={userInputClass} value={form.type} onChange={(e) => {
+                      updateField('type', e.target.value);
+                      if (!hostelTypes.includes(e.target.value)) updateField('hasMessFacility', false);
+                    }}>
+                      {propertyTypes.map((type) => <option key={type} value={type}>{type.replaceAll('_', ' ')}</option>)}
+                    </select>
+                  </label>
+                  <label className={userLabelClass}>
+                    <span>Floors <span className="text-red-600" aria-hidden="true">*</span></span>
+                    <input required type="number" min={0} max={100} disabled={editorMode === 'view' || isSaving} className={userInputClass} value={form.floors} onChange={(e) => updateField('floors', Number(e.target.value))} />
+                  </label>
+                </div>
+                <label className={`${userLabelClass} col-span-full`}>
+                  <span>Address <span className="text-red-600" aria-hidden="true">*</span></span>
+                  <input required maxLength={255} disabled={editorMode === 'view' || isSaving} className={userInputClass} value={form.address} onChange={(e) => updateField('address', e.target.value)} />
                 </label>
-              )}
-              <label className="space-y-1 text-xs font-semibold">
-                Floors
-                <input required type="number" min={0} max={100} disabled={editorMode === 'view' || isSaving} className={inputClass} value={form.floors} onChange={(e) => updateField('floors', Number(e.target.value))} />
-              </label>
-              <label className="space-y-1 text-xs font-semibold">
-                Address
-                <input required maxLength={255} disabled={editorMode === 'view' || isSaving} className={inputClass} value={form.address} onChange={(e) => updateField('address', e.target.value)} />
-              </label>
-              <label className="space-y-1 text-xs font-semibold">
-                City
-                <input required maxLength={128} disabled={editorMode === 'view' || isSaving} className={inputClass} value={form.city} onChange={(e) => updateField('city', e.target.value)} />
-              </label>
-              <label className="space-y-1 text-xs font-semibold">
-                State
-                <input required maxLength={128} disabled={editorMode === 'view' || isSaving} className={inputClass} value={form.state} onChange={(e) => updateField('state', e.target.value)} />
-              </label>
-              <label className="space-y-1 text-xs font-semibold">
-                Postal code
-                <input required maxLength={32} disabled={editorMode === 'view' || isSaving} className={inputClass} value={form.pincode} onChange={(e) => updateField('pincode', e.target.value)} />
-              </label>
-              <label className="space-y-1 text-xs font-semibold">
-                Contact phone
-                <input required maxLength={32} disabled={editorMode === 'view' || isSaving} className={inputClass} value={form.contactPhone} onChange={(e) => updateField('contactPhone', e.target.value)} />
-              </label>
-              <label className="space-y-1 text-xs font-semibold">
-                Contact email
-                <input type="email" maxLength={255} disabled={editorMode === 'view' || isSaving} className={inputClass} value={form.contactEmail} onChange={(e) => updateField('contactEmail', e.target.value)} />
-              </label>
-              <label className="space-y-1 text-xs font-semibold">
-                Currency
-                <input required minLength={3} maxLength={3} disabled={editorMode === 'view' || isSaving} className={inputClass} value={form.currency} onChange={(e) => updateField('currency', e.target.value.toUpperCase())} />
-              </label>
-              <label className="space-y-1 text-xs font-semibold">
-                Time zone
-                <input required maxLength={64} disabled={editorMode === 'view' || isSaving} className={inputClass} value={form.timezone} onChange={(e) => updateField('timezone', e.target.value)} />
-              </label>
-              <label className="space-y-1 text-xs font-semibold md:col-span-2">
-                Facilities (comma-separated)
-                <input disabled={editorMode === 'view' || isSaving} className={inputClass} value={form.facilities} onChange={(e) => updateField('facilities', e.target.value)} />
-              </label>
+                <div className="col-span-full grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  <label className={userLabelClass}>
+                    <span>City <span className="text-red-600" aria-hidden="true">*</span></span>
+                    <input required maxLength={128} disabled={editorMode === 'view' || isSaving} className={userInputClass} value={form.city} onChange={(e) => updateField('city', e.target.value)} />
+                  </label>
+                  <label className={userLabelClass}>
+                    <span>State <span className="text-red-600" aria-hidden="true">*</span></span>
+                    <input required maxLength={128} disabled={editorMode === 'view' || isSaving} className={userInputClass} value={form.state} onChange={(e) => updateField('state', e.target.value)} />
+                  </label>
+                  <label className={userLabelClass}>
+                    <span>Postal code <span className="text-red-600" aria-hidden="true">*</span></span>
+                    <input required maxLength={32} disabled={editorMode === 'view' || isSaving} className={userInputClass} value={form.pincode} onChange={(e) => updateField('pincode', e.target.value)} />
+                  </label>
+                </div>
+                <div className="col-span-full grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  <label className={userLabelClass}>
+                    <span>Contact phone <span className="text-red-600" aria-hidden="true">*</span></span>
+                    <input required type="tel" maxLength={32} disabled={editorMode === 'view' || isSaving} className={userInputClass} value={form.contactPhone} onChange={(e) => updateField('contactPhone', e.target.value)} />
+                  </label>
+                  <label className={userLabelClass}>
+                    Contact email
+                    <input type="email" maxLength={255} disabled={editorMode === 'view' || isSaving} className={userInputClass} value={form.contactEmail} onChange={(e) => updateField('contactEmail', e.target.value)} />
+                  </label>
+                  <label className={userLabelClass}>
+                    Status
+                    <select disabled={editorMode !== 'edit' || isSaving} className={userInputClass} value={form.status} onChange={(e) => updateField('status', e.target.value)}>
+                      {propertyStatuses.map((status) => <option key={status} value={status}>{status}</option>)}
+                    </select>
+                  </label>
+                </div>
+                <div className="col-span-full grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  <label className={userLabelClass}>
+                    <span>Currency <span className="text-red-600" aria-hidden="true">*</span></span>
+                    <input required minLength={3} maxLength={3} disabled={editorMode === 'view' || isSaving} className={userInputClass} value={form.currency} onChange={(e) => updateField('currency', e.target.value.toUpperCase())} />
+                  </label>
+                  <label className={userLabelClass}>
+                    <span>Time zone <span className="text-red-600" aria-hidden="true">*</span></span>
+                    <input required maxLength={64} disabled={editorMode === 'view' || isSaving} className={userInputClass} value={form.timezone} onChange={(e) => updateField('timezone', e.target.value)} />
+                  </label>
+                  <label className={userLabelClass}>
+                    Facilities
+                    <input disabled={editorMode === 'view' || isSaving} className={userInputClass} value={form.facilities} onChange={(e) => updateField('facilities', e.target.value)} />
+                  </label>
+                </div>
+              </fieldset>
               {hostelTypes.includes(form.type) && (
-                <section
-                  className="space-y-3 border border-slate-200 p-4 dark:border-slate-700 md:col-span-2"
+                <fieldset
+                  className={`w-full ${userSectionClass} md:col-span-2 lg:col-span-3`}
                   onKeyDown={(event) => {
                     if (event.key === 'Enter' && event.target instanceof HTMLInputElement) {
                       event.preventDefault();
                     }
                   }}
                 >
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <h3 className="text-xs font-bold uppercase tracking-wide">Property fee configuration</h3>
-                      <p className="mt-1 text-xs font-normal text-slate-500">
-                        Hostel Rent is included by default; its charge is entered on each stay assignment.
-                        Electricity is metered and billed in arrears. Water Charge is a property setting only,
-                        with no per-liter rate. Mess Fee and Security Deposit use flat amounts. Currency: {form.currency}.
-                      </p>
-                    </div>
-                    {editorMode === 'view' && (
-                      <button
-                        type="button"
-                        onClick={() => setEditorMode('edit')}
-                        className="inline-flex items-center gap-2 bg-blue-700 px-3 py-2 text-xs font-bold uppercase text-white hover:bg-blue-800"
-                      >
-                        <Pencil className="h-3.5 w-3.5" />
-                        Manage fees
-                      </button>
-                    )}
-                    {editorMode === 'edit' && editingId && (
+                  <legend className="col-span-full mb-1 flex w-full flex-wrap items-center justify-between gap-3 text-base font-semibold text-slate-900 dark:text-white">
+                    <span>Property fee configuration</span>
+                    {(editorMode === 'create' || editorMode === 'edit') && (
                       <label className="flex items-center gap-2 text-xs font-semibold">
-                        Add optional fee
+                        Add fee
                         <select
                           value=""
-                          disabled={savingFeeType !== null}
+                          disabled={isSaving}
                           onChange={(event) => {
                             if (event.target.value) addFeeDraft(event.target.value as FeeType);
                           }}
@@ -620,8 +668,9 @@ export const PropertyList: React.FC = () => {
                           {feeTypes
                             .filter(
                               (fee) =>
+                                !(editorMode === 'create' && fee.value === 'UNIT_FEE') &&
                                 !feeConfigs.some((config) => config.feeType === fee.value) &&
-                                newFee?.feeType !== fee.value,
+                                !newFees.some((draft) => draft.feeType === fee.value),
                             )
                             .map((fee) => (
                               <option key={fee.value} value={fee.value}>{fee.name}</option>
@@ -629,340 +678,278 @@ export const PropertyList: React.FC = () => {
                         </select>
                       </label>
                     )}
-                  </div>
-
-                  {!editingId ? (
-                    <p className="border border-blue-200 bg-blue-50 p-3 text-xs text-blue-900 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-200">
-                      Hostel Rent is added automatically for every hostel and is charged per assignment.
-                      Standard room/bed rates are configured separately in the inventory section.
-                    </p>
-                  ) : feeConfigs.length === 0 && !newFee ? (
-                    <p className="text-xs text-slate-500">No fee types configured yet.</p>
+                  </legend>
+                  <p className="col-span-full text-xs font-normal text-slate-500 dark:text-slate-400">
+                    Hostel Rent is included by default
+                  </p>
+                  {feeConfigs.length === 0 && newFees.length === 0 && editingId ? (
+                    <p className="col-span-full text-xs text-slate-500">No fee types configured yet.</p>
                   ) : (
-                    <div className="space-y-3">
+                    <div className="col-span-full w-full divide-y divide-slate-200 dark:divide-slate-700">
                       {feeConfigs.map((fee) => (
-                        <div key={fee.feeType} className="grid grid-cols-1 gap-3 border border-slate-200 p-3 dark:border-slate-700 md:grid-cols-[1fr_1fr_1fr_auto] md:items-end">
-                          <div className="space-y-1 text-xs font-semibold">
-                            Fee type
-                            <p className="py-2 font-mono text-xs font-normal">
-                              {fee.name}
-                              {fee.feeType === 'UNIT_FEE' && (
-                                <span className="ml-1 inline-block bg-blue-100 px-1.5 py-0.5 font-sans text-[10px] font-bold uppercase text-blue-800 dark:bg-blue-950 dark:text-blue-200">
-                                  Default · required
-                                </span>
-                              )}
-                              <span className="ml-1 text-slate-500">({fee.feeType})</span>
-                            </p>
+                        <div key={fee.feeType} className="grid w-full grid-cols-1 items-end gap-3 py-4 md:grid-cols-[minmax(9rem,1fr)_repeat(3,minmax(0,1.35fr))_auto]">
+                          <div className="min-w-0">
+                            <p className="font-sans text-sm font-semibold text-slate-900 dark:text-white">{fee.name}</p>
+                            <p className="mt-1 font-mono text-[11px] text-slate-500">{fee.feeType}</p>
+                            {fee.feeType === 'UNIT_FEE' && (
+                              <span className="mt-1 inline-block text-[11px] font-medium text-blue-700 dark:text-blue-300">
+                                Included by default
+                              </span>
+                            )}
                           </div>
                           {editorMode === 'edit' ? (
                             <>
-                              <label className="space-y-1 text-xs font-semibold">
+                              <label className={`min-w-0 space-y-1 text-xs font-semibold ${isAssignmentFee(fee.feeType) ? 'md:col-span-3' : ''}`}>
                                 Display name
                                 <input
                                   required
                                   maxLength={128}
-                                  disabled={savingFeeType === fee.feeType}
+                                  disabled={isSaving}
                                   className={inputClass}
                                   value={fee.name}
                                   onChange={(event) =>
-                                    setFeeConfigs((current) =>
-                                      current.map((item) =>
-                                        item.feeType === fee.feeType
-                                          ? { ...item, name: event.target.value }
-                                          : item,
-                                      ),
-                                    )
+                                    updateFeeConfig(fee.feeType, (item) => ({
+                                      ...item,
+                                      name: event.target.value,
+                                    }))
                                   }
                                 />
                               </label>
                               {isMeteredFee(fee.feeType) ? (
                                 <>
-                                  <label className="space-y-1 text-xs font-semibold">
+                                  <label className="min-w-0 space-y-1 text-xs font-semibold">
                                     Rate per unit ({form.currency})
                                     <input
                                       required
                                       type="number"
                                       min="0.0001"
                                       step="0.0001"
-                                      disabled={savingFeeType === fee.feeType}
+                                      disabled={isSaving}
                                       className={inputClass}
                                       value={fee.ratePerUnit ?? ''}
                                       onChange={(event) =>
-                                        setFeeConfigs((current) =>
-                                          current.map((item) =>
-                                            item.feeType === fee.feeType
-                                              ? { ...item, ratePerUnit: event.target.value }
-                                              : item,
-                                          ),
-                                        )
+                                        updateFeeConfig(fee.feeType, (item) => ({
+                                          ...item,
+                                          ratePerUnit: event.target.value,
+                                        }))
                                       }
                                     />
                                   </label>
-                                  <label className="space-y-1 text-xs font-semibold">
+                                  <label className="min-w-0 space-y-1 text-xs font-semibold">
                                     Meter unit
                                     <input
                                       required
                                       maxLength={32}
-                                      disabled={savingFeeType === fee.feeType}
+                                      disabled={isSaving}
                                       className={inputClass}
                                       value={fee.unitOfMeasure || ''}
-                                      placeholder="KWH"
+                                      placeholder={fee.feeType === 'WATER_CHARGE' ? 'LITER' : 'KWH'}
                                       onChange={(event) =>
-                                        setFeeConfigs((current) =>
-                                          current.map((item) =>
-                                            item.feeType === fee.feeType
-                                              ? { ...item, unitOfMeasure: event.target.value.toUpperCase() }
-                                              : item,
-                                          ),
-                                        )
+                                        updateFeeConfig(fee.feeType, (item) => ({
+                                          ...item,
+                                          unitOfMeasure: event.target.value.toUpperCase(),
+                                        }))
                                       }
                                     />
                                   </label>
                                 </>
                               ) : isAssignmentFee(fee.feeType) ? (
-                                <p className="self-center text-xs text-slate-600 dark:text-slate-300">
-                                  Amount is set on each stay assignment, not on this property.
-                                </p>
-                              ) : isConfigurationOnlyFee(fee.feeType) ? (
-                                <p className="self-center text-xs text-slate-600 dark:text-slate-300">
-                                  This setting only records whether Water Charge applies; no amount or per-liter rate is configured here.
-                                </p>
+                                null
                               ) : (
-                                <label className="space-y-1 text-xs font-semibold">
+                                <label className="min-w-0 space-y-1 text-xs font-semibold md:col-span-2">
                                   Fixed amount ({form.currency})
                                   <input
-                                    required
+                                    required={
+                                      dirtyFeeTypes.has(fee.feeType) ||
+                                      Number(fee.amount ?? 0) > 0
+                                    }
                                     type="number"
-                                    min={fee.isActive ? '0.01' : '0'}
+                                    min={dirtyFeeTypes.has(fee.feeType) ? '0.01' : '0'}
                                     step="0.01"
-                                    disabled={savingFeeType === fee.feeType}
+                                    disabled={isSaving}
                                     className={inputClass}
                                     value={fee.amount ?? ''}
                                     onChange={(event) =>
-                                      setFeeConfigs((current) =>
-                                        current.map((item) =>
-                                          item.feeType === fee.feeType
-                                            ? { ...item, amount: event.target.value }
-                                            : item,
-                                        ),
-                                      )
+                                      updateFeeConfig(fee.feeType, (item) => ({
+                                        ...item,
+                                        amount: event.target.value,
+                                      }))
                                     }
                                   />
                                 </label>
                               )}
-                              <div className="flex flex-wrap items-center gap-x-4 gap-y-2 md:col-span-4">
-                                <label className="flex items-center gap-2 text-xs">
-                                  <input
-                                    type="checkbox"
-                                    checked={fee.feeType === 'UNIT_FEE' || fee.feeType === 'SECURITY_DEPOSIT' || Boolean(fee.isMandatory)}
-                                    disabled={fee.feeType === 'UNIT_FEE' || fee.feeType === 'SECURITY_DEPOSIT' || isMeteredFee(fee.feeType) || isConfigurationOnlyFee(fee.feeType) || savingFeeType === fee.feeType}
-                                    onChange={(event) =>
-                                      setFeeConfigs((current) =>
-                                        current.map((item) =>
-                                          item.feeType === fee.feeType
-                                            ? { ...item, isMandatory: event.target.checked }
-                                            : item,
-                                        ),
-                                      )
-                                    }
-                                  />
-                                  Mandatory
-                                </label>
-                                <label className="flex items-center gap-2 text-xs">
-                                  <input
-                                    type="checkbox"
-                                    checked={isAssignmentFee(fee.feeType) || fee.isActive}
-                                    disabled={isAssignmentFee(fee.feeType) || savingFeeType === fee.feeType}
-                                    onChange={(event) =>
-                                      setFeeConfigs((current) =>
-                                        current.map((item) =>
-                                          item.feeType === fee.feeType
-                                            ? { ...item, isActive: event.target.checked }
-                                            : item,
-                                        ),
-                                      )
-                                    }
-                                  />
-                                  Active
-                                </label>
-                                <button
-                                  type="button"
-                                  disabled={savingFeeType !== null}
-                                  onClick={() =>
-                                    saveFee({
-                                      feeType: fee.feeType,
-                                      name: fee.name,
-                                      amount: String(fee.amount ?? ''),
-                                      isMandatory: fee.feeType === 'SECURITY_DEPOSIT' || Boolean(fee.isMandatory),
-                                      isActive: fee.isActive,
-                                      ratePerUnit: String(fee.ratePerUnit ?? ''),
-                                      unitOfMeasure: fee.unitOfMeasure || '',
-                                    })
-                                  }
-                                  className="ml-auto inline-flex items-center gap-2 bg-blue-700 px-3 py-2 text-xs font-bold uppercase text-white hover:bg-blue-800 disabled:opacity-60"
-                                >
-                                  <Save className="h-3.5 w-3.5" />
-                                  {savingFeeType === fee.feeType ? 'Saving…' : 'Save fee'}
-                                </button>
-                              </div>
                             </>
                           ) : (
-                            <>
-                              <p className="py-2 text-xs">
-                                {isAssignmentFee(fee.feeType)
-                                  ? 'Amount set per assignment'
-                                  : isMeteredFee(fee.feeType)
-                                    ? `${fee.ratePerUnit ?? '—'} ${form.currency}/${fee.unitOfMeasure || 'KWH'} · metered arrears`
-                                    : isConfigurationOnlyFee(fee.feeType)
-                                      ? 'Water charge setting only · no fixed amount'
-                                      : `${fee.amount ?? '—'} ${form.currency} flat`}
-                              </p>
-                              <p className="py-2 text-xs">
-                                {fee.isMandatory ? 'Mandatory' : 'Optional'} · {fee.isActive ? 'Active' : 'Inactive'}
-                              </p>
-                              <button
-                                type="button"
-                                onClick={() => setEditorMode('edit')}
-                                className="inline-flex items-center justify-center gap-2 border border-blue-700 px-3 py-2 text-xs font-bold uppercase text-blue-700 hover:bg-blue-50 dark:border-blue-400 dark:text-blue-300 dark:hover:bg-blue-950/30"
-                              >
-                                <Pencil className="h-3.5 w-3.5" />
-                                Edit fee
-                              </button>
-                            </>
+                            <p className="font-sans text-sm font-medium text-slate-700 dark:text-slate-200 md:col-span-4">
+                              {isAssignmentFee(fee.feeType)
+                                ? 'Included by default'
+                                : isMeteredFee(fee.feeType)
+                                  ? `${fee.ratePerUnit ?? '—'} ${form.currency}/${fee.unitOfMeasure || (fee.feeType === 'WATER_CHARGE' ? 'LITER' : 'KWH')}`
+                                  : `${fee.amount ?? '—'} ${form.currency}`}
+                            </p>
                           )}
                         </div>
                       ))}
 
-                      {newFee && editorMode === 'edit' && (
-                        <div className="grid grid-cols-1 gap-3 border border-blue-300 bg-blue-50/40 p-3 dark:border-blue-800 dark:bg-blue-950/20 md:grid-cols-3">
-                          <div className="py-2 text-xs font-bold">
-                            {feeTypes.find((fee) => fee.value === newFee.feeType)?.name}
-                            <p className="mt-1 font-mono font-normal text-slate-500">{newFee.feeType}</p>
+                      {newFees.map((draftFee) => (
+                        <div key={draftFee.feeType} className="grid w-full grid-cols-1 items-end gap-3 py-4 md:grid-cols-[minmax(9rem,1fr)_repeat(3,minmax(0,1.35fr))_auto]">
+                          <div className="min-w-0">
+                            <p className="font-sans text-sm font-semibold text-slate-900 dark:text-white">
+                              {feeTypes.find((fee) => fee.value === draftFee.feeType)?.name}
+                            </p>
+                            <p className="mt-1 font-mono text-[11px] text-slate-500">{draftFee.feeType}</p>
                           </div>
-                          <label className="space-y-1 text-xs font-semibold">
+                          <label className={`min-w-0 space-y-1 text-xs font-semibold ${isAssignmentFee(draftFee.feeType) ? 'md:col-span-3' : ''}`}>
                             Display name
                             <input
                               required
                               maxLength={128}
-                              disabled={savingFeeType === newFee.feeType}
+                              disabled={isSaving}
                               className={inputClass}
-                              value={newFee.name}
-                              onChange={(event) => setNewFee((current) => current && ({ ...current, name: event.target.value }))}
+                              value={draftFee.name}
+                              onChange={(event) =>
+                                setNewFees((current) =>
+                                  current.map((item) =>
+                                    item.feeType === draftFee.feeType
+                                      ? { ...item, name: event.target.value }
+                                      : item,
+                                  ),
+                                )
+                              }
                             />
                           </label>
-                          {isMeteredFee(newFee.feeType) ? (
+                          {isMeteredFee(draftFee.feeType) ? (
                             <>
-                              <label className="space-y-1 text-xs font-semibold">
+                              <label className="min-w-0 space-y-1 text-xs font-semibold">
                                 Rate per unit ({form.currency})
                                 <input
                                   required
                                   type="number"
                                   min="0.0001"
                                   step="0.0001"
-                                  disabled={savingFeeType === newFee.feeType}
+                                  disabled={isSaving}
                                   className={inputClass}
-                                  value={newFee.ratePerUnit}
-                                  onChange={(event) => setNewFee((current) => current && ({ ...current, ratePerUnit: event.target.value }))}
+                                  value={draftFee.ratePerUnit}
+                                  onChange={(event) =>
+                                    setNewFees((current) =>
+                                      current.map((item) =>
+                                        item.feeType === draftFee.feeType
+                                          ? { ...item, ratePerUnit: event.target.value }
+                                          : item,
+                                      ),
+                                    )
+                                  }
                                 />
                               </label>
-                              <label className="space-y-1 text-xs font-semibold">
+                              <label className="min-w-0 space-y-1 text-xs font-semibold">
                                 Meter unit
                                 <input
                                   required
                                   maxLength={32}
-                                  disabled={savingFeeType === newFee.feeType}
+                                  disabled={isSaving}
                                   className={inputClass}
-                                  value={newFee.unitOfMeasure}
-                                  onChange={(event) => setNewFee((current) => current && ({ ...current, unitOfMeasure: event.target.value.toUpperCase() }))}
+                                  value={draftFee.unitOfMeasure}
+                                  onChange={(event) =>
+                                    setNewFees((current) =>
+                                      current.map((item) =>
+                                        item.feeType === draftFee.feeType
+                                          ? { ...item, unitOfMeasure: event.target.value.toUpperCase() }
+                                          : item,
+                                      ),
+                                    )
+                                  }
                                 />
                               </label>
                             </>
-                          ) : isAssignmentFee(newFee.feeType) ? (
-                            <p className="self-center text-xs text-slate-600 dark:text-slate-300">
-                              Amount is set on each stay assignment.
-                            </p>
-                          ) : isConfigurationOnlyFee(newFee.feeType) ? (
-                            <p className="self-center text-xs text-slate-600 dark:text-slate-300">
-                              Enable or disable this setting; no amount or per-liter rate is configured.
-                            </p>
+                          ) : isAssignmentFee(draftFee.feeType) ? (
+                            null
                           ) : (
-                            <label className="space-y-1 text-xs font-semibold">
+                            <label className="min-w-0 space-y-1 text-xs font-semibold md:col-span-2">
                               Fixed amount ({form.currency})
                               <input
                                 required
                                 type="number"
-                                min={newFee.isActive ? '0.01' : '0'}
+                                min="0.01"
                                 step="0.01"
-                                disabled={savingFeeType === newFee.feeType}
+                                disabled={isSaving}
                                 className={inputClass}
-                                value={newFee.amount}
-                                onChange={(event) => setNewFee((current) => current && ({ ...current, amount: event.target.value }))}
+                                value={draftFee.amount}
+                                onChange={(event) =>
+                                  setNewFees((current) =>
+                                    current.map((item) =>
+                                      item.feeType === draftFee.feeType
+                                        ? { ...item, amount: event.target.value }
+                                        : item,
+                                    ),
+                                  )
+                                }
                               />
                             </label>
                           )}
-                          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 md:col-span-3">
-                            <label className="flex items-center gap-2 text-xs">
-                              <input
-                                type="checkbox"
-                                checked={newFee.feeType === 'UNIT_FEE' || newFee.feeType === 'SECURITY_DEPOSIT' || newFee.isMandatory}
-                                disabled={newFee.feeType === 'UNIT_FEE' || newFee.feeType === 'SECURITY_DEPOSIT' || isMeteredFee(newFee.feeType) || isConfigurationOnlyFee(newFee.feeType) || savingFeeType === newFee.feeType}
-                                onChange={(event) => setNewFee((current) => current && ({ ...current, isMandatory: event.target.checked }))}
-                              />
-                              Mandatory
-                            </label>
-                            <label className="flex items-center gap-2 text-xs">
-                              <input
-                                type="checkbox"
-                                checked={isAssignmentFee(newFee.feeType) || newFee.isActive}
-                                disabled={isAssignmentFee(newFee.feeType) || savingFeeType === newFee.feeType}
-                                onChange={(event) => setNewFee((current) => current && ({ ...current, isActive: event.target.checked }))}
-                              />
-                              Active
-                            </label>
-                            <button
-                              type="button"
-                              disabled={savingFeeType !== null}
-                              onClick={() => saveFee(newFee)}
-                              className="ml-auto inline-flex items-center gap-2 bg-blue-700 px-3 py-2 text-xs font-bold uppercase text-white hover:bg-blue-800 disabled:opacity-60"
-                            >
-                              <Save className="h-3.5 w-3.5" />
-                              {savingFeeType === newFee.feeType ? 'Saving…' : 'Create fee'}
-                            </button>
-                            <button
-                              type="button"
-                              disabled={savingFeeType !== null}
-                              onClick={() => setNewFee(null)}
-                              className="border border-slate-300 px-3 py-2 text-xs font-bold uppercase dark:border-slate-600"
-                            >
-                              Cancel
-                            </button>
-                          </div>
+                          <button
+                            type="button"
+                            disabled={isSaving}
+                            aria-label={`Remove ${draftFee.name}`}
+                            title="Remove fee"
+                            onClick={() =>
+                              setNewFees((current) =>
+                                current.filter((item) => item.feeType !== draftFee.feeType),
+                              )
+                            }
+                            className="inline-flex h-10 w-10 items-center justify-center rounded-full text-slate-500 hover:bg-slate-100 hover:text-red-600 disabled:opacity-50 dark:hover:bg-slate-800"
+                          >
+                            <X className="h-4 w-4" />
+                          </button>
                         </div>
-                      )}
+                      ))}
                     </div>
                   )}
-                </section>
+                </fieldset>
               )}
-              <div className="flex justify-end gap-2 md:col-span-2">
-                {editorMode === 'view' ? (
-                  <button type="button" onClick={() => setEditorMode('edit')} className="inline-flex items-center gap-2 bg-slate-800 px-4 py-2 text-xs font-bold uppercase text-white hover:bg-slate-700">
-                    <Pencil className="h-4 w-4" />
-                    Edit property & fees
-                  </button>
-                ) : (
+              <div className="flex flex-wrap justify-end gap-3 pt-1 md:col-span-2 lg:col-span-3">
+                {editorMode === 'view' && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={closeEditor}
+                      className="h-10 rounded-md border border-slate-300 px-4 text-sm font-medium dark:border-slate-600"
+                    >
+                      Close
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditorMode('edit')}
+                      className="inline-flex h-10 items-center gap-2 rounded-md bg-slate-800 px-4 text-sm font-medium text-white hover:bg-slate-700"
+                    >
+                      <Pencil className="h-4 w-4" />
+                      Edit
+                    </button>
+                  </>
+                )}
+                {editorMode !== 'view' && (
                   <button
                     type="submit"
                     disabled={isSaving}
-                    className="inline-flex items-center gap-2 bg-blue-700 px-4 py-2 text-xs font-bold uppercase text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-60"
+                    className="inline-flex h-10 items-center gap-2 rounded-md bg-blue-700 px-4 text-sm font-medium text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     <Save className="h-4 w-4" />
-                    {isSaving ? 'Saving…' : editorMode === 'edit' ? 'Save changes' : 'Create property'}
+                    {editorMode === 'edit' ? 'Save changes' : 'Create property'}
                   </button>
                 )}
               </div>
             </form>
           )}
-        </div>
+        </section>
+      )}
+      {propertyToDelete && (
+        <ConfirmDialog
+          title="Delete property?"
+          description={`Delete ${propertyToDelete.name} (${propertyToDelete.code})? It will be removed from active property lists. Historical records will be retained.`}
+          confirmLabel="Delete property"
+          isConfirming={deletingPropertyId === propertyToDelete.id}
+          onConfirm={() => void deleteProperty(propertyToDelete)}
+          onCancel={() => setPropertyToDelete(null)}
+        />
       )}
     </div>
   );

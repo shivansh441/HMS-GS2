@@ -1058,6 +1058,41 @@ def deactivate_user(
     return ActionSuccessResponse(message="User account set inactive", targetUserId=target.id)
 
 
+@users_router.delete(
+    "/{user_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Soft-delete a user account by archiving it and terminating active sessions",
+)
+def archive_user(
+    user_id: str,
+    request: Request,
+    admin_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db),
+):
+    target = _get_target_user_for_mutation(db, admin_user, user_id)
+    if target.id == admin_user.id:
+        raise ForbiddenError("An admin cannot archive their own account", code="SELF_ACTION")
+    if target.role == Role.ADMIN:
+        _require_primary_admin(db, admin_user)
+    if target.status == UserStatus.ARCHIVED:
+        raise BadRequestError("The user account is already archived", code="INVALID_STATUS")
+
+    previous_status = target.status
+    target.status = UserStatus.ARCHIVED
+    revoke_all_user_sessions(db, target.id, reason="USER_ARCHIVED")
+    write_audit_log(
+        db,
+        action="USER_ARCHIVED",
+        actor_user_id=admin_user.id,
+        target_user_id=target.id,
+        details={"previousStatus": previous_status},
+        ip=get_client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+    )
+    db.commit()
+    return None
+
+
 @users_router.post(
     "/{user_id}/force-logout",
     response_model=ActionSuccessResponse,
