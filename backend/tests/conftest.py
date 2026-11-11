@@ -24,12 +24,14 @@ TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_
 @pytest.fixture(scope="session", autouse=True)
 def setup_test_db():
     Base.metadata.create_all(bind=test_engine)
+    app.state.audit_session_factory = TestingSessionLocal
     # Override engine in seed script
     import scripts.seed
     scripts.seed.engine = test_engine
     scripts.seed.SessionLocal = TestingSessionLocal
     seed_database()
     yield
+    app.state.audit_session_factory = None
     Base.metadata.drop_all(bind=test_engine)
 
 @pytest.fixture(autouse=True)

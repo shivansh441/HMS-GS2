@@ -25,7 +25,7 @@ from app.core.permissions import (
     UnitType,
 )
 from app.core.scoping import get_allowed_property_ids
-from app.db.models import Floor, Property, PropertyFeeConfig, Unit, User
+from app.db.models import Floor, MessFacility, Property, PropertyFeeConfig, Unit, User
 from app.modules.inventory.schemas import (
     BulkUnitCreateRequest,
     BulkUnitCreateResponse,
@@ -86,10 +86,13 @@ def create_property(
 ) -> Property:
     require_admin(actor)
     validate_timezone_and_currency(payload.timezone, payload.currency.upper())
+    if payload.has_mess_facility and payload.type.value not in HOSTEL_TYPES:
+        raise BadRequestError("Mess facilities can only be enabled for hostel properties")
     prop = Property(
         code=_property_code(db, payload.city),
         name=payload.name,
         type=payload.type.value,
+        has_mess_facility=payload.has_mess_facility,
         status="ACTIVE",
         floors=payload.floors,
         address=payload.address,
@@ -124,6 +127,8 @@ def create_property(
                 billing_timing="AT_ASSIGNMENT",
             )
         )
+    if prop.has_mess_facility:
+        db.add(MessFacility(property_id=prop.id, name="Main Mess", is_default=True))
     return prop
 
 
@@ -135,8 +140,17 @@ def update_property(
 ) -> Property:
     require_admin(actor)
     validate_timezone_and_currency(payload.timezone, payload.currency.upper())
+    mess_enabled = (
+        payload.has_mess_facility
+        if payload.has_mess_facility is not None
+        else prop.has_mess_facility
+    )
+    if mess_enabled and payload.type.value not in HOSTEL_TYPES:
+        raise BadRequestError("Mess facilities can only be enabled for hostel properties")
     prop.name = payload.name
     prop.type = payload.type.value
+    if payload.has_mess_facility is not None:
+        prop.has_mess_facility = payload.has_mess_facility
     prop.status = payload.status.value
     prop.floors = payload.floors
     prop.address = payload.address
@@ -148,6 +162,8 @@ def update_property(
     prop.facilities = payload.facilities
     prop.currency = payload.currency.upper()
     prop.timezone = payload.timezone
+    if prop.has_mess_facility and not prop.mess_facilities:
+        db.add(MessFacility(property_id=prop.id, name="Main Mess", is_default=True))
     return prop
 
 
@@ -162,6 +178,7 @@ def property_summary(db: Session, prop: Property) -> dict[str, Any]:
         "name": prop.name,
         "type": prop.type,
         "status": prop.status,
+        "hasMessFacility": prop.has_mess_facility,
         "timezone": prop.timezone,
         "currency": prop.currency,
         "floors": prop.floors,
@@ -516,18 +533,9 @@ def create_fee_config(
         FeeType.MESS_FEE,
         FeeType.SECURITY_DEPOSIT,
     )
-    expected_basis = (
-        "ASSIGNMENT" if assignment_fee
-        else "METERED" if electricity_fee
-        else "CONFIG_ONLY" if water_charge
-        else "FIXED_FLAT"
-    )
-    expected_timing = (
-        "AT_ASSIGNMENT" if assignment_fee
-        else "ARREARS" if electricity_fee
-        else "NONE" if water_charge
-        else "ADVANCE"
-    )
+    metered_utility = electricity_fee or water_charge
+    expected_basis = "ASSIGNMENT" if assignment_fee else "METERED" if metered_utility else "FIXED_FLAT"
+    expected_timing = "AT_ASSIGNMENT" if assignment_fee else "ARREARS" if metered_utility else "ADVANCE"
     if payload.pricing_basis and payload.pricing_basis != expected_basis:
         raise BadRequestError(
             f"{payload.fee_type.value} must use {expected_basis} pricing",
@@ -538,7 +546,7 @@ def create_fee_config(
             f"{payload.fee_type.value} must be billed {expected_timing.lower()}",
             code="INVALID_FEE_TIMING",
         )
-    if electricity_fee and (
+    if metered_utility and (
         payload.rate_per_unit is None
         or payload.rate_per_unit <= 0
         or not payload.unit_of_measure
@@ -547,9 +555,9 @@ def create_fee_config(
             "Metered utility fees require a rate per unit and unit of measure",
             code="METER_RATE_REQUIRED",
         )
-    if not electricity_fee and (payload.rate_per_unit is not None or payload.unit_of_measure):
+    if not metered_utility and (payload.rate_per_unit is not None or payload.unit_of_measure):
         raise BadRequestError(
-            "Rate per unit and unit of measure are only valid for metered electricity",
+            "Rate per unit and unit of measure are only valid for metered utilities",
             code="INVALID_METER_RATE",
         )
     if assignment_fee and payload.amount != 0:
@@ -557,7 +565,7 @@ def create_fee_config(
             "Hostel Rent is priced on each stay assignment, not on the property fee config",
             code="ASSIGNMENT_RATE_ON_PROPERTY",
         )
-    if (electricity_fee or water_charge) and payload.amount != 0:
+    if metered_utility and payload.amount != 0:
         raise BadRequestError(
             "This fee is not configured with a property-level flat amount",
             code="UTILITY_NOT_BILLED_IN_ADVANCE",

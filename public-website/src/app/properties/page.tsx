@@ -14,6 +14,7 @@ interface PublicProperty {
   city: string;
   state: string;
   currency: string;
+  facilities: string[];
 }
 
 interface PublicUnit {
@@ -40,6 +41,14 @@ function getErrorMessage(error: unknown) {
 export default function PropertiesPage() {
   const [properties, setProperties] = useState<PublicProperty[]>([]);
   const [selectedPropertyId, setSelectedPropertyId] = useState('');
+  const [locationInput, setLocationInput] = useState('');
+  const [locationFilter, setLocationFilter] = useState('');
+  const [propertyType, setPropertyType] = useState<'ALL' | 'HOTEL' | 'HOSTEL'>('ALL');
+  const [checkIn, setCheckIn] = useState('');
+  const [checkOut, setCheckOut] = useState('');
+  const [category, setCategory] = useState('');
+  const [minPrice, setMinPrice] = useState('');
+  const [maxPrice, setMaxPrice] = useState('');
   const [units, setUnits] = useState<PublicUnit[]>([]);
   const [isLoadingProperties, setIsLoadingProperties] = useState(true);
   const [isLoadingUnits, setIsLoadingUnits] = useState(false);
@@ -47,11 +56,17 @@ export default function PropertiesPage() {
 
   useEffect(() => {
     let active = true;
-    customerApiClient.get<PublicProperty[]>('/public/properties')
+    const params: Record<string, string> = {};
+    if (locationFilter) params.location = locationFilter;
+    if (propertyType === 'HOTEL') params.type = 'HOTEL';
+    if (propertyType === 'HOSTEL') params.type = 'HOSTEL_BOYS,HOSTEL_GIRLS,HOSTEL_COED,CO_LIVING';
+    customerApiClient.get<PublicProperty[]>('/public/properties', { params })
       .then(({ data }) => {
         if (!active) return;
         setProperties(data);
-        setSelectedPropertyId(data[0]?.id || '');
+        setSelectedPropertyId((current) =>
+          data.some((property) => property.id === current) ? current : data[0]?.id || '',
+        );
       })
       .catch((error: unknown) => {
         if (active) setErrorMessage(getErrorMessage(error));
@@ -62,7 +77,7 @@ export default function PropertiesPage() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [locationFilter, propertyType]);
 
   useEffect(() => {
     if (!selectedPropertyId) {
@@ -72,8 +87,14 @@ export default function PropertiesPage() {
     let active = true;
     setIsLoadingUnits(true);
     setErrorMessage('');
+    const params: Record<string, string> = { propertyId: selectedPropertyId };
+    if (checkIn) params.checkIn = checkIn;
+    if (checkOut) params.checkOut = checkOut;
+    if (category) params.category = category;
+    if (minPrice) params.minPrice = minPrice;
+    if (maxPrice) params.maxPrice = maxPrice;
     customerApiClient.get<PublicUnit[]>('/public/units/search', {
-      params: { propertyId: selectedPropertyId },
+      params,
     })
       .then(({ data }) => {
         if (active) setUnits(data);
@@ -87,7 +108,7 @@ export default function PropertiesPage() {
     return () => {
       active = false;
     };
-  }, [selectedPropertyId]);
+  }, [selectedPropertyId, checkIn, checkOut, category, minPrice, maxPrice]);
 
   const selectedProperty = properties.find((property) => property.id === selectedPropertyId);
 
@@ -108,22 +129,84 @@ export default function PropertiesPage() {
           </div>
         )}
 
-        <section className="space-y-6">
-          <label className="block max-w-md space-y-2 text-sm font-semibold text-slate-700">
-            Select a property
-            <select
-              value={selectedPropertyId}
-              onChange={(event) => setSelectedPropertyId(event.target.value)}
-              disabled={isLoadingProperties || properties.length === 0}
-              className="w-full border border-slate-300 bg-white px-4 py-3"
-            >
-              {isLoadingProperties && <option value="">Loading properties…</option>}
-              {!isLoadingProperties && properties.length === 0 && <option value="">No properties available</option>}
-              {properties.map((property) => (
-                <option key={property.id} value={property.id}>{property.name} · {property.city}</option>
-              ))}
+        <form
+          className="grid gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm md:grid-cols-3 lg:grid-cols-6"
+          onSubmit={(event) => {
+            event.preventDefault();
+            setLocationFilter(locationInput.trim());
+          }}
+        >
+          <label className="space-y-2 text-xs font-semibold text-slate-700 lg:col-span-2">
+            Location
+            <input
+              value={locationInput}
+              onChange={(event) => setLocationInput(event.target.value)}
+              placeholder="City or state"
+              className="w-full border border-slate-300 px-3 py-2.5 text-sm"
+            />
+          </label>
+          <label className="space-y-2 text-xs font-semibold text-slate-700">
+            Check-in
+            <input type="date" value={checkIn} onChange={(event) => setCheckIn(event.target.value)} className="w-full border border-slate-300 px-3 py-2.5 text-sm" />
+          </label>
+          <label className="space-y-2 text-xs font-semibold text-slate-700">
+            Check-out
+            <input type="date" min={checkIn || undefined} value={checkOut} onChange={(event) => setCheckOut(event.target.value)} className="w-full border border-slate-300 px-3 py-2.5 text-sm" />
+          </label>
+          <label className="space-y-2 text-xs font-semibold text-slate-700">
+            Room / bed category
+            <select value={category} onChange={(event) => setCategory(event.target.value)} className="w-full border border-slate-300 bg-white px-3 py-2.5 text-sm">
+              <option value="">Any category</option>
+              {['CLASSIC', 'DELUXE', 'EXECUTIVE', 'DORMITORY'].map((value) => <option key={value} value={value}>{value}</option>)}
             </select>
           </label>
+          <div className="flex items-end">
+            <button type="submit" className="w-full bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-amber-800">Search stays</button>
+          </div>
+          <div className="flex flex-wrap items-end gap-2 md:col-span-2 lg:col-span-3">
+            {([
+              ['ALL', 'All stays'],
+              ['HOTEL', 'Hotels'],
+              ['HOSTEL', 'Hostels'],
+            ] as const).map(([value, label]) => (
+              <button key={value} type="button" onClick={() => setPropertyType(value)} aria-pressed={propertyType === value} className={`border px-4 py-2 text-xs font-semibold ${propertyType === value ? 'border-slate-900 bg-slate-900 text-white' : 'border-slate-300 bg-white text-slate-700'}`}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <label className="space-y-2 text-xs font-semibold text-slate-700">
+            Minimum price
+            <input type="number" min="0" value={minPrice} onChange={(event) => setMinPrice(event.target.value)} className="w-full border border-slate-300 px-3 py-2.5 text-sm" />
+          </label>
+          <label className="space-y-2 text-xs font-semibold text-slate-700">
+            Maximum price
+            <input type="number" min="0" value={maxPrice} onChange={(event) => setMaxPrice(event.target.value)} className="w-full border border-slate-300 px-3 py-2.5 text-sm" />
+          </label>
+        </form>
+
+        <section className="space-y-6">
+          {isLoadingProperties ? (
+            <p className="py-8 text-center text-sm text-slate-500">Loading properties…</p>
+          ) : properties.length === 0 ? (
+            <p className="border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">No active properties match your search.</p>
+          ) : (
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+              {properties.map((property) => (
+                <button
+                  type="button"
+                  key={property.id}
+                  onClick={() => setSelectedPropertyId(property.id)}
+                  aria-pressed={selectedPropertyId === property.id}
+                  className={`text-left border bg-white p-5 shadow-sm transition hover:border-amber-700 ${selectedPropertyId === property.id ? 'border-amber-700 ring-1 ring-amber-700' : 'border-slate-200'}`}
+                >
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-amber-700">{property.type.replaceAll('_', ' ')}</span>
+                  <span className="mt-1 block font-serif text-xl font-semibold text-slate-900">{property.name}</span>
+                  <span className="mt-1 block text-sm text-slate-500">{property.city}, {property.state}</span>
+                  {property.facilities.length > 0 && <span className="mt-3 block text-xs text-slate-500">{property.facilities.join(' · ')}</span>}
+                </button>
+              ))}
+            </div>
+          )}
 
           {selectedProperty && (
             <div className="flex flex-wrap items-end justify-between gap-4 border-b border-slate-200 pb-4">
@@ -174,8 +257,11 @@ export default function PropertiesPage() {
                         {price == null ? 'Contact us' : `${unit.currency} ${Number(price).toLocaleString()}`}
                         {price != null && <span className="ml-1 font-sans text-xs font-normal text-slate-500">/{monthly ? 'month' : 'night'}</span>}
                       </p>
-                      <Link href="/signup" className="inline-flex items-center gap-1 text-xs font-bold text-slate-800 hover:text-amber-700">
-                        Enquire <ArrowRight className="h-3.5 w-3.5" />
+                      <Link
+                        href={`/book?propertyId=${encodeURIComponent(selectedPropertyId)}${checkIn ? `&checkIn=${encodeURIComponent(checkIn)}` : ''}${checkOut ? `&checkOut=${encodeURIComponent(checkOut)}` : ''}${category ? `&category=${encodeURIComponent(category)}` : ''}`}
+                        className="inline-flex items-center gap-1 text-xs font-bold text-slate-800 hover:text-amber-700"
+                      >
+                        Reserve Now <ArrowRight className="h-3.5 w-3.5" />
                       </Link>
                     </div>
                   </article>

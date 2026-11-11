@@ -83,7 +83,7 @@ export default function SignInPage() {
             Email or phone
             <div className="relative mt-1.5">
               <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" aria-hidden="true" />
-              <input id="identifier" type="text" autoComplete="username" required value={identifier} onChange={(e) => setIdentifier(e.target.value)} placeholder="you@example.com or phone" className={inputClass} />
+              <input id="identifier" type="text" autoComplete="email" required value={identifier} onChange={(e) => setIdentifier(e.target.value)} placeholder="you@example.com or phone" className={inputClass} />
             </div>
           </label>
           <label className="block text-sm font-medium text-slate-700" htmlFor="password">

@@ -185,9 +185,9 @@ def verify_totp_code(secret: str, code: str) -> bool:
     totp = pyotp.TOTP(secret)
     return totp.verify(code, valid_window=1)
 
-def get_totp_provisioning_uri(secret: str, username_or_email: str) -> str:
+def get_totp_provisioning_uri(secret: str, account_label: str) -> str:
     totp = pyotp.TOTP(secret)
-    return totp.provisioning_uri(name=username_or_email, issuer_name="Haven Stays")
+    return totp.provisioning_uri(name=account_label, issuer_name="Haven Stays")
 
 def verify_csrf_and_origin(request: Request) -> None:
     """

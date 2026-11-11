@@ -69,6 +69,15 @@ def update_customer_profile(
     current_user: User = Depends(get_current_customer),
     db: Session = Depends(get_db),
 ):
+    return apply_customer_profile_update(payload, request, current_user, db)
+
+
+def apply_customer_profile_update(
+    payload: CustomerProfileUpdateRequest,
+    request: Request,
+    current_user: User,
+    db: Session,
+) -> UserResponse:
     if payload.firstName or payload.lastName:
         fn = payload.firstName or (current_user.full_name.split()[0] if current_user.full_name else "")
         ln = payload.lastName or (current_user.full_name.split()[-1] if current_user.full_name else "")
@@ -77,7 +86,13 @@ def update_customer_profile(
     # Phone change requires OTP verification
     if payload.phone:
         clean_phone = payload.phone.strip()
-        if clean_phone != current_user.phone:
+        phone_changed = clean_phone != current_user.phone
+        is_unverified_phone_confirmation = (
+            not current_user.phone_verified_at
+            and bool(payload.phoneOtpCode)
+            and clean_phone == current_user.phone
+        )
+        if phone_changed or is_unverified_phone_confirmation:
             if not payload.phoneOtpCode:
                 raise ValidationError("Phone change requires a verified SMS passcode in phoneOtpCode")
             
@@ -101,7 +116,7 @@ def update_customer_profile(
     # Email change requires verification of new address, old address is notified
     if payload.email:
         clean_email = payload.email.strip().lower()
-        if clean_email != current_user.email:
+        if clean_email != current_user.email and clean_email != current_user.pending_email:
             existing = db.scalar(select(User).where(User.email == clean_email))
             if existing:
                 raise ConflictError("This email address is already in use by another account")

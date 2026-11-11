@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -21,6 +22,9 @@ class Settings(BaseSettings):
     # AES-256-GCM key (32 bytes urlsafe base64 encoded or raw 32 bytes)
     # Default is 32 byte key urlsafe base64: base64.urlsafe_b64encode(b"01234567890123456789012345678901").decode()
     ENCRYPTION_KEY_B64: str = "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE="
+    ID_DOCUMENT_STORAGE_DIR: str = str(
+        Path(__file__).resolve().parents[2] / "private_data" / "id_documents"
+    )
     
     # CORS: Allow-list of admin-panel and public-website origins only
     CORS_ORIGINS: list[str] = [
@@ -46,6 +50,10 @@ class Settings(BaseSettings):
     OAUTH_MODE: str = "mock" # mock | production
     PUBLIC_WEBSITE_URL: str = "http://localhost:3000"
     ADMIN_PANEL_URL: str = "http://localhost:5173"
+    RAZORPAY_KEY_ID: str = ""
+    RAZORPAY_KEY_SECRET: str = ""
+    AUDIT_RATE_VARIANCE_LIMIT: float = 0.20
+    AUDIT_HIGH_REFUND_THRESHOLD: float = 10000.0
 
     model_config = SettingsConfigDict(
         env_file=".env",

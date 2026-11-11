@@ -4,15 +4,15 @@ export type StaffRole = 'FRONT_DESK' | 'MAINTENANCE' | 'HOUSEKEEPING';
 
 export type CustomerPersona = 'HOTEL_GUEST' | 'HOSTEL_GUEST' | 'HOSTELER';
 
-export type UserStatus = 'PENDING_ACTIVATION' | 'ACTIVE' | 'SUSPENDED' | 'ARCHIVED';
+export type UserStatus = 'PENDING_ACTIVATION' | 'ACTIVE' | 'INACTIVE' | 'SUSPENDED' | 'ARCHIVED';
 
 export interface User {
   id: string;
   email: string | null;
-  username: string | null;
   full_name: string | null;
   phone: string | null;
   gender: string | null;
+  date_of_birth: string | null;
   customerPersona: CustomerPersona | null;
   role: Role;
   staffRole: StaffRole | null;
@@ -30,6 +30,7 @@ export interface Property {
   name: string;
   timezone: string;
   status: string;
+  hasMessFacility: boolean;
   type: string;
   currency: string;
   floors: number;
@@ -93,4 +94,5 @@ export interface UserListResponse {
   total: number;
   limit: number;
   offset: number;
+  primaryAdminId: string | null;
 }

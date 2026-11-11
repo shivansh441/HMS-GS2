@@ -14,9 +14,12 @@ export default function SignUpPage() {
   const router = useRouter();
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
+  const [dateOfBirth, setDateOfBirth] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [phone, setPhone] = useState('');
+  const [idDocumentType, setIdDocumentType] = useState('');
+  const [idDocumentNumber, setIdDocumentNumber] = useState('');
   const [consent, setConsent] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -28,8 +31,16 @@ export default function SignUpPage() {
       setError('Enter your first and last name.');
       return;
     }
+    if (!dateOfBirth || dateOfBirth > new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10)) {
+      setError('Enter a valid date of birth that is not in the future.');
+      return;
+    }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
       setError('Enter a valid email address.');
+      return;
+    }
+    if (!idDocumentType || idDocumentNumber.trim().length < 2) {
+      setError('Select a government ID type and enter its number.');
       return;
     }
     if (!consent) {
@@ -45,9 +56,12 @@ export default function SignUpPage() {
       await customerApiClient.post('/auth/register', {
         firstName: firstName.trim(),
         lastName: lastName.trim(),
+        dateOfBirth,
         email: email.trim().toLowerCase(),
         password,
         phone: phone.trim() || null,
+        idDocumentType,
+        idDocumentNumber: idDocumentNumber.trim(),
         consent,
       });
       router.push(`/check-your-email?email=${encodeURIComponent(email.trim().toLowerCase())}`);
@@ -89,6 +103,10 @@ export default function SignUpPage() {
               </div>
             </label>
           </div>
+          <label className="block text-sm font-medium text-slate-700" htmlFor="dateOfBirth">
+            Date of birth
+            <input id="dateOfBirth" type="date" required max={new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10)} value={dateOfBirth} onChange={(event) => setDateOfBirth(event.target.value)} className={`${inputClass} mt-1.5`} />
+          </label>
           <label className="block text-sm font-medium text-slate-700" htmlFor="email">
             Email address
             <div className="relative mt-1.5">
@@ -103,6 +121,24 @@ export default function SignUpPage() {
               <input id="phone" type="tel" autoComplete="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+1 555 010 1234" className={inputClass} />
             </div>
           </label>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <label className="block text-sm font-medium text-slate-700" htmlFor="idDocumentType">
+              Government ID type
+              <select id="idDocumentType" required value={idDocumentType} onChange={(event) => setIdDocumentType(event.target.value)} className={`${inputClass} mt-1.5`}>
+                <option value="">Select an ID type</option>
+                <option value="AADHAAR">Aadhaar</option>
+                <option value="PAN">PAN</option>
+                <option value="VOTER_ID">Voter ID</option>
+                <option value="PASSPORT">Passport</option>
+                <option value="DRIVING_LICENSE">Driving licence</option>
+                <option value="OTHER_GOVERNMENT_ID">Other government ID</option>
+              </select>
+            </label>
+            <label className="block text-sm font-medium text-slate-700" htmlFor="idDocumentNumber">
+              Government ID number
+              <input id="idDocumentNumber" required minLength={2} maxLength={128} value={idDocumentNumber} onChange={(event) => setIdDocumentNumber(event.target.value)} className={`${inputClass} mt-1.5`} />
+            </label>
+          </div>
           <label className="block text-sm font-medium text-slate-700" htmlFor="password">
             Password
             <div className="relative mt-1.5">

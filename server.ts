@@ -39,7 +39,6 @@ interface PropertyItem {
 interface UserRecord {
   id: string;
   email: string;
-  username: string;
   full_name: string;
   phone: string | null;
   password: string;
@@ -90,7 +89,6 @@ const USERS: UserRecord[] = [
   {
     id: 'user-super-admin',
     email: 'admin@havenstays.com',
-    username: 'superadmin',
     full_name: 'Super Administrator',
     phone: '+1 (555) 010-0001',
     password: 'AdminSecurePass123!',
@@ -111,7 +109,6 @@ const USERS: UserRecord[] = [
   {
     id: 'user-mgr-hq01',
     email: 'manager.hq01@havenstays.com',
-    username: 'manager_hq01',
     full_name: 'Marcus Vance (HQ-01 Mgr)',
     phone: '+1 (555) 010-0002',
     password: 'ManagerSecurePass123!',
@@ -132,7 +129,6 @@ const USERS: UserRecord[] = [
   {
     id: 'user-mgr-all',
     email: 'manager.all@havenstays.com',
-    username: 'manager_all',
     full_name: 'Elena Rostova (Dual Mgr)',
     phone: '+1 (555) 010-0003',
     password: 'ManagerSecurePass123!',
@@ -153,7 +149,6 @@ const USERS: UserRecord[] = [
   {
     id: 'user-frontdesk-hq01',
     email: 'frontdesk@havenstays.com',
-    username: 'frontdesk_hq01',
     full_name: 'Chloe Bennett (Front Desk)',
     phone: '+1 (555) 010-0004',
     password: 'StaffSecurePass123!',
@@ -174,7 +169,6 @@ const USERS: UserRecord[] = [
   {
     id: 'user-housekeeping-hq02',
     email: 'housekeeping@havenstays.com',
-    username: 'housekeeping_hq02',
     full_name: 'David Chen (Housekeeping)',
     phone: '+1 (555) 010-0005',
     password: 'StaffSecurePass123!',
@@ -195,7 +189,6 @@ const USERS: UserRecord[] = [
   {
     id: 'user-cust-nobook1',
     email: 'guest.nobooking1@gmail.com',
-    username: 'guest_nobook1',
     full_name: 'Sophia Martinez',
     phone: '+1 (555) 019-2831',
     password: 'CustomerPass123!',
@@ -216,7 +209,6 @@ const USERS: UserRecord[] = [
   {
     id: 'user-cust-nobook2',
     email: 'guest.nobooking2@gmail.com',
-    username: 'guest_nobook2',
     full_name: 'Liam Gallagher',
     phone: null,
     password: 'CustomerPass123!',
@@ -237,7 +229,6 @@ const USERS: UserRecord[] = [
   {
     id: 'user-resident-alex',
     email: 'resident.pending@gmail.com',
-    username: 'resident_alex',
     full_name: 'Alex Rivera',
     phone: '+1 (555) 019-4455',
     password: 'CustomerPass123!',
@@ -258,7 +249,6 @@ const USERS: UserRecord[] = [
   {
     id: 'user-guest-hotel',
     email: 'guest.hotel@gmail.com',
-    username: 'guest_hotel',
     full_name: 'Grace Hopper',
     phone: '+1 (555) 019-7788',
     password: 'CustomerPass123!',
@@ -279,7 +269,6 @@ const USERS: UserRecord[] = [
   {
     id: 'user-guest-hostel',
     email: 'guest.hostel@gmail.com',
-    username: 'guest_hostel',
     full_name: 'Julian Thorne',
     phone: '+1 (555) 019-9900',
     password: 'CustomerPass123!',
@@ -370,7 +359,6 @@ function formatUser(u: UserRecord) {
   return {
     id: u.id,
     email: u.email,
-    username: u.username,
     full_name: u.full_name,
     phone: u.phone,
     account_type: u.account_type,
@@ -488,7 +476,6 @@ app.post('/api/v1/auth/register', (req: Request, res: Response) => {
   const newUser: UserRecord = {
     id: `user-${crypto.randomBytes(6).toString('hex')}`,
     email: email.toLowerCase(),
-    username: email.split('@')[0],
     full_name,
     phone: phone || null,
     password,
@@ -708,11 +695,7 @@ app.post('/api/v1/admin/auth/login', (req: Request, res: Response) => {
     return;
   }
 
-  const user = USERS.find(
-    (u) =>
-      u.email.toLowerCase() === identifier.toLowerCase() ||
-      u.username.toLowerCase() === identifier.toLowerCase()
-  );
+  const user = USERS.find((u) => u.email.toLowerCase() === identifier.toLowerCase());
 
   if (!user || user.password !== password) {
     res.status(401).json({ error: { code: 'INVALID_CREDENTIALS', message: 'Invalid admin credentials' } });
@@ -914,7 +897,6 @@ app.get('/api/v1/admin/users', authenticateAdmin, (req: Request, res: Response) 
     candidates = candidates.filter(
       (c) =>
         c.email.toLowerCase().includes(q) ||
-        c.username.toLowerCase().includes(q) ||
         c.full_name.toLowerCase().includes(q)
     );
   }

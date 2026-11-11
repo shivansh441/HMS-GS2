@@ -1,0 +1,15 @@
+{
+  "headers": {
+    "x-nextjs-stale-time": "300",
+    "x-nextjs-prerender": "1",
+    "x-next-cache-tags": "_N_T_/layout,_N_T_/magic-link/layout,_N_T_/magic-link/page,_N_T_/magic-link"
+  },
+  "routeCache": {
+    "key": "/route-cache/APP_PAGE/e93be50ad91e86e360e7211be34194687694eb720706df18ff7d9ddf09028ec1/$/magic-link",
+    "owner": {
+      "kind": "APP_PAGE",
+      "sourceRoute": "/magic-link/page"
+    },
+    "isFallback": false
+  }
+}

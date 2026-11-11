@@ -1,1 +1,5 @@
-{}
+{
+  "/activate/page": "app/activate/page.js",
+  "/account/page": "app/account/page.js",
+  "/signin/page": "app/signin/page.js"
+}

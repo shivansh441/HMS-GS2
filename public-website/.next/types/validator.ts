@@ -72,6 +72,15 @@ type LayoutConfig<Route extends LayoutRoutes = LayoutRoutes> = {
   type __Unused = __Check
 }
 
+// Validate ../../src/app/book/page.tsx
+{
+  type __IsExpected<Specific extends AppPageConfig<"/book">> = Specific
+  const handler = {} as typeof import("../../src/app/book/page.js")
+  type __Check = __IsExpected<typeof handler>
+  // @ts-ignore
+  type __Unused = __Check
+}
+
 // Validate ../../src/app/check-your-email/page.tsx
 {
   type __IsExpected<Specific extends AppPageConfig<"/check-your-email">> = Specific
@@ -139,6 +148,42 @@ type LayoutConfig<Route extends LayoutRoutes = LayoutRoutes> = {
 {
   type __IsExpected<Specific extends AppPageConfig<"/">> = Specific
   const handler = {} as typeof import("../../src/app/page.js")
+  type __Check = __IsExpected<typeof handler>
+  // @ts-ignore
+  type __Unused = __Check
+}
+
+// Validate ../../src/app/portal/invoices/page.tsx
+{
+  type __IsExpected<Specific extends AppPageConfig<"/portal/invoices">> = Specific
+  const handler = {} as typeof import("../../src/app/portal/invoices/page.js")
+  type __Check = __IsExpected<typeof handler>
+  // @ts-ignore
+  type __Unused = __Check
+}
+
+// Validate ../../src/app/portal/my-stay/page.tsx
+{
+  type __IsExpected<Specific extends AppPageConfig<"/portal/my-stay">> = Specific
+  const handler = {} as typeof import("../../src/app/portal/my-stay/page.js")
+  type __Check = __IsExpected<typeof handler>
+  // @ts-ignore
+  type __Unused = __Check
+}
+
+// Validate ../../src/app/portal/page.tsx
+{
+  type __IsExpected<Specific extends AppPageConfig<"/portal">> = Specific
+  const handler = {} as typeof import("../../src/app/portal/page.js")
+  type __Check = __IsExpected<typeof handler>
+  // @ts-ignore
+  type __Unused = __Check
+}
+
+// Validate ../../src/app/portal/profile/page.tsx
+{
+  type __IsExpected<Specific extends AppPageConfig<"/portal/profile">> = Specific
+  const handler = {} as typeof import("../../src/app/portal/profile/page.js")
   type __Check = __IsExpected<typeof handler>
   // @ts-ignore
   type __Unused = __Check

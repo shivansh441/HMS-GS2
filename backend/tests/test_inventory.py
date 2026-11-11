@@ -1,15 +1,20 @@
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
+from app.core.crypto import decrypt_data
 from app.core.permissions import Role
 from app.core.security import create_access_token
 from app.db.models import (
     AuditLog,
+    Floor,
     Property,
     PropertyFeeConfig,
+    StayOccupant,
+    StayRecord,
     Unit,
     UnitAssignment,
     User,
@@ -202,7 +207,6 @@ def test_fee_config_addition_and_staff_redaction(client: TestClient, db_session)
 
     staff = User(
         email=f"inventory-staff-{uuid4().hex[:8]}@example.test",
-        username=f"inventory_staff_{uuid4().hex[:8]}",
         full_name="Inventory Staff",
         password_hash="not-used",
         role=Role.STAFF,
@@ -353,7 +357,6 @@ def test_unit_status_and_staff_scope(client: TestClient, db_session):
 
     staff = User(
         email=f"inventory-empty-{uuid4().hex[:8]}@example.test",
-        username=f"inventory_empty_{uuid4().hex[:8]}",
         full_name="Unassigned Staff",
         password_hash="not-used",
         role=Role.STAFF,
@@ -419,6 +422,93 @@ def test_public_search_uses_restricted_unit_shape(client: TestClient, db_session
     assert "smartLockId" not in unit
     assert "depositAmount" not in unit
     assert "occupantName" not in unit
+
+
+def test_public_search_filters_property_and_excludes_date_overlaps(client: TestClient, db_session):
+    headers = _headers(db_session)
+    prop = _create_property(client, headers, "HOTEL")
+    created = client.post(
+        f"/api/v1/properties/{prop['id']}/units",
+        headers=headers,
+        json={
+            "unitNumber": "DATE-101",
+            "floor": 1,
+            "type": "ROOM",
+            "category": "CLASSIC",
+            "capacity": 2,
+            "defaultPricePerNight": "120.00",
+        },
+    )
+    assert created.status_code == 201, created.text
+    unit = db_session.get(Unit, created.json()["id"])
+    assert unit is not None
+    guest = User(
+        email=f"availability-{uuid4().hex[:8]}@example.test",
+        full_name="Availability Guest",
+        password_hash="not-used",
+        role=Role.CUSTOMER,
+        status="ACTIVE",
+    )
+    check_in = datetime.now(timezone.utc) + timedelta(days=10)
+    check_out = check_in + timedelta(days=2)
+    db_session.add(guest)
+    db_session.flush()
+    db_session.add(
+        UnitAssignment(
+            unit_id=unit.id,
+            user_id=guest.id,
+            status="RESERVED",
+            expected_check_in=check_in,
+            expected_check_out=check_out,
+        )
+    )
+    db_session.commit()
+
+    overlapping = client.get(
+        "/api/v1/public/units/search",
+        params={
+            "property_id": prop["id"],
+            "category": "CLASSIC",
+            "check_in": (check_in + timedelta(days=1)).date().isoformat(),
+            "check_out": (check_out + timedelta(days=1)).date().isoformat(),
+        },
+    )
+    assert overlapping.status_code == 200, overlapping.text
+    assert overlapping.json() == []
+
+    available_after_checkout = client.get(
+        "/api/v1/public/units/search",
+        params={
+            "property_id": prop["id"],
+            "check_in": (check_out + timedelta(days=1)).date().isoformat(),
+            "check_out": (check_out + timedelta(days=2)).date().isoformat(),
+            "minPrice": "100",
+            "maxPrice": "150",
+        },
+    )
+    assert available_after_checkout.status_code == 200, available_after_checkout.text
+    assert [item["unitNumber"] for item in available_after_checkout.json()] == ["DATE-101"]
+
+
+def test_public_property_catalog_filters_type_and_location(client: TestClient, db_session):
+    headers = _headers(db_session)
+    hotel = _create_property(client, headers, "HOTEL")
+    hostel = _create_property(client, headers, "HOSTEL_BOYS")
+
+    hotels = client.get("/api/v1/public/properties", params={"type": "HOTEL"})
+    assert hotels.status_code == 200, hotels.text
+    assert hotel["id"] in {item["id"] for item in hotels.json()}
+    assert all(item["type"] == "HOTEL" for item in hotels.json())
+    hostel_record = db_session.get(Property, hostel["id"])
+    assert hostel_record is not None
+
+    hostels = client.get(
+        "/api/v1/public/properties",
+        params={"type": "HOSTEL", "location": hostel_record.city},
+    )
+    assert hostels.status_code == 200, hostels.text
+    assert [item["id"] for item in hostels.json()] == [hostel["id"]]
+    assert "facilities" in hostels.json()[0]
 
 
 def test_sharing_rates_fee_rules_walk_in_rate_and_utility_arrears(client: TestClient, db_session):
@@ -561,15 +651,18 @@ def test_sharing_rates_fee_rules_walk_in_rate_and_utility_arrears(client: TestCl
             "name": "Water Charge",
             "amount": "0",
             "isActive": True,
-            "pricingBasis": "CONFIG_ONLY",
-            "billingTiming": "NONE",
+            "pricingBasis": "METERED",
+            "billingTiming": "ARREARS",
+            "ratePerUnit": "1.25",
+            "unitOfMeasure": "liter",
         },
     )
     assert water.status_code == 201, water.text
     assert water.json()["isActive"] is True
-    assert water.json()["pricingBasis"] == "CONFIG_ONLY"
-    assert water.json()["ratePerUnit"] is None
-    assert water.json()["unitOfMeasure"] is None
+    assert water.json()["pricingBasis"] == "METERED"
+    assert water.json()["billingTiming"] == "ARREARS"
+    assert water.json()["ratePerUnit"] == "1.2500"
+    assert water.json()["unitOfMeasure"] == "LITER"
 
     bed = db_session.scalar(
         select(Unit).where(Unit.property_id == prop["id"], Unit.type == "BED")
@@ -577,7 +670,6 @@ def test_sharing_rates_fee_rules_walk_in_rate_and_utility_arrears(client: TestCl
     assert bed is not None
     guest = User(
         email=f"walk-in-{uuid4().hex[:8]}@example.test",
-        username=f"walk_in_{uuid4().hex[:8]}",
         full_name="Walk-in Guest",
         password_hash="not-used",
         role=Role.CUSTOMER,
@@ -594,6 +686,9 @@ def test_sharing_rates_fee_rules_walk_in_rate_and_utility_arrears(client: TestCl
             "expectedCheckIn": "2024-06-01T10:00:00Z",
             "billingStrategy": "RECURRING_MONTHLY",
             "agreedRate": "7600.00",
+            "rateOverrideReason": "Negotiated long-stay rate",
+            "depositPaymentAmount": "5000.00",
+            "depositPaymentMethod": "CASH",
         },
     )
     assert assignment_response.status_code == 201, assignment_response.text
@@ -605,7 +700,6 @@ def test_sharing_rates_fee_rules_walk_in_rate_and_utility_arrears(client: TestCl
 
     desk_staff = User(
         email=f"front-desk-{uuid4().hex[:8]}@example.test",
-        username=f"front_desk_{uuid4().hex[:8]}",
         full_name="Front Desk Staff",
         password_hash="not-used",
         role=Role.STAFF,
@@ -614,7 +708,6 @@ def test_sharing_rates_fee_rules_walk_in_rate_and_utility_arrears(client: TestCl
     )
     second_guest = User(
         email=f"walk-in-second-{uuid4().hex[:8]}@example.test",
-        username=f"walk_in_second_{uuid4().hex[:8]}",
         full_name="Second Walk-in Guest",
         password_hash="not-used",
         role=Role.CUSTOMER,
@@ -645,6 +738,9 @@ def test_sharing_rates_fee_rules_walk_in_rate_and_utility_arrears(client: TestCl
             "expectedCheckIn": "2024-06-02T10:00:00Z",
             "billingStrategy": "RECURRING_MONTHLY",
             "agreedRate": "7000.00",
+            "rateOverrideReason": "Returning resident rate",
+            "depositPaymentAmount": "5000.00",
+            "depositPaymentMethod": "UPI",
         },
     )
     assert staff_assignment.status_code == 201, staff_assignment.text
@@ -669,6 +765,178 @@ def test_sharing_rates_fee_rules_walk_in_rate_and_utility_arrears(client: TestCl
     reading = db_session.get(UtilityMeterReading, meter_response.json()["id"])
     assert reading is not None
     assert reading.billing_status == "QUEUED"
+
+
+def test_preallocated_stay_check_in_and_check_out_lifecycle(client: TestClient, db_session):
+    headers = _headers(db_session)
+    prop = _create_property(client, headers)
+    prop_record = db_session.get(Property, prop["id"])
+    assert prop_record is not None
+    floor = Floor(property_id=prop_record.id, number=1, name="Ground")
+    db_session.add(floor)
+    db_session.flush()
+    unit = Unit(
+        property_id=prop_record.id,
+        floor_id=floor.id,
+        unit_number=f"STAY-{uuid4().hex[:6]}",
+        floor=1,
+        type="ROOM",
+        category="CLASSIC",
+        capacity=2,
+        default_price_per_night=120,
+        status="AVAILABLE",
+    )
+    guest = User(
+        email=f"stay-{uuid4().hex[:8]}@example.test",
+        full_name="Stay Guest",
+        password_hash="not-used",
+        role=Role.CUSTOMER,
+        status="ACTIVE",
+    )
+    db_session.add_all([unit, guest])
+    db_session.commit()
+
+    assignment_response = client.post(
+        "/api/v1/stay/assignments",
+        headers=headers,
+        json={
+            "unitId": unit.id,
+            "userId": guest.id,
+            "expectedCheckIn": "2026-11-06T14:00:00Z",
+            "expectedCheckOut": "2026-11-08T11:00:00Z",
+            "billingStrategy": "PER_NIGHT_STAY",
+            "checkInNow": False,
+            "agreedRate": "100",
+        },
+    )
+    assert assignment_response.status_code == 400
+    assert assignment_response.json()["error"]["code"] == "RATE_OVERRIDE_REASON_REQUIRED"
+
+    assignment_response = client.post(
+        "/api/v1/stay/assignments",
+        headers=headers,
+        json={
+            "unitId": unit.id,
+            "userId": guest.id,
+            "expectedCheckIn": "2026-11-06T14:00:00Z",
+            "expectedCheckOut": "2026-11-08T11:00:00Z",
+            "billingStrategy": "PER_NIGHT_STAY",
+            "checkInNow": False,
+        },
+    )
+    assert assignment_response.status_code == 201, assignment_response.text
+    assignment_data = assignment_response.json()
+    assert assignment_data["status"] == "RESERVED"
+    assert assignment_data["stayRecordId"] is None
+    db_session.refresh(unit)
+    assert unit.status == "RESERVED"
+
+    active_before_checkin = client.get(
+        "/api/v1/stay/assignments/active",
+        headers=headers,
+        params={"propertyId": prop["id"], "unitType": "ROOM"},
+    )
+    assert active_before_checkin.status_code == 200
+    assert assignment_data["id"] not in [item["id"] for item in active_before_checkin.json()]
+
+    checkin = client.post(
+        f"/api/v1/stay/assignments/{assignment_data['id']}/check-in",
+        headers=headers,
+        json={},
+    )
+    assert checkin.status_code == 200, checkin.text
+    assert checkin.json()["status"] == "CHECKED_IN"
+    db_session.refresh(unit)
+    assert unit.status == "OCCUPIED"
+    stay_record = db_session.scalar(
+        select(StayRecord).where(StayRecord.assignment_id == assignment_data["id"])
+    )
+    assert stay_record is not None and stay_record.is_active
+
+    occupants_response = client.put(
+        f"/api/v1/stay/assignments/{assignment_data['id']}/occupants",
+        headers=headers,
+        json={
+            "occupants": [
+                {
+                    "fullName": "Actual Occupant",
+                    "idDocumentType": "PASSPORT",
+                    "idDocumentNumber": "A1234567",
+                }
+            ]
+        },
+    )
+    assert occupants_response.status_code == 200, occupants_response.text
+    assert occupants_response.json()[0]["idDocumentLast4"] == "4567"
+    occupant_record = db_session.scalar(
+        select(StayOccupant).where(StayOccupant.stay_record_id == stay_record.id)
+    )
+    assert occupant_record is not None
+    assert decrypt_data(occupant_record.id_document_number_encrypted) == "A1234567"
+    assert stay_record.guest_count == 1
+
+    over_capacity = client.put(
+        f"/api/v1/stay/assignments/{assignment_data['id']}/occupants",
+        headers=headers,
+        json={
+            "occupants": [
+                {
+                    "id": occupant_record.id,
+                    "fullName": "Actual Occupant",
+                    "idDocumentType": "PASSPORT",
+                },
+                {
+                    "fullName": "Second Occupant",
+                    "idDocumentType": "PASSPORT",
+                    "idDocumentNumber": "B9876543",
+                },
+                {
+                    "fullName": "Third Occupant",
+                    "idDocumentType": "PASSPORT",
+                    "idDocumentNumber": "C7654321",
+                },
+            ]
+        },
+    )
+    assert over_capacity.status_code == 400
+    db_session.refresh(occupant_record)
+    assert decrypt_data(occupant_record.id_document_number_encrypted) == "A1234567"
+
+    not_settled = client.post(
+        f"/api/v1/stay/assignments/{assignment_data['id']}/check-out",
+        headers=headers,
+        json={"folioSettled": False, "keycardReturned": True},
+    )
+    assert not_settled.status_code == 400
+
+    checkout = client.post(
+        f"/api/v1/stay/assignments/{assignment_data['id']}/check-out",
+        headers=headers,
+        json={
+            "folioSettled": True,
+            "keycardReturned": True,
+            "finalAmountPaid": "240",
+        },
+    )
+    assert checkout.status_code == 200, checkout.text
+    assert checkout.json()["status"] == "CHECKED_OUT"
+    db_session.refresh(unit)
+    db_session.refresh(stay_record)
+    assert unit.status == "DIRTY"
+    assert stay_record.is_active is False
+    assert stay_record.final_amount_paid == Decimal("240.00")
+    customer_token = create_access_token(
+        subject=guest.id,
+        audience="customer",
+        role=Role.CUSTOMER,
+    )
+    history = client.get(
+        "/api/v1/stay/me/history",
+        headers={"Authorization": f"Bearer {customer_token}"},
+    )
+    assert history.status_code == 200, history.text
+    assert history.json()[0]["assignmentStatus"] == "CHECKED_OUT"
+    assert history.json()[0]["finalAmountPaid"] == "240.00"
 
 
 def test_property_soft_delete_hides_property(client: TestClient, db_session):

@@ -1,0 +1,15 @@
+{
+  "headers": {
+    "x-nextjs-stale-time": "300",
+    "x-nextjs-prerender": "1",
+    "x-next-cache-tags": "_N_T_/layout,_N_T_/oauth/layout,_N_T_/oauth/callback/layout,_N_T_/oauth/callback/page,_N_T_/oauth/callback"
+  },
+  "routeCache": {
+    "key": "/route-cache/APP_PAGE/4e838adbdbe8d8eb34c7042445ead14a0593a0ccd2f61d1979c18c46e7a8c6b0/$/oauth/callback",
+    "owner": {
+      "kind": "APP_PAGE",
+      "sourceRoute": "/oauth/callback/page"
+    },
+    "isFallback": false
+  }
+}

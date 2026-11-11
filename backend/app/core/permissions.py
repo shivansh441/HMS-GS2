@@ -16,6 +16,7 @@ class StaffRole(str, Enum):
 class UserStatus(str, Enum):
     PENDING_ACTIVATION = "PENDING_ACTIVATION"
     ACTIVE = "ACTIVE"
+    INACTIVE = "INACTIVE"
     SUSPENDED = "SUSPENDED"
     ARCHIVED = "ARCHIVED"
 
@@ -57,7 +58,9 @@ class SharingType(str, Enum):
 
 class UnitStatus(str, Enum):
     AVAILABLE = "AVAILABLE"
+    RESERVED = "RESERVED"
     OCCUPIED = "OCCUPIED"
+    DIRTY = "DIRTY"
 
 
 class FeeType(str, Enum):
@@ -80,6 +83,7 @@ class ActionPermission(str, Enum):
     VIEW_DASHBOARD = "VIEW_DASHBOARD"
     VIEW_PROPERTIES = "VIEW_PROPERTIES"
     VIEW_USERS = "VIEW_USERS"
+    VIEW_RESERVATIONS = "VIEW_RESERVATIONS"
     CREATE_STAFF = "CREATE_STAFF"
     ONBOARD_CUSTOMER = "ONBOARD_CUSTOMER"
     VIEW_UNASSIGNED_CUSTOMERS = "VIEW_UNASSIGNED_CUSTOMERS"
@@ -93,6 +97,7 @@ ROLE_PERMISSIONS: dict[Role, set[ActionPermission]] = {
         ActionPermission.VIEW_DASHBOARD,
         ActionPermission.VIEW_PROPERTIES,
         ActionPermission.VIEW_USERS,
+        ActionPermission.VIEW_RESERVATIONS,
     },
     Role.CUSTOMER: set(),
 }

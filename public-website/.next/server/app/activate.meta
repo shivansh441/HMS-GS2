@@ -1,0 +1,15 @@
+{
+  "headers": {
+    "x-nextjs-stale-time": "300",
+    "x-nextjs-prerender": "1",
+    "x-next-cache-tags": "_N_T_/layout,_N_T_/activate/layout,_N_T_/activate/page,_N_T_/activate"
+  },
+  "routeCache": {
+    "key": "/route-cache/APP_PAGE/0a970416f32b27a0781155299478dbd5af1718a298c4ce835ef53fa82c0e3668/$/activate",
+    "owner": {
+      "kind": "APP_PAGE",
+      "sourceRoute": "/activate/page"
+    },
+    "isFallback": false
+  }
+}

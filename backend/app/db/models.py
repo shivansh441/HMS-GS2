@@ -2,10 +2,12 @@ import enum
 import uuid
 from datetime import date, datetime, timezone
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
@@ -15,7 +17,12 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
+from sqlalchemy import (
+    Enum as SAEnum,
+)
+from sqlalchemy import event as sqlalchemy_event
 from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
 
 from app.db.base import Base
@@ -23,6 +30,9 @@ from app.db.base import Base
 
 def generate_uuid() -> str:
     return str(uuid.uuid4())
+
+def generate_receipt_number() -> str:
+    return f"RCT-{datetime.now(timezone.utc):%Y%m%d}-{uuid.uuid4().hex[:10].upper()}"
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -37,6 +47,7 @@ class Property(Base):
     timezone: Mapped[str] = mapped_column(String(64), default="UTC", nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="ACTIVE", nullable=False)
     type: Mapped[str] = mapped_column(String(32), default="HOTEL", nullable=False)
+    has_mess_facility: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     floors: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     address: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     city: Mapped[str] = mapped_column(String(128), default="", nullable=False)
@@ -59,23 +70,27 @@ class Property(Base):
         "ReservationRequest", back_populates="property"
     )
     stay_records: Mapped[list["StayRecord"]] = relationship("StayRecord", back_populates="property")
+    staff_profiles: Mapped[list["StaffProfile"]] = relationship(
+        "StaffProfile", back_populates="property"
+    )
+    mess_facilities: Mapped[list["MessFacility"]] = relationship(
+        "MessFacility", back_populates="property", cascade="all, delete-orphan"
+    )
 
 class User(Base):
     __tablename__ = "users"
     __table_args__ = (
         UniqueConstraint("email", name="users_email_key"),
-        UniqueConstraint("username", name="users_username_key"),
         UniqueConstraint("phone", name="users_phone_key"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
     email: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
-    username: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
     phone: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True)
     full_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     gender: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    date_of_birth: Mapped[date | None] = mapped_column(Date, nullable=True)
     customer_persona: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
-    emergency_contact_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     emergency_contact_phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
     permanent_address: Mapped[str | None] = mapped_column(String(512), nullable=True)
     occupation: Mapped[str | None] = mapped_column(String(128), nullable=True)
@@ -88,7 +103,7 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
     # FRONT_DESK | MAINTENANCE | HOUSEKEEPING
     staff_role: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    # PENDING_ACTIVATION | ACTIVE | SUSPENDED | ARCHIVED
+    # PENDING_ACTIVATION | ACTIVE | INACTIVE | SUSPENDED | ARCHIVED
     status: Mapped[str] = mapped_column(String(32), default="ACTIVE", index=True, nullable=False)
 
     # MFA
@@ -101,6 +116,8 @@ class User(Base):
     id_document_number_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     id_document_last4: Mapped[str | None] = mapped_column(String(8), nullable=True)
     id_document_lookup_hash: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    id_document_file_present: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    id_document_file_media_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     # Security controls
     failed_login_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -122,9 +139,14 @@ class User(Base):
         "ReservationRequest", back_populates="primary_user"
     )
     unit_assignments: Mapped[list["UnitAssignment"]] = relationship(
-        "UnitAssignment", back_populates="user"
+        "UnitAssignment",
+        back_populates="user",
+        foreign_keys="UnitAssignment.user_id",
     )
     stay_records: Mapped[list["StayRecord"]] = relationship("StayRecord", back_populates="user")
+    staff_profile: Mapped["StaffProfile | None"] = relationship(
+        "StaffProfile", back_populates="user", uselist=False
+    )
 
 class SessionModel(Base):
     __tablename__ = "sessions"
@@ -229,18 +251,103 @@ class MfaRecoveryCode(Base):
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
+
+class AuditAction(str, enum.Enum):
+    CREATE = "CREATE"
+    READ = "READ"
+    UPDATE = "UPDATE"
+    DELETE = "DELETE"
+    LOGIN = "LOGIN"
+    LOGOUT = "LOGOUT"
+    FAILED_LOGIN = "FAILED_LOGIN"
+    RATE_OVERRIDE = "RATE_OVERRIDE"
+    REFUND = "REFUND"
+    PRICE_NEGOTIATION = "PRICE_NEGOTIATION"
+
+
+class SecuritySeverity(str, enum.Enum):
+    LOW = "LOW"
+    INFO = "INFO"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+    CRITICAL = "CRITICAL"
+
+
 class AuditLog(Base):
     __tablename__ = "audit_logs"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
-    actor_user_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
-    target_user_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
-    property_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    actor_user_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    user_id = synonym("actor_user_id")
+    target_user_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    property_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("properties.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     action: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     details: Mapped[str | None] = mapped_column(Text, nullable=True)
     ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
     user_agent: Mapped[str | None] = mapped_column(String(512), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+    actor_email: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    actor_role: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
+    entity_name: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    entity_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    client_ip: Mapped[str] = mapped_column(String(45), default="0.0.0.0", nullable=False)
+    request_method: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    request_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    payload_diff: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    status_code: Mapped[int] = mapped_column(Integer, default=200, nullable=False)
+    timestamp = synonym("created_at")
+
+
+class SecurityAlert(Base):
+    __tablename__ = "security_alerts"
+    __table_args__ = (
+        Index("ix_security_alerts_severity_resolved", "severity", "is_resolved"),
+        Index("ix_security_alerts_source_ip_created", "source_ip", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    alert_type: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    severity: Mapped[SecuritySeverity] = mapped_column(
+        SAEnum(
+            SecuritySeverity,
+            name="security_severity",
+            native_enum=False,
+            create_constraint=True,
+            values_callable=lambda values: [item.value for item in values],
+        ),
+        default=SecuritySeverity.MEDIUM,
+        nullable=False,
+    )
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    source_ip: Mapped[str] = mapped_column(String(45), nullable=False, index=True)
+    user_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    is_resolved: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    resolved_by: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolution_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False, index=True
+    )
+
+
+@sqlalchemy_event.listens_for(AuditLog, "before_update")
+def _prevent_audit_log_update(_mapper, _connection, _target) -> None:
+    raise ValueError("Audit logs are immutable")
+
+
+@sqlalchemy_event.listens_for(AuditLog, "before_delete")
+def _prevent_audit_log_delete(_mapper, _connection, _target) -> None:
+    raise ValueError("Audit logs are immutable")
 
 class OutboxMessage(Base):
     __tablename__ = "outbox_messages"
@@ -358,6 +465,108 @@ class PropertyFeeConfig(Base):
     property: Mapped["Property"] = relationship("Property", back_populates="fee_configs")
 
 
+class MealCategory(str, enum.Enum):
+    BREAKFAST = "BREAKFAST"
+    LUNCH = "LUNCH"
+    SNACKS = "SNACKS"
+    DINNER = "DINNER"
+
+
+class DietaryType(str, enum.Enum):
+    VEG = "VEG"
+    NON_VEG = "NON_VEG"
+    EGGETARIAN = "EGGETARIAN"
+
+
+class MessFacility(Base):
+    __tablename__ = "mess_facilities"
+    __table_args__ = (
+        Index(
+            "uq_mess_facilities_one_default_per_property",
+            "property_id",
+            unique=True,
+            postgresql_where=text("is_default = true"),
+            sqlite_where=text("is_default = true"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    property_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("properties.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    capacity: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+    property: Mapped["Property"] = relationship("Property", back_populates="mess_facilities")
+    menu_schedules: Mapped[list["MessMenuSchedule"]] = relationship(
+        "MessMenuSchedule", back_populates="mess", cascade="all, delete-orphan"
+    )
+
+
+class MealItem(Base):
+    __tablename__ = "meal_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    category: Mapped[MealCategory] = mapped_column(
+        SAEnum(
+            MealCategory,
+            name="meal_item_category",
+            native_enum=False,
+            create_constraint=True,
+            values_callable=lambda values: [item.value for item in values],
+        ),
+        nullable=False,
+    )
+    dietary_type: Mapped[DietaryType] = mapped_column(
+        SAEnum(
+            DietaryType,
+            name="meal_item_dietary_type",
+            native_enum=False,
+            create_constraint=True,
+            values_callable=lambda values: [item.value for item in values],
+        ),
+        default=DietaryType.VEG,
+        nullable=False,
+    )
+    ingredients: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class MessMenuSchedule(Base):
+    __tablename__ = "mess_menu_schedules"
+    __table_args__ = (
+        UniqueConstraint(
+            "mess_id", "meal_item_id", "scheduled_date", "meal_category",
+            name="uq_mess_menu_item_date_category",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    mess_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("mess_facilities.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    meal_item_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("meal_items.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    scheduled_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    meal_category: Mapped[MealCategory] = mapped_column(
+        SAEnum(
+            MealCategory,
+            name="mess_menu_category",
+            native_enum=False,
+            create_constraint=True,
+            values_callable=lambda values: [item.value for item in values],
+        ),
+        nullable=False,
+    )
+
+    mess: Mapped["MessFacility"] = relationship("MessFacility", back_populates="menu_schedules")
+    meal_item: Mapped["MealItem"] = relationship("MealItem")
+
+
 class ReservationStatus(str, enum.Enum):
     PENDING = "PENDING"
     APPROVED = "APPROVED"
@@ -376,6 +585,14 @@ class ChannelOrigin(str, enum.Enum):
     OTA_IMPORT = "OTA_IMPORT"
 
 
+class AssignmentStatus(str, enum.Enum):
+    RESERVED = "RESERVED"
+    CHECKED_IN = "CHECKED_IN"
+    CHECKED_OUT = "CHECKED_OUT"
+    CANCELLED = "CANCELLED"
+    NO_SHOW = "NO_SHOW"
+
+
 class BillingStrategy(str, enum.Enum):
     PER_NIGHT_STAY = "PER_NIGHT_STAY"
     RECURRING_MONTHLY = "RECURRING_MONTHLY"
@@ -385,6 +602,17 @@ class CustomerPersona(str, enum.Enum):
     HOTEL_GUEST = "HOTEL_GUEST"
     HOSTEL_GUEST = "HOSTEL_GUEST"
     HOSTELER = "HOSTELER"
+
+
+class PaymentStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    PAID = "PAID"
+
+
+class PaymentMode(str, enum.Enum):
+    CASH = "CASH"
+    BANK_TRANSFER = "BANK_TRANSFER"
+    UPI = "UPI"
 
 
 class ReservationRequest(Base):
@@ -407,6 +635,7 @@ class ReservationRequest(Base):
     email: Mapped[str | None] = mapped_column(String(100), nullable=True)
     requested_category: Mapped[str] = mapped_column(String(50), default="CLASSIC", nullable=False)
     requested_type: Mapped[str] = mapped_column(String(20), default="ROOM", nullable=False)
+    requested_sharing_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
     requested_quantity: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     number_of_adults: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     number_of_children: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -462,6 +691,8 @@ class ReservationOccupant(Base):
     gender: Mapped[str | None] = mapped_column(String(20), nullable=True)
     email: Mapped[str | None] = mapped_column(String(100), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    id_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    id_number_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     reservation_request: Mapped["ReservationRequest"] = relationship(
         "ReservationRequest", back_populates="occupants"
@@ -473,6 +704,7 @@ class UnitAssignment(Base):
     __table_args__ = (
         Index("ix_unit_assignments_unit_active", "unit_id", "is_active"),
         Index("ix_unit_assignments_user_id", "user_id"),
+        Index("ix_unit_assignments_status_active", "status", "is_active"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
@@ -489,6 +721,14 @@ class UnitAssignment(Base):
     )
     billing_strategy: Mapped[str] = mapped_column(
         String(32), default=BillingStrategy.PER_NIGHT_STAY.value, nullable=False
+    )
+    status: Mapped[str] = mapped_column(
+        String(24), default=AssignmentStatus.CHECKED_IN.value, nullable=False
+    )
+    standard_rate: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    rate_override_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    actor_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     agreed_price_per_night: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
     agreed_monthly_rate: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
@@ -509,9 +749,14 @@ class UnitAssignment(Base):
     )
 
     unit: Mapped["Unit"] = relationship("Unit", back_populates="unit_assignments")
-    user: Mapped["User"] = relationship("User", back_populates="unit_assignments")
+    user: Mapped["User"] = relationship(
+        "User", back_populates="unit_assignments", foreign_keys=[user_id]
+    )
     reservation_request: Mapped["ReservationRequest | None"] = relationship(
         "ReservationRequest", back_populates="unit_assignments"
+    )
+    stay_record: Mapped["StayRecord | None"] = relationship(
+        "StayRecord", back_populates="assignment", uselist=False
     )
 
 
@@ -552,14 +797,140 @@ class UtilityMeterReading(Base):
     unit_assignment: Mapped["UnitAssignment"] = relationship("UnitAssignment")
 
 
+class MonthlyInvoice(Base):
+    __tablename__ = "monthly_invoices"
+    __table_args__ = (
+        UniqueConstraint("unit_assignment_id", "billing_month", name="uq_invoice_assignment_month"),
+        UniqueConstraint("invoice_number", name="uq_monthly_invoice_number"),
+        Index("ix_monthly_invoice_property_month", "property_id", "billing_month"),
+        Index("ix_monthly_invoice_user_status", "user_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    invoice_number: Mapped[str] = mapped_column(String(64), nullable=False)
+    property_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("properties.id", ondelete="RESTRICT"), nullable=False
+    )
+    unit_assignment_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("unit_assignments.id", ondelete="RESTRICT"), nullable=False
+    )
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    account_id = synonym("user_id")
+    billing_month: Mapped[date] = mapped_column(Date, nullable=False)
+    due_date: Mapped[date] = mapped_column(Date, nullable=False)
+    unit_fee: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    mess_fee: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, nullable=False)
+    electricity_arrears: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, nullable=False)
+    water_arrears: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, nullable=False)
+    total_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    paid_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="UNPAID", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+    property: Mapped["Property"] = relationship("Property")
+    unit_assignment: Mapped["UnitAssignment"] = relationship("UnitAssignment")
+    user: Mapped["User"] = relationship("User")
+
+
+class DepositEscrow(Base):
+    __tablename__ = "deposit_escrows"
+    __table_args__ = (
+        UniqueConstraint("unit_assignment_id", name="uq_deposit_escrow_assignment"),
+        Index("ix_deposit_escrow_property_status", "property_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    property_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("properties.id", ondelete="RESTRICT"), nullable=False
+    )
+    unit_assignment_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("unit_assignments.id", ondelete="RESTRICT"), nullable=False
+    )
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    collected_amount: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2), default=0, nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(24), default="DUE", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+
+    property: Mapped["Property"] = relationship("Property")
+    unit_assignment: Mapped["UnitAssignment"] = relationship("UnitAssignment")
+    user: Mapped["User"] = relationship("User")
+
+
+class PaymentReceipt(Base):
+    __tablename__ = "payment_receipts"
+    __table_args__ = (
+        CheckConstraint(
+            "(invoice_id IS NOT NULL AND deposit_escrow_id IS NULL) OR "
+            "(invoice_id IS NULL AND deposit_escrow_id IS NOT NULL)",
+            name="ck_payment_receipt_single_target",
+        ),
+        Index("ix_payment_receipts_property_received", "property_id", "received_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    receipt_number: Mapped[str] = mapped_column(
+        String(64), unique=True, nullable=False, default=generate_receipt_number
+    )
+    property_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("properties.id", ondelete="RESTRICT"), nullable=False
+    )
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    invoice_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("monthly_invoices.id", ondelete="RESTRICT"), nullable=True
+    )
+    deposit_escrow_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("deposit_escrows.id", ondelete="RESTRICT"), nullable=True
+    )
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    payment_method: Mapped[str] = mapped_column(String(24), nullable=False)
+    reference: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    received_by_user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+
+    property: Mapped["Property"] = relationship("Property")
+    user: Mapped["User"] = relationship("User", foreign_keys=[user_id])
+    received_by: Mapped["User"] = relationship("User", foreign_keys=[received_by_user_id])
+
+
+CustomerInvoice = MonthlyInvoice
+CustomerPaymentReceipt = PaymentReceipt
+
+
 class StayRecord(Base):
     __tablename__ = "stay_records"
     __table_args__ = (
         Index("ix_stay_records_user_id", "user_id"),
         Index("ix_stay_records_property_id", "property_id"),
+        CheckConstraint("guest_count >= 1", name="ck_stay_records_guest_count"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    assignment_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("unit_assignments.id", ondelete="SET NULL"),
+        nullable=True,
+        unique=True,
+    )
     user_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
@@ -569,9 +940,155 @@ class StayRecord(Base):
     persona: Mapped[str] = mapped_column(String(32), nullable=False)
     start_date: Mapped[date] = mapped_column(Date, nullable=False)
     end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    guest_count: Mapped[int] = mapped_column(
+        Integer, default=1, server_default=text("1"), nullable=False
+    )
+    final_amount_paid: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2), default=Decimal("0.00"), nullable=False
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )
 
     user: Mapped["User"] = relationship("User", back_populates="stay_records")
     property: Mapped["Property"] = relationship("Property", back_populates="stay_records")
+    assignment: Mapped["UnitAssignment | None"] = relationship(
+        "UnitAssignment", back_populates="stay_record"
+    )
+    additional_guests: Mapped[list["StayOccupant"]] = relationship(
+        "StayOccupant",
+        back_populates="stay_record",
+        cascade="all, delete-orphan",
+    )
+
+
+class StayOccupant(Base):
+    __tablename__ = "stay_occupants"
+    __table_args__ = (
+        Index("ix_stay_occupants_stay_record_id", "stay_record_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    stay_record_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("stay_records.id", ondelete="CASCADE"), nullable=False
+    )
+    full_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    date_of_birth: Mapped[date | None] = mapped_column(Date, nullable=True)
+    age: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    gender: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    permanent_address: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    id_document_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    id_document_number_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    id_document_last4: Mapped[str] = mapped_column(String(8), nullable=False)
+
+    stay_record: Mapped["StayRecord"] = relationship(
+        "StayRecord", back_populates="additional_guests"
+    )
+
+
+class StaffProfile(Base):
+    __tablename__ = "staff_profiles"
+    __table_args__ = (
+        Index("ix_staff_profiles_property_id", "property_id"),
+        UniqueConstraint("user_id", name="uq_staff_profiles_user_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    user_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    designation: Mapped[str] = mapped_column(String(100), nullable=False)
+    department: Mapped[str] = mapped_column(String(100), nullable=False)
+    property_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("properties.id", ondelete="RESTRICT"), nullable=False
+    )
+    base_monthly_salary: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    joining_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+
+    user: Mapped["User"] = relationship("User", back_populates="staff_profile")
+    property: Mapped["Property"] = relationship("Property", back_populates="staff_profiles")
+    attendances: Mapped[list["StaffAttendance"]] = relationship(
+        "StaffAttendance", back_populates="staff", cascade="all, delete-orphan"
+    )
+    salary_disbursements: Mapped[list["StaffSalaryDisbursement"]] = relationship(
+        "StaffSalaryDisbursement", back_populates="staff", cascade="all, delete-orphan"
+    )
+
+
+class StaffAttendance(Base):
+    __tablename__ = "staff_attendances"
+    __table_args__ = (
+        UniqueConstraint("staff_id", "year", "month", name="uq_staff_attendance_period"),
+        Index("ix_staff_attendances_staff_id", "staff_id"),
+        CheckConstraint("month >= 1 AND month <= 12", name="ck_staff_attendance_month"),
+        CheckConstraint("worked_days >= 0", name="ck_staff_attendance_worked_days"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    staff_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("staff_profiles.id", ondelete="CASCADE"), nullable=False
+    )
+    year: Mapped[int] = mapped_column(Integer, nullable=False)
+    month: Mapped[int] = mapped_column(Integer, nullable=False)
+    worked_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+
+    staff: Mapped["StaffProfile"] = relationship("StaffProfile", back_populates="attendances")
+
+
+class StaffSalaryDisbursement(Base):
+    __tablename__ = "staff_salary_disbursements"
+    __table_args__ = (
+        UniqueConstraint("staff_id", "year", "month", name="uq_staff_salary_period"),
+        Index("ix_staff_salary_disbursements_staff_id", "staff_id"),
+        CheckConstraint("month >= 1 AND month <= 12", name="ck_staff_salary_month"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    staff_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("staff_profiles.id", ondelete="CASCADE"), nullable=False
+    )
+    year: Mapped[int] = mapped_column(Integer, nullable=False)
+    month: Mapped[int] = mapped_column(Integer, nullable=False)
+    payable_salary: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    payment_status: Mapped[PaymentStatus] = mapped_column(
+        SAEnum(
+            PaymentStatus,
+            name="staff_payment_status",
+            native_enum=False,
+            create_constraint=True,
+            values_callable=lambda values: [item.value for item in values],
+        ),
+        default=PaymentStatus.PENDING,
+        nullable=False,
+    )
+    payment_mode: Mapped[PaymentMode | None] = mapped_column(
+        SAEnum(
+            PaymentMode,
+            name="staff_payment_mode",
+            native_enum=False,
+            create_constraint=True,
+            values_callable=lambda values: [item.value for item in values],
+        ),
+        nullable=True,
+    )
+    transaction_reference: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    payment_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+
+    staff: Mapped["StaffProfile"] = relationship(
+        "StaffProfile", back_populates="salary_disbursements"
+    )

@@ -1,0 +1,15 @@
+{
+  "headers": {
+    "x-nextjs-stale-time": "300",
+    "x-nextjs-prerender": "1",
+    "x-next-cache-tags": "_N_T_/layout,_N_T_/portal/layout,_N_T_/portal/invoices/layout,_N_T_/portal/invoices/page,_N_T_/portal/invoices"
+  },
+  "routeCache": {
+    "key": "/route-cache/APP_PAGE/4ae7433ec49fc2422df1d0118859fe1bef1b24c734c88e1e51077b557d71355c/$/portal/invoices",
+    "owner": {
+      "kind": "APP_PAGE",
+      "sourceRoute": "/portal/invoices/page"
+    },
+    "isFallback": false
+  }
+}

@@ -13,6 +13,7 @@ from app.core.permissions import (
     UnitStatus,
     UnitType,
 )
+from app.modules.auth.schemas import GovernmentIdType
 
 
 class InventoryRequest(BaseModel):
@@ -30,12 +31,14 @@ class PropertyCreateRequest(InventoryRequest):
     contact_phone: str = Field(alias="contactPhone", min_length=1, max_length=32)
     contact_email: str | None = Field(default=None, alias="contactEmail", max_length=255)
     facilities: list[str] = Field(default_factory=list, max_length=100)
+    has_mess_facility: bool = Field(default=False, alias="hasMessFacility")
     currency: str = Field(default="INR", min_length=3, max_length=3)
     timezone: str = Field(default="UTC", min_length=1, max_length=64)
 
 
 class PropertyUpdateRequest(PropertyCreateRequest):
     status: PropertyStatus = PropertyStatus.ACTIVE
+    has_mess_facility: bool | None = Field(default=None, alias="hasMessFacility")
 
 
 class PropertyFeeCreateRequest(InventoryRequest):
@@ -142,20 +145,72 @@ class UnitStatusRequest(InventoryRequest):
 class StayAssignmentCreateRequest(InventoryRequest):
     unit_id: str = Field(alias="unitId", min_length=1, max_length=36)
     user_id: str = Field(alias="userId", min_length=1, max_length=36)
+    reservation_id: str | None = Field(default=None, alias="reservationId", max_length=36)
     expected_check_in: datetime = Field(alias="expectedCheckIn")
     expected_check_out: datetime | None = Field(default=None, alias="expectedCheckOut")
+    check_in_now: bool = Field(default=True, alias="checkInNow")
     billing_strategy: Literal["PER_NIGHT_STAY", "RECURRING_MONTHLY"] = Field(
         default="RECURRING_MONTHLY", alias="billingStrategy"
     )
     agreed_rate: Decimal | None = Field(
         default=None, alias="agreedRate", gt=0, max_digits=12, decimal_places=2
     )
+    rate_override_reason: str | None = Field(
+        default=None, alias="rateOverrideReason", min_length=1, max_length=2000
+    )
+    deposit_payment_amount: Decimal = Field(
+        default=Decimal("0"),
+        alias="depositPaymentAmount",
+        ge=0,
+        max_digits=12,
+        decimal_places=2,
+    )
+    deposit_payment_method: Literal["CASH", "UPI", "CARD", "BANK_TRANSFER"] | None = Field(
+        default=None, alias="depositPaymentMethod"
+    )
+    deposit_payment_reference: str | None = Field(
+        default=None, alias="depositPaymentReference", max_length=100
+    )
     notes: str | None = Field(default=None, max_length=2000)
+
+    @model_validator(mode="after")
+    def validate_schedule(self):
+        if self.expected_check_out and self.expected_check_out <= self.expected_check_in:
+            raise ValueError("Expected check-out must be after check-in")
+        return self
+
+
+class StayCheckInRequest(InventoryRequest):
+    deposit_payment_amount: Decimal = Field(
+        default=Decimal("0"),
+        alias="depositPaymentAmount",
+        ge=0,
+        max_digits=12,
+        decimal_places=2,
+    )
+    deposit_payment_method: Literal["CASH", "UPI", "CARD", "BANK_TRANSFER"] | None = Field(
+        default=None, alias="depositPaymentMethod"
+    )
+    deposit_payment_reference: str | None = Field(
+        default=None, alias="depositPaymentReference", max_length=100
+    )
+
+
+class StayCheckOutRequest(InventoryRequest):
+    folio_settled: bool = Field(alias="folioSettled")
+    keycard_returned: bool = Field(alias="keycardReturned")
+    final_amount_paid: Decimal = Field(
+        default=Decimal("0"),
+        alias="finalAmountPaid",
+        ge=0,
+        max_digits=12,
+        decimal_places=2,
+    )
 
 
 class UtilityMeterReadingRequest(InventoryRequest):
     unit_assignment_id: str = Field(alias="unitAssignmentId", min_length=1, max_length=36)
-    fee_type: Literal["ELECTRICITY_FEE"] = Field(alias="feeType")
+    fee_type: Literal["ELECTRICITY_FEE", "WATER_CHARGE"] = Field(alias="feeType")
     period_start: date = Field(alias="periodStart")
     period_end: date = Field(alias="periodEnd")
     previous_reading: Decimal = Field(alias="previousReading", ge=0, max_digits=12, decimal_places=3)
@@ -170,6 +225,7 @@ class PublicPropertyResponse(BaseModel):
     city: str
     state: str
     currency: str
+    facilities: list[str] = Field(default_factory=list)
 
 
 class PropertyItemResponse(BaseModel):
@@ -178,6 +234,7 @@ class PropertyItemResponse(BaseModel):
     name: str
     type: str
     status: str
+    has_mess_facility: bool = Field(alias="hasMessFacility")
     timezone: str
     currency: str
     floors: int
@@ -224,10 +281,77 @@ class StayAssignmentResponse(BaseModel):
     unit_id: str = Field(alias="unitId")
     user_id: str = Field(alias="userId")
     billing_strategy: str = Field(alias="billingStrategy")
+    status: str
     agreed_rate: Decimal | None = Field(alias="agreedRate")
+    standard_rate: Decimal | None = Field(alias="standardRate")
+    rate_override_reason: str | None = Field(alias="rateOverrideReason")
     expected_check_in: datetime = Field(alias="expectedCheckIn")
     expected_check_out: datetime | None = Field(alias="expectedCheckOut")
+    actual_check_in: datetime | None = Field(alias="actualCheckIn")
+    actual_check_out: datetime | None = Field(alias="actualCheckOut")
     is_active: bool = Field(alias="isActive")
+    guest_name: str | None = Field(default=None, alias="guestName")
+    guest_email: str | None = Field(default=None, alias="guestEmail")
+    guest_phone: str | None = Field(default=None, alias="guestPhone")
+    property_id: str | None = Field(default=None, alias="propertyId")
+    property_name: str | None = Field(default=None, alias="propertyName")
+    unit_number: str | None = Field(default=None, alias="unitNumber")
+    unit_type: str | None = Field(default=None, alias="unitType")
+    unit_category: str | None = Field(default=None, alias="unitCategory")
+    persona: str | None = None
+    stay_record_id: str | None = Field(default=None, alias="stayRecordId")
+
+
+class StayOccupantUpdate(InventoryRequest):
+    id: str | None = None
+    full_name: str = Field(alias="fullName", min_length=1, max_length=128)
+    date_of_birth: date | None = Field(default=None, alias="dateOfBirth")
+    gender: str | None = Field(default=None, max_length=16)
+    email: str | None = Field(default=None, max_length=255)
+    phone: str | None = Field(default=None, max_length=32)
+    permanent_address: str | None = Field(default=None, alias="permanentAddress", max_length=512)
+    id_document_type: GovernmentIdType | None = Field(default=None, alias="idDocumentType")
+    id_document_number: str | None = Field(default=None, alias="idDocumentNumber", min_length=2, max_length=128)
+
+
+class StayOccupantResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    id: str
+    full_name: str = Field(alias="fullName")
+    date_of_birth: date | None = Field(alias="dateOfBirth")
+    gender: str | None
+    email: str | None
+    phone: str | None
+    permanent_address: str | None = Field(alias="permanentAddress")
+    id_document_type: str = Field(alias="idDocumentType")
+    id_document_last4: str = Field(alias="idDocumentLast4")
+
+
+class StayOccupantsUpdate(InventoryRequest):
+    occupants: list[StayOccupantUpdate] = Field(default_factory=list, max_length=100)
+
+
+class StayHistoryItem(BaseModel):
+    id: str
+    assignment_id: str | None = Field(alias="assignmentId")
+    user_id: str = Field(alias="userId")
+    property_id: str = Field(alias="propertyId")
+    property_name: str = Field(alias="propertyName")
+    unit_id: str | None = Field(alias="unitId")
+    unit_number: str | None = Field(alias="unitNumber")
+    unit_type: str | None = Field(alias="unitType")
+    unit_category: str | None = Field(alias="unitCategory")
+    persona: str
+    assignment_status: str | None = Field(alias="assignmentStatus")
+    billing_strategy: str | None = Field(alias="billingStrategy")
+    scheduled_check_in: datetime | None = Field(alias="scheduledCheckIn")
+    scheduled_check_out: datetime | None = Field(alias="scheduledCheckOut")
+    actual_check_in: datetime | None = Field(alias="actualCheckIn")
+    actual_check_out: datetime | None = Field(alias="actualCheckOut")
+    final_amount_paid: Decimal = Field(alias="finalAmountPaid")
+    is_active: bool = Field(alias="isActive")
+    created_at: datetime = Field(alias="createdAt")
 
 
 class UtilityMeterReadingResponse(BaseModel):

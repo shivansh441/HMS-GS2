@@ -86,6 +86,7 @@ interface PropertyDetails extends Property {
 interface PropertyForm {
   name: string;
   type: string;
+  hasMessFacility: boolean;
   status: string;
   floors: number;
   address: string;
@@ -102,6 +103,7 @@ interface PropertyForm {
 const emptyForm: PropertyForm = {
   name: '',
   type: 'HOTEL',
+  hasMessFacility: false,
   status: 'ACTIVE',
   floors: 1,
   address: '',
@@ -137,6 +139,7 @@ function formFromDetails(property: PropertyDetails): PropertyForm {
   return {
     name: property.name,
     type: property.type,
+    hasMessFacility: property.hasMessFacility,
     status: property.status,
     floors: property.floors,
     address: property.address,
@@ -236,6 +239,7 @@ export const PropertyList: React.FC = () => {
     const payload = {
       name: form.name,
       type: form.type,
+      hasMessFacility: form.hasMessFacility,
       status: form.status,
       floors: form.floors,
       address: form.address,
@@ -485,10 +489,24 @@ export const PropertyList: React.FC = () => {
               </label>
               <label className="space-y-1 text-xs font-semibold">
                 Type
-                <select disabled={editorMode === 'view' || isSaving} className={inputClass} value={form.type} onChange={(e) => updateField('type', e.target.value)}>
+                <select disabled={editorMode === 'view' || isSaving} className={inputClass} value={form.type} onChange={(e) => {
+                  updateField('type', e.target.value);
+                  if (!hostelTypes.includes(e.target.value)) updateField('hasMessFacility', false);
+                }}>
                   {propertyTypes.map((type) => <option key={type} value={type}>{type.replaceAll('_', ' ')}</option>)}
                 </select>
               </label>
+              {hostelTypes.includes(form.type) && (
+                <label className="flex items-center gap-2 text-xs font-semibold">
+                  <input
+                    type="checkbox"
+                    disabled={editorMode === 'view' || isSaving}
+                    checked={form.hasMessFacility}
+                    onChange={(e) => updateField('hasMessFacility', e.target.checked)}
+                  />
+                  Enable mess management
+                </label>
+              )}
               {editingId && editorMode !== 'create' && (
                 <section className="space-y-4 border border-slate-200 p-4 dark:border-slate-700 md:col-span-2">
                   <div>

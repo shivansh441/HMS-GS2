@@ -1,4 +1,4 @@
-from sqlalchemy import and_, exists, select
+from sqlalchemy import and_, exists, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.errors import ForbiddenError, NotFoundError
@@ -76,7 +76,6 @@ class ScopedQuery:
         current_user: User,
         effective_scope: set[str],
         role_filter: str | None = None,
-        customer_persona_filter: str | None = None,
         segment_filter: str | None = None,
         search: str | None = None,
         limit: int = 50,
@@ -107,7 +106,7 @@ class ScopedQuery:
         else:
             all_properties = set(db.scalars(select(Property.id)).all())
             if effective_scope != all_properties:
-                query = query.where(
+                scoped_users = (
                     User.id.in_(
                         select(CustomerPropertyLink.user_id)
                         .where(CustomerPropertyLink.property_id.in_(effective_scope))
@@ -118,19 +117,14 @@ class ScopedQuery:
                         )
                     )
                 )
+                query = query.where(or_(User.role == Role.ADMIN, scoped_users))
 
         if role_filter:
             query = query.where(User.role == role_filter)
-        if customer_persona_filter:
-            query = query.where(
-                User.role == Role.CUSTOMER,
-                User.customer_persona == customer_persona_filter,
-            )
         if search:
             search_term = f"%{search}%"
             query = query.where(
                 (User.email.ilike(search_term))
-                | (User.username.ilike(search_term))
                 | (User.full_name.ilike(search_term))
             )
 

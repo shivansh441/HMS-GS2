@@ -6,12 +6,11 @@
 export interface UserResponse {
   id: string;
   email: string | null;
-  username: string | null;
   full_name: string | null;
   phone: string | null;
   role: 'ADMIN' | 'STAFF' | 'CUSTOMER';
   staffRole: 'FRONT_DESK' | 'MAINTENANCE' | 'HOUSEKEEPING' | null;
-  status: 'PENDING_ACTIVATION' | 'ACTIVE' | 'SUSPENDED' | 'ARCHIVED';
+  status: 'PENDING_ACTIVATION' | 'ACTIVE' | 'INACTIVE' | 'SUSPENDED' | 'ARCHIVED';
   must_change_password: boolean;
   mfa_enabled: boolean;
   email_verified_at: string | null;
@@ -23,13 +22,8 @@ export interface PropertyItemResponse {
   id: string;
   code: string;
   name: string;
-  type: string;
-  status: string;
   timezone: string;
-  currency: string;
-  floors: number;
-  floorCount: number;
-  unitCount: number;
+  status: string;
   createdAt: string;
 }
 
@@ -71,4 +65,5 @@ export interface UserListResponse {
   total: number;
   limit: number;
   offset: number;
+  primaryAdminId: string | null;
 }

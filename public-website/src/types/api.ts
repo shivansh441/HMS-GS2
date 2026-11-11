@@ -6,7 +6,6 @@
 export interface UserResponse {
   id: string;
   email: string | null;
-  username: string | null;
   full_name: string | null;
   phone: string | null;
   role: 'ADMIN' | 'STAFF' | 'CUSTOMER';

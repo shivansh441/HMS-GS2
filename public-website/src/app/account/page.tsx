@@ -1,10 +1,12 @@
 'use client';
 
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCustomerAuth } from '../../lib/auth-context';
 import { BRAND } from '../../lib/constants';
+import { AxiosError } from 'axios';
+import { customerApiClient } from '../../lib/api';
 import {
   Compass,
   CheckCircle2,
@@ -21,15 +23,55 @@ import {
   Phone,
 } from 'lucide-react';
 
+interface CustomerInvoice {
+  id: string;
+  invoiceNumber: string;
+  propertyName: string;
+  currency: string;
+  unitNumber: string;
+  billingMonth: string;
+  unitFee: number | string;
+  messFee: number | string;
+  electricityArrears: number | string;
+  waterArrears: number | string;
+  totalAmount: number | string;
+  paidAmount: number | string;
+  balance: number | string;
+  status: string;
+}
+
 export default function AccountDashboardPage() {
   const router = useRouter();
   const { user, overview, isLoading, fetchOverview } = useCustomerAuth();
+  const [invoices, setInvoices] = useState<CustomerInvoice[]>([]);
+  const [invoiceError, setInvoiceError] = useState('');
+  const [invoicesLoading, setInvoicesLoading] = useState(true);
 
   useEffect(() => {
     if (!isLoading && !user) {
       router.push('/signin');
     }
   }, [user, isLoading, router]);
+
+  useEffect(() => {
+    if (!user) return;
+    let active = true;
+    customerApiClient.get<CustomerInvoice[]>('/billing/me/invoices')
+      .then(({ data }) => {
+        if (active) setInvoices(data);
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        const axiosError = error as AxiosError<{ error?: { message?: string } }>;
+        setInvoiceError(axiosError.response?.data?.error?.message || 'Unable to load invoices.');
+      })
+      .finally(() => {
+        if (active) setInvoicesLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [user]);
 
   if (isLoading || !user) {
     return (
@@ -49,10 +91,20 @@ export default function AccountDashboardPage() {
   return (
     <div className="max-w-6xl mx-auto px-6 py-12 space-y-10">
       <div className="flex justify-end">
-        <Link href="/account/security" className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700 underline">
-          <ShieldCheck className="w-4 h-4" aria-hidden="true" />
-          Security & sessions
-        </Link>
+        <div className="flex flex-wrap gap-4">
+          <Link href="/portal/my-stay" className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700 underline">
+            <Building className="w-4 h-4" aria-hidden="true" />
+            My stay
+          </Link>
+          <Link href="/portal/invoices" className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700 underline">
+            <FileCheck className="w-4 h-4" aria-hidden="true" />
+            Invoices & payments
+          </Link>
+          <Link href="/account/security" className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700 underline">
+            <ShieldCheck className="w-4 h-4" aria-hidden="true" />
+            Security & sessions
+          </Link>
+        </div>
       </div>
       {/* Welcome Banner */}
       <div className="bg-white border border-slate-200/90 rounded-3xl p-8 sm:p-10 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-6">
@@ -128,6 +180,33 @@ export default function AccountDashboardPage() {
           </div>
         </div>
       )}
+
+      <section className="space-y-4 rounded-3xl border border-slate-200/90 bg-white p-8 shadow-sm">
+        <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+          <div>
+            <h2 className="font-serif text-lg font-bold text-slate-900">Monthly statements</h2>
+            <p className="text-xs text-slate-500">Rent and mess fees with prior-month metered utility arrears.</p>
+          </div>
+          <FileCheck className="h-5 w-5 text-slate-700" />
+        </div>
+        {invoiceError && <p role="alert" className="border border-red-200 bg-red-50 p-3 text-xs text-red-800">{invoiceError}</p>}
+        {invoicesLoading ? (
+          <p className="text-xs text-slate-500">Loading invoices…</p>
+        ) : invoices.length === 0 ? (
+          <p className="text-xs text-slate-500">No monthly invoices are available yet.</p>
+        ) : invoices.map((invoice) => (
+          <article key={invoice.id} className="space-y-2 border-b border-slate-100 pb-4 last:border-0 last:pb-0">
+            <div className="flex flex-wrap justify-between gap-2 text-sm">
+              <span className="font-semibold text-slate-900">{invoice.propertyName} · {invoice.unitNumber} · {invoice.billingMonth.slice(0, 7)}</span>
+              <span className="font-bold text-slate-900">{invoice.status} · Due {invoice.currency} {Number(invoice.balance).toLocaleString()}</span>
+            </div>
+            <p className="text-xs text-slate-500">
+              Invoice {invoice.invoiceNumber} · Rent {invoice.unitFee} + Mess {invoice.messFee} + Electricity arrears {invoice.electricityArrears} + Water arrears {invoice.waterArrears}
+            </p>
+            <p className="text-xs text-slate-600">Total {invoice.currency} {Number(invoice.totalAmount).toLocaleString()} · Paid {invoice.currency} {Number(invoice.paidAmount).toLocaleString()}</p>
+          </article>
+        ))}
+      </section>
 
       {/* Profile Checklist & Next Actions */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8">

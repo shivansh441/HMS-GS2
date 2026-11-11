@@ -1,0 +1,15 @@
+{
+  "headers": {
+    "x-nextjs-stale-time": "300",
+    "x-nextjs-prerender": "1",
+    "x-next-cache-tags": "_N_T_/layout,_N_T_/account/layout,_N_T_/account/security/layout,_N_T_/account/security/page,_N_T_/account/security"
+  },
+  "routeCache": {
+    "key": "/route-cache/APP_PAGE/4d412254e9ee9c6249fd5ab56fdacc19444b16a5ed271ee8736df48d19d6420f/$/account/security",
+    "owner": {
+      "kind": "APP_PAGE",
+      "sourceRoute": "/account/security/page"
+    },
+    "isFallback": false
+  }
+}

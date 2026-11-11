@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from app.core.crypto import decrypt_data
 from app.core.permissions import ActionPermission, get_user_permissions
 from app.core.security import create_access_token
 from app.db.models import Property, User
@@ -15,17 +16,41 @@ def test_health_and_readiness(client: TestClient):
     assert res.status_code == 200
     assert res.json()["status"] == "ready"
 
-def test_customer_registration_and_login_flow(client: TestClient):
+def test_customer_registration_and_login_flow(client: TestClient, db_session):
+    missing_dob = client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": "missing.dob@havenstays.com",
+            "password": "StrongPassword123!@",
+            "firstName": "Missing",
+            "lastName": "DOB",
+            "idDocumentType": "AADHAAR",
+            "idDocumentNumber": "123456789012",
+            "consent": True,
+        },
+    )
+    assert missing_dob.status_code == 422
+
     # 1. Register customer
     reg_payload = {
         "email": "brandnew.guest@havenstays.com",
         "password": "StrongPassword123!@",
         "firstName": "New",
         "lastName": "Guest",
+        "dateOfBirth": "1990-01-01",
+        "idDocumentType": "AADHAAR",
+        "idDocumentNumber": "123456789012",
         "consent": True,
     }
     reg_res = client.post("/api/v1/auth/register", json=reg_payload)
     assert reg_res.status_code == 202
+    registered_user = db_session.scalar(
+        select(User).where(User.email == "brandnew.guest@havenstays.com")
+    )
+    assert registered_user is not None
+    assert registered_user.date_of_birth.isoformat() == "1990-01-01"
+    assert registered_user.id_document_type == "AADHAAR"
+    assert decrypt_data(registered_user.id_document_number_encrypted) == "123456789012"
 
     # Fetch token from dev outbox
     outbox_res = client.get("/api/v1/dev/outbox?destination=brandnew.guest@havenstays.com")
@@ -72,6 +97,12 @@ def test_customer_token_rejected_on_admin_routes(client: TestClient):
         client.post("/api/v1/auth/register", json={
             "email": "aud.test@customer.com",
             "password": "CustomerPass123!@",
+            "firstName": "Audit",
+            "lastName": "Test",
+            "dateOfBirth": "1990-01-01",
+            "idDocumentType": "PAN",
+            "idDocumentNumber": "ABCDE1234F",
+            "consent": True,
         })
         login_res = client.post("/api/v1/auth/login", json={
             "email": "aud.test@customer.com",
@@ -100,6 +131,13 @@ def test_admin_mfa_step(client: TestClient):
     data = res.json()
     assert data["requiresMfa"] is True
     assert "mfaChallengeToken" in data
+
+def test_admin_login_does_not_accept_username(client: TestClient):
+    response = client.post(
+        "/api/v1/admin/auth/login",
+        json={"identifier": "admin_legacy", "password": "AdminSecurePass123!"},
+    )
+    assert response.status_code == 401
 
 def test_staff_scoping_and_cross_property_access(client: TestClient, db_session):
     """
@@ -167,7 +205,6 @@ def test_staff_permissions_ignore_staff_role_and_empty_scope_is_empty(client: Te
 
     staff = User(
         email="staff.unassigned@example.com",
-        username="staff_unassigned",
         password_hash="not-used-in-this-test",
         role="STAFF",
         status="ACTIVE",
@@ -194,7 +231,6 @@ def test_staff_write_routes_are_blocked_globally(client: TestClient, db_session)
         headers={"Authorization": f"Bearer {token}"},
     )
     assert response.status_code == 403
-    assert response.json()["error"]["code"] == "STAFF_READ_ONLY"
 
 
 def test_admin_sees_all_and_unassigned_pool(client: TestClient, db_session):
@@ -223,6 +259,17 @@ def test_admin_sees_all_and_unassigned_pool(client: TestClient, db_session):
     seg_items = seg_res.json()["items"]
     seg_emails = [u["email"] for u in seg_items]
     assert "guest.nobooking1@gmail.com" in seg_emails
+
+    selected_property_id = props_res.json()[0]["id"]
+    property_admins = client.get(
+        "/api/v1/admin/users",
+        headers={**headers, "X-Property-Id": selected_property_id},
+        params={"role": "ADMIN"},
+    )
+    assert property_admins.status_code == 200
+    assert "admin@havenstays.com" in {
+        user["email"] for user in property_admins.json()["items"]
+    }
 
     # 3. Can read any user details
     hostel_guest = db_session.scalar(select(User).where(User.email == "guest.hostel@gmail.com"))

@@ -3,7 +3,7 @@ import hmac
 import secrets
 import time
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Literal
 from urllib.parse import quote
 
@@ -13,7 +13,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.crypto import decrypt_data, encrypt_data
+from app.core.crypto import decrypt_data, encrypt_data, process_id_document
 from app.core.errors import AppException, ConflictError, ForbiddenError, NotFoundError, UnauthorizedError, ValidationError
 from app.core.permissions import Role
 from app.core.rate_limit import get_client_ip, rate_limiter
@@ -285,7 +285,10 @@ def register_customer_flow(
     password: str,
     first_name: str,
     last_name: str,
+    date_of_birth: date,
     phone: str | None,
+    id_document_type: str,
+    id_document_number: str,
     ip: str,
     user_agent: str | None,
 ) -> dict[str, Any]:
@@ -299,6 +302,7 @@ def register_customer_flow(
 
     clean_email = email.strip().lower()
     full_name = f"{first_name.strip()} {last_name.strip()}"
+    encrypted_id, id_last4, id_lookup_hash = process_id_document(id_document_number)
     existing = db.scalar(select(User).where(User.email == clean_email))
 
     if existing:
@@ -311,10 +315,14 @@ def register_customer_flow(
 
     user = User(
         email=clean_email,
-        username=clean_email.split("@")[0] + "_" + secrets.token_hex(3),
         password_hash=hash_password(password),
         full_name=full_name,
+        date_of_birth=date_of_birth,
         phone=phone.strip() if phone else None,
+        id_document_type=id_document_type,
+        id_document_number_encrypted=encrypted_id,
+        id_document_last4=id_last4,
+        id_document_lookup_hash=id_lookup_hash,
         role=Role.CUSTOMER,
         status="PENDING_ACTIVATION",
     )
@@ -465,7 +473,7 @@ def customer_login_flow(
         raise invalid_err
 
     # Suspended or archived accounts get generic error
-    if user.status in ("SUSPENDED", "ARCHIVED"):
+    if user.status in ("INACTIVE", "SUSPENDED", "ARCHIVED"):
         rate_limiter.check(key=f"cust_login:{ip}:{clean_id}", max_requests=5, window_seconds=60)
         dummy_verify_password()
         raise invalid_err
@@ -669,7 +677,6 @@ def verify_otp_flow(
             user = User(
                 email=clean_target if is_email else None,
                 phone=None if is_email else clean_target,
-                username="guest_" + secrets.token_hex(4),
                 password_hash=hash_password(secrets.token_urlsafe(32)),
                 full_name="Guest " + secrets.token_hex(2).upper(),
                 role=Role.CUSTOMER,
@@ -814,7 +821,7 @@ def forgot_password_flow(db: Session, identifier: str, ip: str, is_admin: bool =
     # Rate limit: 3/hour per target
     rate_limiter.check(key=f"forgot_pw:{clean_id}", max_requests=3, window_seconds=3600)
 
-    user = db.scalar(select(User).where(or_(User.email == clean_id, User.username == clean_id)))
+    user = db.scalar(select(User).where(User.email == clean_id))
 
     if user and user.email:
         # Check audience match
@@ -1055,7 +1062,7 @@ def verify_mfa_step(
 
 def enroll_mfa_flow(user: User) -> dict[str, str]:
     secret = generate_mfa_secret()
-    label = user.email or user.username or user.id
+    label = user.email or user.id
     otpauth = get_totp_provisioning_uri(secret, label)
     # Generate clean QR code data URL using SVG
     qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=200x200&data={quote(otpauth)}"
@@ -1124,7 +1131,7 @@ def admin_login_flow(
     clean_id = identifier.strip().lower()
     ip = get_client_ip(request)
 
-    user = db.scalar(select(User).where(or_(User.email == clean_id, User.username == clean_id)))
+    user = db.scalar(select(User).where(User.email == clean_id))
     invalid_err = UnauthorizedError("Invalid credentials", code="INVALID_CREDENTIALS")
 
     if not user:
@@ -1137,7 +1144,7 @@ def admin_login_flow(
         dummy_verify_password()
         raise invalid_err
 
-    if user.status in ("SUSPENDED", "ARCHIVED"):
+    if user.status in ("INACTIVE", "SUSPENDED", "ARCHIVED"):
         rate_limiter.check(key=f"admin_login:{ip}:{clean_id}", max_requests=5, window_seconds=60)
         dummy_verify_password()
         raise invalid_err

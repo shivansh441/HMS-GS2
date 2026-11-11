@@ -6,8 +6,13 @@ import { Dashboard } from '../features/dashboard/Dashboard';
 import { UserList } from '../features/users/UserList';
 import { PropertyList } from '../features/properties/PropertyList';
 import { PropertyInventory } from '../features/properties/PropertyInventory';
+import { PropertyLedgerPage } from '../features/properties/PropertyLedgerPage';
 import { AdminSecurity } from '../features/security/AdminSecurity';
 import { AuditLogs } from '../features/security/AuditLogs';
+import { ReservationsBoard } from '../features/reservations/ReservationsBoard';
+import { ActiveStaysBoard } from '../features/stays/ActiveStaysBoard';
+import { StaffPayrollBoard } from '../features/staff/StaffPayrollBoard';
+import { AdminMessPage } from '../features/mess/AdminMessPage';
 import { canAccess, PermissionKey } from '../lib/permissions';
 import { LoadingIndicator } from '../components/ui/LoadingIndicator';
 import {
@@ -19,9 +24,13 @@ import {
   Sun,
   Moon,
   Building,
+  Receipt,
   Shield,
   AlertOctagon,
   Clock,
+  DoorOpen,
+  WalletCards,
+  Utensils,
 } from 'lucide-react';
 
 // Route Guards
@@ -80,6 +89,8 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     dismissIdleWarning,
   } = useAuth();
   const location = useLocation();
+  const activeProperty = properties.find((property) => property.id === selectedPropertyId);
+  const showMessManagement = selectedPropertyId === 'ALL' || activeProperty?.hasMessFacility === true;
 
   if (!user) return null;
 
@@ -154,7 +165,7 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
               {user.role} {user.staffRole ? `• ${user.staffRole}` : ''}
             </div>
           </div>
-          {user.role === 'STAFF' && (
+          {user.role === 'STAFF' && user.staffRole !== 'FRONT_DESK' && (
             <span className="border border-amber-400 bg-amber-50 dark:bg-amber-950/40 dark:border-amber-800 text-amber-900 dark:text-amber-200 px-2 py-1 text-[10px] font-bold uppercase tracking-wider">
               Read-only
             </span>
@@ -213,6 +224,48 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
               </Link>
             )}
 
+            {user.role === 'ADMIN' && (
+              <Link
+                to="/admin/staff"
+                className={`flex items-center space-x-2.5 px-3 py-2 rounded-none ${
+                  location.pathname === '/admin/staff'
+                    ? 'bg-slate-900 text-white dark:bg-blue-600'
+                    : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
+                }`}
+              >
+                <WalletCards className="w-4 h-4" />
+                <span>Staff & Payroll</span>
+              </Link>
+            )}
+
+            {canAccess(user.role, user.staffRole, 'VIEW_RESERVATIONS') && (
+              <Link
+                to="/admin/reservations"
+                className={`flex items-center space-x-2.5 px-3 py-2 rounded-none ${
+                  location.pathname === '/reservations' || location.pathname === '/admin/reservations'
+                    ? 'bg-slate-900 text-white dark:bg-blue-600'
+                    : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
+                }`}
+              >
+                <FileText className="w-4 h-4" />
+                <span>Reservations</span>
+              </Link>
+            )}
+
+            {canAccess(user.role, user.staffRole, 'VIEW_RESERVATIONS') && (
+              <Link
+                to="/admin/stays"
+                className={`flex items-center space-x-2.5 px-3 py-2 rounded-none ${
+                  location.pathname === '/admin/stays'
+                    ? 'bg-slate-900 text-white dark:bg-blue-600'
+                    : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
+                }`}
+              >
+                <DoorOpen className="w-4 h-4" />
+                <span>Active Stays</span>
+              </Link>
+            )}
+
             {canAccess(user.role, user.staffRole, 'VIEW_PROPERTIES') && (
               <Link
                 to="/properties"
@@ -241,11 +294,39 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
               </Link>
             )}
 
+            {(user.role === 'ADMIN' || user.staffRole === 'FRONT_DESK') && (
+              <Link
+                to="/admin/billing"
+                className={`flex items-center space-x-2.5 px-3 py-2 rounded-none ${
+                  location.pathname === '/admin/billing' || location.pathname === '/fee-ledger' || location.pathname.endsWith('/fee-ledger')
+                    ? 'bg-slate-900 text-white dark:bg-blue-600'
+                    : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
+                }`}
+              >
+                <Receipt className="w-4 h-4" />
+                <span>Fee Ledger</span>
+              </Link>
+            )}
+
+            {user.role === 'ADMIN' && showMessManagement && (
+              <Link
+                to="/admin/mess"
+                className={`flex items-center space-x-2.5 px-3 py-2 rounded-none ${
+                  location.pathname === '/admin/mess'
+                    ? 'bg-slate-900 text-white dark:bg-blue-600'
+                    : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
+                }`}
+              >
+                <Utensils className="w-4 h-4" />
+                <span>Mess Management</span>
+              </Link>
+            )}
+
             {canAccess(user.role, user.staffRole, 'VIEW_AUDIT_LOGS') && (
               <Link
-                to="/audit"
+                to="/admin/audit"
                 className={`flex items-center space-x-2.5 px-3 py-2 rounded-none ${
-                  location.pathname === '/audit'
+                  location.pathname === '/audit' || location.pathname === '/admin/audit'
                     ? 'bg-slate-900 text-white dark:bg-blue-600'
                     : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
                 }`}
@@ -307,6 +388,14 @@ export const App: React.FC = () => {
                 }
               />
               <Route
+                path="/admin/staff"
+                element={
+                  <RequirePermission permission="VIEW_USERS">
+                    <StaffPayrollBoard />
+                  </RequirePermission>
+                }
+              />
+              <Route
                 path="/properties"
                 element={
                   <RequirePermission permission="VIEW_PROPERTIES">
@@ -323,10 +412,74 @@ export const App: React.FC = () => {
                 }
               />
               <Route
+                path="/fee-ledger"
+                element={
+                  <RequirePermission permission="VIEW_PROPERTIES">
+                    <PropertyLedgerPage />
+                  </RequirePermission>
+                }
+              />
+              <Route
+                path="/admin/billing"
+                element={
+                  <RequirePermission permission="VIEW_PROPERTIES">
+                    <PropertyLedgerPage />
+                  </RequirePermission>
+                }
+              />
+              <Route
+                path="/admin/mess"
+                element={
+                  <RequirePermission permission="VIEW_PROPERTIES">
+                    <AdminMessPage />
+                  </RequirePermission>
+                }
+              />
+              <Route
+                path="/properties/:propertyId/fee-ledger"
+                element={
+                  <RequirePermission permission="VIEW_PROPERTIES">
+                    <PropertyLedgerPage />
+                  </RequirePermission>
+                }
+              />
+              <Route
+                path="/reservations"
+                element={
+                  <RequirePermission permission="VIEW_RESERVATIONS">
+                    <ReservationsBoard />
+                  </RequirePermission>
+                }
+              />
+              <Route
+                path="/admin/reservations"
+                element={
+                  <RequirePermission permission="VIEW_RESERVATIONS">
+                    <ReservationsBoard />
+                  </RequirePermission>
+                }
+              />
+              <Route
+                path="/admin/stays"
+                element={
+                  <RequirePermission permission="VIEW_RESERVATIONS">
+                    <ActiveStaysBoard />
+                  </RequirePermission>
+                }
+              />
+              <Route
                 path="/properties/:propertyId/inventory"
                 element={
                   <RequirePermission permission="VIEW_PROPERTIES">
                     <PropertyInventory />
+                  </RequirePermission>
+                }
+              />
+              <Route
+                path="/admin/audit"
+                element={
+                  <RequirePermission permission="VIEW_AUDIT_LOGS">
+                    <AuditLogs />
                   </RequirePermission>
                 }
               />

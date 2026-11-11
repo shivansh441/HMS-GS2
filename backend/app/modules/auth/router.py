@@ -87,7 +87,10 @@ def register(
         password=payload.password,
         first_name=payload.firstName,
         last_name=payload.lastName,
+        date_of_birth=payload.dateOfBirth,
         phone=payload.phone,
+        id_document_type=payload.idDocumentType,
+        id_document_number=payload.idDocumentNumber,
         ip=ip,
         user_agent=user_agent,
     )

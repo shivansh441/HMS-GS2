@@ -23,6 +23,12 @@ def encrypt_data(plaintext: str) -> str:
     ciphertext = aesgcm.encrypt(nonce, data, None)
     return base64.urlsafe_b64encode(nonce + ciphertext).decode("utf-8")
 
+def encrypt_bytes(plaintext: bytes) -> bytes:
+    """Encrypts file content with AES-256-GCM, prefixing the nonce to the ciphertext."""
+    aesgcm = _get_aesgcm()
+    nonce = os.urandom(12)
+    return nonce + aesgcm.encrypt(nonce, plaintext, None)
+
 def decrypt_data(token: str) -> str:
     """Decrypts urlsafe base64 string (nonce + ciphertext + tag) with AES-256-GCM"""
     if not token:

@@ -254,13 +254,13 @@ export const AdminLogin: React.FC = () => {
         {step === 'credentials' && (
           <form onSubmit={submitCredentials} className="space-y-4">
             <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 uppercase tracking-wider">
-              <span className="block mb-1">Identifier (Email or Username)</span>
+              <span className="block mb-1">Email</span>
               <span className="relative block">
                 <UserIcon className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
                 <input
-                  type="text"
+                  type="email"
                   required
-                  autoComplete="username"
+                  autoComplete="email"
                   value={identifier}
                   onChange={(event) => setIdentifier(event.target.value)}
                   className={`${inputClass} pl-9`}

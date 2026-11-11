@@ -1,4 +1,3 @@
-import json
 from datetime import datetime, timezone
 
 import pyotp
@@ -7,7 +6,7 @@ from sqlalchemy import select
 
 from app.core.rate_limit import rate_limiter
 from app.core.security import create_access_token
-from app.db.models import OutboxMessage, SessionModel, User, VerificationToken
+from app.db.models import OutboxMessage, User, VerificationToken
 
 
 def test_lockout_and_progressive_backoff(client: TestClient, db_session):
@@ -94,6 +93,7 @@ def test_admin_can_issue_reset_link_to_staff_user(client: TestClient, db_session
         headers={"Authorization": f"Bearer {token}"},
     )
     assert response.status_code == 200
+    response_reset_url = response.json()["resetUrl"]
 
     reset_token = db_session.scalar(
         select(VerificationToken)
@@ -116,6 +116,8 @@ def test_admin_can_issue_reset_link_to_staff_user(client: TestClient, db_session
     )
     assert outbox_message is not None
     assert "mode=reset" in outbox_message.body
+    assert response_reset_url in outbox_message.body
+    assert response_reset_url.startswith("http")
     reset_token.is_used = True
     db_session.commit()
 
@@ -238,8 +240,7 @@ def test_csrf_protection_and_token_reuse_detection(client: TestClient):
     assert reuse_res.json()["error"]["code"] == "TOKEN_REUSE_DETECTED"
 
 
-def test_admin_user_mutations_and_scoping(client: TestClient, db_session):
-    """Admin actions: force-logout, reset-mfa, suspend, reactivate with scoping and role checks"""
+def test_force_logout_is_restricted_and_suspend_route_is_not_exposed(client: TestClient, db_session):
     # Admin token
     sa = db_session.scalar(select(User).where(User.email == "admin@havenstays.local"))
     sa_token = create_access_token(subject=sa.id, audience="admin", role="ADMIN")
@@ -253,32 +254,27 @@ def test_admin_user_mutations_and_scoping(client: TestClient, db_session):
     # Alice is in HQ-01
     alice = db_session.scalar(select(User).where(User.email == "guest.alice@example.com"))
 
-    # Julian Thorne (guest.hostel@gmail.com) is in HQ-02 only
-    julian = db_session.scalar(select(User).where(User.email == "guest.hostel@gmail.com"))
+    alice = db_session.scalar(select(User).where(User.email == "guest.alice@example.com"))
+    assert sa is not None
+    assert staff is not None
+    assert alice is not None
 
-    # Staff mutations are forbidden even for out-of-scope users.
-    res_out = client.post(f"/api/v1/admin/users/{julian.id}/force-logout", headers=staff_headers)
-    assert res_out.status_code == 403
+    assert client.post(
+        f"/api/v1/admin/users/{staff.id}/force-logout",
+        headers=staff_headers,
+    ).status_code == 403
 
-    # Staff cannot modify an Admin.
-    res_sa = client.post(f"/api/v1/admin/users/{sa.id}/force-logout", headers=staff_headers)
-    assert res_sa.status_code == 403
-
-    # Admin suspends Alice -> status SUSPENDED
-    res_susp = client.post(f"/api/v1/admin/users/{alice.id}/suspend", headers=sa_headers, json={"reason": "Investigation"})
-    assert res_susp.status_code == 200
-    db_session.refresh(alice)
-    assert alice.status == "SUSPENDED"
-
-    # Alice login blocked while suspended
-    login_blocked = client.post("/api/v1/auth/login", json={"identifier": alice.email, "password": "AliceGuest2026!#"})
-    assert login_blocked.status_code == 401
-
-    # Admin reactivates Alice -> status ACTIVE
-    res_react = client.post(f"/api/v1/admin/users/{alice.id}/reactivate", headers=sa_headers)
-    assert res_react.status_code == 200
-    db_session.refresh(alice)
-    assert alice.status == "ACTIVE"
+    for user in (sa, staff, alice):
+        force_logout = client.post(
+            f"/api/v1/admin/users/{user.id}/force-logout",
+            headers=sa_headers,
+        )
+        suspend = client.post(
+            f"/api/v1/admin/users/{user.id}/suspend",
+            headers=sa_headers,
+        )
+        assert force_logout.status_code == (403 if user.id == sa.id else 400)
+        assert suspend.status_code == 404
 
 
 def test_admin_login_skips_mfa_enrollment_when_not_required(client: TestClient, db_session, monkeypatch):

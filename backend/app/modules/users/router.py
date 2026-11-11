@@ -1,10 +1,9 @@
-import re
 import secrets
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query, Request, status
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
-from sqlalchemy import func, select
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -19,6 +18,7 @@ from app.db.models import (
     CustomerPropertyLink,
     MfaRecoveryCode,
     Property,
+    StayOccupant,
     StayRecord,
     User,
     UserPropertyAccess,
@@ -27,7 +27,7 @@ from app.db.models import (
 from app.db.session import get_db
 from app.modules.audit.service import write_audit_log
 from app.modules.auth.deps import get_current_admin_user, get_property_scope
-from app.modules.auth.schemas import UserResponse
+from app.modules.auth.schemas import GovernmentIdType, UserResponse
 from app.modules.auth.service import revoke_all_user_sessions
 from app.modules.notifier.service import notifier
 
@@ -39,15 +39,61 @@ class UserListResponse(BaseModel):
     total: int
     limit: int
     offset: int
-
-
-class ReasonRequest(BaseModel):
-    reason: str | None = None
+    primaryAdminId: str | None
 
 
 class ActionSuccessResponse(BaseModel):
     message: str
     targetUserId: str
+    reset_url: str | None = Field(default=None, alias="resetUrl")
+    activation_url: str | None = Field(default=None, alias="activationUrl")
+
+
+class AdditionalGuestPayload(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, str_strip_whitespace=True)
+
+    full_name: str = Field(alias="fullName", min_length=1, max_length=128)
+    date_of_birth: date = Field(alias="dateOfBirth")
+    gender: str | None = Field(default=None, max_length=16)
+    email: EmailStr | None = None
+    phone: str | None = Field(default=None, max_length=32)
+    permanent_address: str | None = Field(
+        default=None, alias="permanentAddress", max_length=512
+    )
+    id_document_type: GovernmentIdType = Field(alias="idDocumentType")
+    id_document_number: str = Field(
+        alias="idDocumentNumber", min_length=2, max_length=128
+    )
+
+    @model_validator(mode="after")
+    def validate_date_of_birth(self):
+        if self.date_of_birth > date.today():
+            raise ValueError("Date of birth cannot be in the future")
+        return self
+
+
+class AdditionalGuestUpdatePayload(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, str_strip_whitespace=True)
+
+    id: str | None = Field(default=None, max_length=36)
+    full_name: str = Field(alias="fullName", min_length=1, max_length=128)
+    date_of_birth: date | None = Field(default=None, alias="dateOfBirth")
+    gender: str | None = Field(default=None, max_length=16)
+    email: EmailStr | None = None
+    phone: str | None = Field(default=None, max_length=32)
+    permanent_address: str | None = Field(
+        default=None, alias="permanentAddress", max_length=512
+    )
+    id_document_type: GovernmentIdType | None = Field(default=None, alias="idDocumentType")
+    id_document_number: str | None = Field(
+        default=None, alias="idDocumentNumber", min_length=2, max_length=128
+    )
+
+    @model_validator(mode="after")
+    def validate_date_of_birth(self):
+        if self.date_of_birth and self.date_of_birth > date.today():
+            raise ValueError("Date of birth cannot be in the future")
+        return self
 
 
 class UserCreateRequest(BaseModel):
@@ -56,21 +102,44 @@ class UserCreateRequest(BaseModel):
     email: EmailStr
     full_name: str = Field(alias="fullName", min_length=1, max_length=128)
     phone: str = Field(min_length=5, max_length=32)
-    username: str | None = Field(default=None, min_length=3, max_length=64)
     gender: str | None = Field(default=None, max_length=16)
-    id_document_type: str | None = Field(default=None, alias="idDocumentType", max_length=64)
-    id_document_number: str | None = Field(default=None, alias="idDocumentNumber", max_length=128)
+    date_of_birth: date = Field(alias="dateOfBirth")
+    id_document_type: GovernmentIdType = Field(alias="idDocumentType")
+    id_document_number: str = Field(alias="idDocumentNumber", min_length=2, max_length=128)
     role: Role
     staff_role: StaffRole | None = Field(default=None, alias="staffRole")
     property_ids: list[str] = Field(default_factory=list, alias="propertyIds", max_length=100)
     customer_persona: CustomerPersona | None = Field(default=None, alias="customerPersona")
-    emergency_contact_name: str | None = Field(default=None, alias="emergencyContactName", max_length=128)
     emergency_contact_phone: str | None = Field(default=None, alias="emergencyContactPhone", max_length=32)
     permanent_address: str | None = Field(default=None, alias="permanentAddress", max_length=512)
     occupation: str | None = Field(default=None, max_length=128)
     initial_stay_property_id: str | None = Field(default=None, alias="initialStayPropertyId")
     stay_start_date: date | None = Field(default=None, alias="stayStartDate")
     stay_end_date: date | None = Field(default=None, alias="stayEndDate")
+    guest_count: int = Field(default=1, alias="guestCount", ge=1, le=100)
+    additional_guests: list["AdditionalGuestPayload"] = Field(
+        default_factory=list, alias="additionalGuests", max_length=99
+    )
+
+    @model_validator(mode="after")
+    def validate_guest_count(self):
+        if self.date_of_birth > date.today():
+            raise ValueError("Date of birth cannot be in the future")
+        is_hotel_guest = self.customer_persona == CustomerPersona.HOTEL_GUEST
+        is_hostel_guest = self.customer_persona in (
+            CustomerPersona.HOSTEL_GUEST,
+            CustomerPersona.HOSTELER,
+        )
+        if self.role == Role.CUSTOMER and is_hotel_guest:
+            if self.guest_count < len(self.additional_guests) + 1:
+                raise ValueError("Guest count cannot be less than the listed occupants")
+        if self.role == Role.CUSTOMER and is_hostel_guest:
+            if self.guest_count != 1 or self.additional_guests:
+                raise ValueError("Additional occupants are only supported for hotel guests")
+        elif self.role != Role.CUSTOMER or not is_hotel_guest:
+            if self.guest_count != 1 or self.additional_guests:
+                raise ValueError("Occupant counts are only valid for customer hotel guests")
+        return self
 
 
 class UserUpdateRequest(BaseModel):
@@ -79,26 +148,55 @@ class UserUpdateRequest(BaseModel):
     email: EmailStr | None = None
     full_name: str | None = Field(default=None, alias="fullName", min_length=1, max_length=128)
     phone: str | None = Field(default=None, max_length=32)
-    username: str | None = Field(default=None, min_length=3, max_length=64)
     gender: str | None = Field(default=None, max_length=16)
-    id_document_type: str | None = Field(default=None, alias="idDocumentType", max_length=64)
-    id_document_number: str | None = Field(default=None, alias="idDocumentNumber", max_length=128)
+    date_of_birth: date | None = Field(default=None, alias="dateOfBirth")
+    id_document_type: GovernmentIdType | None = Field(default=None, alias="idDocumentType")
+    id_document_number: str | None = Field(
+        default=None, alias="idDocumentNumber", min_length=2, max_length=128
+    )
     staff_role: StaffRole | None = Field(default=None, alias="staffRole")
     property_ids: list[str] | None = Field(default=None, alias="propertyIds", max_length=100)
     customer_persona: CustomerPersona | None = Field(default=None, alias="customerPersona")
-    emergency_contact_name: str | None = Field(default=None, alias="emergencyContactName", max_length=128)
     emergency_contact_phone: str | None = Field(default=None, alias="emergencyContactPhone", max_length=32)
     permanent_address: str | None = Field(default=None, alias="permanentAddress", max_length=512)
     occupation: str | None = Field(default=None, max_length=128)
     initial_stay_property_id: str | None = Field(default=None, alias="initialStayPropertyId")
     stay_start_date: date | None = Field(default=None, alias="stayStartDate")
     stay_end_date: date | None = Field(default=None, alias="stayEndDate")
+    guest_count: int | None = Field(default=None, alias="guestCount", ge=1, le=100)
+    additional_guests: list[AdditionalGuestUpdatePayload] | None = Field(
+        default=None, alias="additionalGuests", max_length=99
+    )
+
+    @model_validator(mode="after")
+    def validate_date_of_birth(self):
+        if self.date_of_birth and self.date_of_birth > date.today():
+            raise ValueError("Date of birth cannot be in the future")
+        return self
+
+
+class ManagedStayOccupantResponse(BaseModel):
+    id: str
+    full_name: str = Field(alias="fullName")
+    date_of_birth: date | None = Field(alias="dateOfBirth")
+    gender: str | None
+    email: str | None
+    phone: str | None
+    permanent_address: str | None = Field(alias="permanentAddress")
+    id_document_type: str = Field(alias="idDocumentType")
+    id_document_last4: str = Field(alias="idDocumentLast4")
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class ManagedStayResponse(BaseModel):
     property_id: str = Field(alias="propertyId")
     start_date: date = Field(alias="startDate")
     end_date: date | None = Field(alias="endDate")
+    guest_count: int = Field(default=1, alias="guestCount")
+    additional_guests: list[ManagedStayOccupantResponse] = Field(
+        default_factory=list, alias="additionalGuests"
+    )
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -108,7 +206,6 @@ class ManagedUserResponse(UserResponse):
     activation_url: str | None = Field(default=None, alias="activationUrl")
     id_document_type: str | None = Field(alias="idDocumentType")
     id_document_last4: str | None = Field(alias="idDocumentLast4")
-    emergency_contact_name: str | None = Field(alias="emergencyContactName")
     emergency_contact_phone: str | None = Field(alias="emergencyContactPhone")
     permanent_address: str | None = Field(alias="permanentAddress")
     occupation: str | None = None
@@ -186,7 +283,6 @@ def _managed_user_response(
         activationUrl=activation_url,
         idDocumentType=user.id_document_type,
         idDocumentLast4=user.id_document_last4,
-        emergencyContactName=user.emergency_contact_name,
         emergencyContactPhone=user.emergency_contact_phone,
         permanentAddress=user.permanent_address,
         occupation=user.occupation,
@@ -195,25 +291,26 @@ def _managed_user_response(
                 propertyId=stay.property_id,
                 startDate=stay.start_date,
                 endDate=stay.end_date,
+                guestCount=stay.guest_count,
+                additionalGuests=[
+                    ManagedStayOccupantResponse(
+                        id=occupant.id,
+                        fullName=occupant.full_name,
+                        dateOfBirth=occupant.date_of_birth,
+                        gender=occupant.gender,
+                        email=occupant.email,
+                        phone=occupant.phone,
+                        permanentAddress=occupant.permanent_address,
+                        idDocumentType=occupant.id_document_type,
+                        idDocumentLast4=occupant.id_document_last4,
+                    )
+                    for occupant in stay.additional_guests
+                ],
             )
             if stay
             else None
         ),
     )
-
-
-def _validate_username(db: Session, username: str | None, exclude_user_id: str | None = None) -> str | None:
-    if username is None:
-        return None
-    clean_username = username.strip().lower()
-    if not re.fullmatch(r"[a-z0-9_.-]{3,64}", clean_username):
-        raise BadRequestError("Username must contain 3-64 letters, numbers, dots, underscores, or hyphens")
-    query = select(User.id).where(User.username == clean_username)
-    if exclude_user_id:
-        query = query.where(User.id != exclude_user_id)
-    if db.scalar(query):
-        raise ConflictError("An account with this username already exists", code="USERNAME_IN_USE")
-    return clean_username
 
 
 def _validate_id_document(document_type: str | None, document_number: str | None) -> None:
@@ -224,9 +321,7 @@ def _validate_id_document(document_type: str | None, document_number: str | None
 def _validate_customer_fields(
     role: Role,
     persona: CustomerPersona | None,
-    emergency_contact_name: str | None,
     emergency_contact_phone: str | None,
-    permanent_address: str | None,
     occupation: str | None,
     initial_stay_property_id: str | None,
     stay_start_date: date | None,
@@ -234,9 +329,7 @@ def _validate_customer_fields(
 ) -> None:
     customer_fields = (
         persona,
-        emergency_contact_name,
         emergency_contact_phone,
-        permanent_address,
         occupation,
         initial_stay_property_id,
         stay_start_date,
@@ -301,7 +394,8 @@ def _create_activation_invite(db: Session, user: User) -> str:
     invite_base = (
         settings.ADMIN_PANEL_URL if panel_account else settings.PUBLIC_WEBSITE_URL
     ).rstrip("/")
-    activation_url = f"{invite_base}/?token={raw_token}"
+    activation_path = "/" if panel_account else "/activate"
+    activation_url = f"{invite_base}{activation_path}?token={raw_token}"
     notifier.send_notification(
         db=db,
         channel="EMAIL",
@@ -328,23 +422,18 @@ def _get_target_user_for_mutation(db: Session, admin_user: User, target_user_id:
     return ScopedQuery.get_scoped_user(db, admin_user, target_user_id)
 
 
-def _ensure_admin_can_suspend(
-    db: Session,
-    actor: User,
-    target: User,
-) -> None:
-    if target.role != Role.ADMIN:
-        return
-    if actor.id == target.id:
-        raise ForbiddenError("An admin cannot suspend their own account", code="SELF_ACTION")
-    active_admins = db.scalar(
-        select(func.count()).select_from(User).where(
-            User.role == Role.ADMIN,
-            User.status == UserStatus.ACTIVE,
-        )
-    ) or 0
-    if active_admins <= 1:
-        raise ConflictError("The last active admin cannot be suspended", code="LAST_ADMIN")
+def _primary_admin_id(db: Session) -> str | None:
+    return db.scalar(
+        select(User.id)
+        .where(User.role == Role.ADMIN)
+        .order_by(User.created_at, User.id)
+        .limit(1)
+    )
+
+
+def _require_primary_admin(db: Session, admin_user: User) -> None:
+    if admin_user.id != _primary_admin_id(db):
+        raise ForbiddenError("Only the primary admin can manage other admin accounts", code="PRIMARY_ADMIN_REQUIRED")
 
 
 @users_router.get(
@@ -354,11 +443,8 @@ def _ensure_admin_can_suspend(
 )
 def list_users(
     role: str | None = Query(None, description="Filter by user role"),
-    guest_subtype: CustomerPersona | None = Query(
-        None, description="Filter customer accounts by guest subtype"
-    ),
     segment: str | None = Query(None, description="Optional segment filter (e.g. registered_no_booking)"),
-    search: str | None = Query(None, description="Search by name, email, or username"),
+    search: str | None = Query(None, description="Search by name or email"),
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
     admin_user: User = Depends(get_current_admin_user),
@@ -370,7 +456,6 @@ def list_users(
         current_user=admin_user,
         effective_scope=effective_scope,
         role_filter=role,
-        customer_persona_filter=guest_subtype.value if guest_subtype else None,
         segment_filter=segment,
         search=search,
         limit=limit,
@@ -381,6 +466,7 @@ def list_users(
         total=total,
         limit=limit,
         offset=offset,
+        primaryAdminId=_primary_admin_id(db),
     )
 
 
@@ -409,9 +495,7 @@ def create_user(
     _validate_customer_fields(
         payload.role,
         payload.customer_persona,
-        payload.emergency_contact_name,
         payload.emergency_contact_phone,
-        payload.permanent_address,
         payload.occupation,
         payload.initial_stay_property_id,
         payload.stay_start_date,
@@ -433,18 +517,13 @@ def create_user(
             payload.initial_stay_property_id,
         )
 
-    username_base = re.sub(r"[^a-z0-9_]", "_", email.split("@", 1)[0].lower()).strip("_")
-    username_base = (username_base or "user")[:48]
-    username = _validate_username(db, payload.username)
-    if username is None:
-        username = f"{username_base}_{secrets.token_hex(4)}"
     encrypted_id = process_id_document(payload.id_document_number) if payload.id_document_number else None
     user = User(
         email=email,
-        username=username,
         full_name=payload.full_name,
         phone=payload.phone,
         gender=payload.gender,
+        date_of_birth=payload.date_of_birth,
         id_document_type=payload.id_document_type,
         id_document_number_encrypted=encrypted_id[0] if encrypted_id else None,
         id_document_last4=encrypted_id[1] if encrypted_id else None,
@@ -453,7 +532,6 @@ def create_user(
         role=payload.role,
         staff_role=payload.staff_role.value if payload.staff_role else None,
         customer_persona=payload.customer_persona.value if payload.customer_persona else None,
-        emergency_contact_name=payload.emergency_contact_name,
         emergency_contact_phone=payload.emergency_contact_phone,
         permanent_address=payload.permanent_address,
         occupation=payload.occupation,
@@ -476,15 +554,32 @@ def create_user(
             )
 
     if payload.role == Role.CUSTOMER:
-        db.add(
-            StayRecord(
-                user_id=user.id,
-                property_id=payload.initial_stay_property_id,
-                persona=payload.customer_persona.value,
-                start_date=payload.stay_start_date,
-                end_date=payload.stay_end_date,
-            )
+        stay = StayRecord(
+            user_id=user.id,
+            property_id=payload.initial_stay_property_id,
+            persona=payload.customer_persona.value,
+            start_date=payload.stay_start_date,
+            end_date=payload.stay_end_date,
+            guest_count=payload.guest_count,
         )
+        db.add(stay)
+        db.flush()
+        for guest in payload.additional_guests:
+            encrypted_guest_id = process_id_document(guest.id_document_number)
+            db.add(
+                StayOccupant(
+                    stay_record_id=stay.id,
+                    full_name=guest.full_name,
+                    date_of_birth=guest.date_of_birth,
+                    gender=guest.gender,
+                    email=str(guest.email) if guest.email else None,
+                    phone=guest.phone,
+                    permanent_address=guest.permanent_address,
+                    id_document_type=guest.id_document_type,
+                    id_document_number_encrypted=encrypted_guest_id[0],
+                    id_document_last4=encrypted_guest_id[1],
+                )
+            )
 
     activation_url = _create_activation_invite(db, user)
     write_audit_log(
@@ -543,9 +638,7 @@ def update_user(
         field in fields
         for field in (
             "customer_persona",
-            "emergency_contact_name",
             "emergency_contact_phone",
-            "permanent_address",
             "occupation",
             "initial_stay_property_id",
             "stay_start_date",
@@ -555,6 +648,103 @@ def update_user(
         raise BadRequestError("Guest subtype and stay details are only valid for customer accounts")
 
     latest_stay = _latest_stay_record(db, target.id) if target.role == Role.CUSTOMER else None
+    if "guest_count" in fields:
+        effective_persona = (
+            payload.customer_persona.value
+            if "customer_persona" in fields and payload.customer_persona
+            else latest_stay.persona if latest_stay else None
+        )
+        if (
+            target.role != Role.CUSTOMER
+            or latest_stay is None
+            or payload.guest_count is None
+            or effective_persona != CustomerPersona.HOTEL_GUEST.value
+        ):
+            raise BadRequestError("Occupant counts can only be updated for hotel guests")
+        occupants = (
+            payload.additional_guests
+            if "additional_guests" in fields and payload.additional_guests is not None
+            else latest_stay.additional_guests
+        )
+        if payload.guest_count < len(occupants) + 1:
+            raise BadRequestError("Guest count cannot be less than the listed occupants")
+        latest_stay.guest_count = payload.guest_count
+    if "additional_guests" in fields:
+        effective_persona = (
+            payload.customer_persona.value
+            if "customer_persona" in fields and payload.customer_persona
+            else latest_stay.persona if latest_stay else None
+        )
+        if (
+            target.role != Role.CUSTOMER
+            or latest_stay is None
+            or effective_persona != CustomerPersona.HOTEL_GUEST.value
+            or payload.additional_guests is None
+        ):
+            raise BadRequestError("Additional occupants can only be updated for hotel guests")
+        effective_guest_count = (
+            payload.guest_count
+            if "guest_count" in fields and payload.guest_count is not None
+            else latest_stay.guest_count
+        )
+        if effective_guest_count < len(payload.additional_guests) + 1:
+            raise BadRequestError("Guest count cannot be less than the listed occupants")
+
+        existing_by_id = {occupant.id: occupant for occupant in latest_stay.additional_guests}
+        submitted_ids = [guest.id for guest in payload.additional_guests if guest.id]
+        if len(submitted_ids) != len(set(submitted_ids)):
+            raise BadRequestError("An occupant cannot be submitted more than once")
+        if any(occupant_id not in existing_by_id for occupant_id in submitted_ids):
+            raise BadRequestError("One or more occupants do not belong to this stay")
+
+        updated_occupants = []
+        for guest in payload.additional_guests:
+            occupant = existing_by_id.get(guest.id) if guest.id else None
+            document_type = guest.id_document_type or (
+                occupant.id_document_type if occupant else None
+            )
+            if occupant is None:
+                if (
+                    guest.date_of_birth is None
+                    or document_type is None
+                    or guest.id_document_number is None
+                ):
+                    raise BadRequestError(
+                        "Date of birth and government ID are required for new occupants"
+                    )
+                encrypted_document = process_id_document(guest.id_document_number)
+                occupant = StayOccupant(
+                    stay_record_id=latest_stay.id,
+                    id_document_type=document_type,
+                    id_document_number_encrypted=encrypted_document[0],
+                    id_document_last4=encrypted_document[1],
+                )
+            else:
+                if (
+                    guest.id_document_type
+                    and guest.id_document_type != occupant.id_document_type
+                    and not guest.id_document_number
+                ):
+                    raise BadRequestError(
+                        "Provide the ID number when changing an occupant's ID type"
+                    )
+                if guest.id_document_number:
+                    encrypted_document = process_id_document(guest.id_document_number)
+                    occupant.id_document_number_encrypted = encrypted_document[0]
+                    occupant.id_document_last4 = encrypted_document[1]
+                if document_type:
+                    occupant.id_document_type = document_type
+                if "date_of_birth" in guest.model_fields_set:
+                    occupant.date_of_birth = guest.date_of_birth
+
+            occupant.full_name = guest.full_name
+            occupant.gender = guest.gender
+            occupant.email = str(guest.email) if guest.email else None
+            occupant.phone = guest.phone
+            occupant.permanent_address = guest.permanent_address
+            updated_occupants.append(occupant)
+
+        latest_stay.additional_guests = updated_occupants
     update_stay = target.role == Role.CUSTOMER and bool(
         fields
         & {
@@ -600,15 +790,9 @@ def update_user(
         _validate_customer_fields(
             Role.CUSTOMER,
             persona,
-            payload.emergency_contact_name
-            if "emergency_contact_name" in fields
-            else target.emergency_contact_name,
             payload.emergency_contact_phone
             if "emergency_contact_phone" in fields
             else target.emergency_contact_phone,
-            payload.permanent_address
-            if "permanent_address" in fields
-            else target.permanent_address,
             payload.occupation if "occupation" in fields else target.occupation,
             stay_property_id,
             stay_start_date,
@@ -683,12 +867,16 @@ def update_user(
         target.phone = payload.phone
     if "staff_role" in fields:
         target.staff_role = payload.staff_role.value if payload.staff_role else None
-    if "username" in fields:
-        if not payload.username:
-            raise BadRequestError("Username cannot be empty")
-        target.username = _validate_username(db, payload.username, target.id)
+    if "id_document_type" in fields or "id_document_number" in fields:
+        _validate_id_document(payload.id_document_type, payload.id_document_number)
+    elif not target.id_document_type or not target.id_document_number_encrypted:
+        raise BadRequestError("A government ID is required for every user account")
     if "gender" in fields:
         target.gender = payload.gender
+    if "date_of_birth" in fields:
+        if payload.date_of_birth is None:
+            raise BadRequestError("Date of birth is required")
+        target.date_of_birth = payload.date_of_birth
     if "id_document_number" in fields and payload.id_document_number:
         document_type = payload.id_document_type or target.id_document_type
         if not document_type:
@@ -704,7 +892,6 @@ def update_user(
         target.id_document_type = payload.id_document_type
 
     for field in (
-        "emergency_contact_name",
         "emergency_contact_phone",
         "permanent_address",
         "occupation",
@@ -745,46 +932,6 @@ def update_user(
     db.commit()
     db.refresh(target)
     return _managed_user_response(db, target, activation_url)
-
-
-@users_router.post(
-    "/{user_id}/force-logout",
-    response_model=ActionSuccessResponse,
-    summary="Force logout user by revoking all their active sessions",
-)
-def force_logout_user(
-    user_id: str,
-    request: Request,
-    body: ReasonRequest = ReasonRequest(),
-    admin_user: User = Depends(get_current_admin_user),
-    db: Session = Depends(get_db),
-):
-    target = _get_target_user_for_mutation(db, admin_user, user_id)
-
-    revoke_all_user_sessions(db, target.id, reason="ADMIN_FORCE_LOGOUT")
-
-    write_audit_log(
-        db,
-        action="FORCE_LOGOUT",
-        actor_user_id=admin_user.id,
-        target_user_id=target.id,
-        details={"reason": body.reason or "Administrative action"},
-        ip=get_client_ip(request),
-        user_agent=request.headers.get("user-agent"),
-    )
-
-    if target.email:
-        notifier.send_notification(
-            db=db,
-            channel="EMAIL",
-            destination=target.email,
-            subject="Security Notice: Active Sessions Terminated",
-            body="An administrator has terminated all active sessions for your account.",
-            metadata={"reason": body.reason},
-        )
-    db.commit()
-
-    return ActionSuccessResponse(message="All sessions revoked successfully", targetUserId=target.id)
 
 
 @users_router.post(
@@ -831,47 +978,6 @@ def reset_user_mfa(
 
 
 @users_router.post(
-    "/{user_id}/suspend",
-    response_model=ActionSuccessResponse,
-    summary="Suspend a user account and terminate all active sessions",
-)
-def suspend_user(
-    user_id: str,
-    request: Request,
-    body: ReasonRequest = ReasonRequest(),
-    admin_user: User = Depends(get_current_admin_user),
-    db: Session = Depends(get_db),
-):
-    target = _get_target_user_for_mutation(db, admin_user, user_id)
-    _ensure_admin_can_suspend(db, admin_user, target)
-
-    target.status = UserStatus.SUSPENDED
-    revoke_all_user_sessions(db, target.id, reason="USER_SUSPENDED")
-
-    write_audit_log(
-        db,
-        action="USER_SUSPENDED",
-        actor_user_id=admin_user.id,
-        target_user_id=target.id,
-        details={"reason": body.reason or "Administrative suspension"},
-        ip=get_client_ip(request),
-        user_agent=request.headers.get("user-agent"),
-    )
-
-    if target.email:
-        notifier.send_notification(
-            db=db,
-            channel="EMAIL",
-            destination=target.email,
-            subject="Account Suspended",
-            body=f"Your account has been suspended by an administrator. Reason: {body.reason or 'Administrative action'}.",
-        )
-    db.commit()
-
-    return ActionSuccessResponse(message="User account suspended", targetUserId=target.id)
-
-
-@users_router.post(
     "/{user_id}/reactivate",
     response_model=ActionSuccessResponse,
     summary="Reactivate a suspended user account",
@@ -883,6 +989,12 @@ def reactivate_user(
     db: Session = Depends(get_db),
 ):
     target = _get_target_user_for_mutation(db, admin_user, user_id)
+    if target.id == admin_user.id:
+        raise ForbiddenError("An admin cannot reactivate their own account", code="SELF_ACTION")
+    if target.role == Role.ADMIN:
+        _require_primary_admin(db, admin_user)
+    if target.status not in (UserStatus.INACTIVE, UserStatus.SUSPENDED):
+        raise BadRequestError("Only inactive or suspended accounts can be reactivated", code="INVALID_STATUS")
 
     target.status = UserStatus.ACTIVE
 
@@ -910,6 +1022,76 @@ def reactivate_user(
 
 
 @users_router.post(
+    "/{user_id}/deactivate",
+    response_model=ActionSuccessResponse,
+    summary="Set a user account inactive and terminate active sessions",
+)
+def deactivate_user(
+    user_id: str,
+    request: Request,
+    admin_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db),
+):
+    target = _get_target_user_for_mutation(db, admin_user, user_id)
+    if target.id == admin_user.id:
+        raise ForbiddenError("An admin cannot deactivate their own account", code="SELF_ACTION")
+    if target.role == Role.ADMIN:
+        _require_primary_admin(db, admin_user)
+    if target.status == UserStatus.ARCHIVED:
+        raise BadRequestError("Archived accounts cannot be deactivated", code="INVALID_STATUS")
+    if target.status == UserStatus.INACTIVE:
+        raise BadRequestError("The user account is already inactive", code="INVALID_STATUS")
+
+    target.status = UserStatus.INACTIVE
+    revoke_all_user_sessions(db, target.id, reason="USER_DEACTIVATED")
+    write_audit_log(
+        db,
+        action="USER_DEACTIVATED",
+        actor_user_id=admin_user.id,
+        target_user_id=target.id,
+        details={},
+        ip=get_client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+    )
+    db.commit()
+
+    return ActionSuccessResponse(message="User account set inactive", targetUserId=target.id)
+
+
+@users_router.post(
+    "/{user_id}/force-logout",
+    response_model=ActionSuccessResponse,
+    summary="Force logout an admin user by revoking all active sessions",
+)
+def force_logout_user(
+    user_id: str,
+    request: Request,
+    admin_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db),
+):
+    target = _get_target_user_for_mutation(db, admin_user, user_id)
+    if target.id == admin_user.id:
+        raise ForbiddenError("An admin cannot force logout their own account", code="SELF_ACTION")
+    if target.role != Role.ADMIN:
+        raise BadRequestError("Force logout is only available for other admin accounts", code="INVALID_ROLE")
+    _require_primary_admin(db, admin_user)
+
+    revoke_all_user_sessions(db, target.id, reason="ADMIN_FORCE_LOGOUT")
+    write_audit_log(
+        db,
+        action="FORCE_LOGOUT",
+        actor_user_id=admin_user.id,
+        target_user_id=target.id,
+        details={},
+        ip=get_client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+    )
+    db.commit()
+
+    return ActionSuccessResponse(message="Admin user has been logged out", targetUserId=target.id)
+
+
+@users_router.post(
     "/{user_id}/resend-invite",
     response_model=ActionSuccessResponse,
     summary="Resend activation invite for pending activation users",
@@ -930,16 +1112,7 @@ def resend_user_invite(
         VerificationToken.user_id == target.id,
         VerificationToken.token_type.in_(["ACTIVATION", "EMAIL_VERIFY"]),
     ).update({"is_used": True})
-
-    raw_token, token_hash = generate_one_time_token()
-    token = VerificationToken(
-        user_id=target.id,
-        token_hash=token_hash,
-        token_type="ACTIVATION",
-        expires_at=datetime.now(timezone.utc) + timedelta(days=7),
-    )
-    db.add(token)
-    db.flush()
+    activation_url = _create_activation_invite(db, target)
 
     write_audit_log(
         db,
@@ -951,18 +1124,13 @@ def resend_user_invite(
         user_agent=request.headers.get("user-agent"),
     )
 
-    if target.email:
-        activation_url = f"{settings.PUBLIC_WEBSITE_URL}/activate?token={raw_token}"
-        notifier.send_notification(
-            db=db,
-            channel="EMAIL",
-            destination=target.email,
-            subject="Invitation to Haven Stays",
-            body=f"You have been invited to Haven Stays. Complete your activation here: {activation_url}",
-        )
     db.commit()
 
-    return ActionSuccessResponse(message="Activation invitation resent", targetUserId=target.id)
+    return ActionSuccessResponse(
+        message="A new activation link was generated and emailed to the user",
+        targetUserId=target.id,
+        activationUrl=activation_url,
+    )
 
 
 @users_router.post(
@@ -1028,4 +1196,8 @@ def issue_password_reset_link(
     )
     db.commit()
 
-    return ActionSuccessResponse(message="Password reset link sent", targetUserId=target.id)
+    return ActionSuccessResponse(
+        message="Password reset link sent",
+        targetUserId=target.id,
+        resetUrl=reset_url,
+    )

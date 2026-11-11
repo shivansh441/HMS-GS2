@@ -191,7 +191,6 @@ def handle_oauth_callback(
     # Create new active customer.
     new_user = User(
         email=email.lower(),
-        username=email.split("@")[0] + "_" + secrets.token_hex(2),
         full_name=name,
         password_hash=secrets.token_urlsafe(32), # No usable password; OAuth primary
         role=Role.CUSTOMER,

@@ -1,18 +1,42 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, EmailStr, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from app.core.permissions import Role
 
+GovernmentIdType = Literal[
+    "AADHAAR",
+    "PAN",
+    "VOTER_ID",
+    "PASSPORT",
+    "DRIVING_LICENSE",
+    "OTHER_GOVERNMENT_ID",
+    "NATIONAL_ID",
+    "DRIVERS_LICENSE",
+    "OTHER",
+]
+
 
 class CustomerRegisterRequest(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
     email: EmailStr
     password: str = Field(..., min_length=12)
     firstName: str
     lastName: str
+    dateOfBirth: date
     phone: str | None = None
+    idDocumentType: GovernmentIdType
+    idDocumentNumber: str = Field(..., min_length=2, max_length=128)
     consent: Literal[True] = Field(description="Terms of service and privacy consent")
+
+    @field_validator("dateOfBirth")
+    @classmethod
+    def validate_date_of_birth(cls, value: date) -> date:
+        if value > date.today():
+            raise ValueError("Date of birth cannot be in the future")
+        return value
 
 class VerifyEmailRequest(BaseModel):
     token: str
@@ -28,7 +52,7 @@ class CustomerLoginRequest(BaseModel):
     remember: bool = False
 
 class AdminLoginRequest(BaseModel):
-    identifier: str # Email or staff username
+    identifier: str # Email
     password: str
     mfa_code: str | None = None
 
@@ -94,10 +118,10 @@ class AdminForcedPasswordChangeRequest(BaseModel):
 class UserResponse(BaseModel):
     id: str
     email: str | None
-    username: str | None
     full_name: str | None
     phone: str | None
     gender: str | None
+    date_of_birth: date | None
     customer_persona: str | None = Field(
         validation_alias=AliasChoices("customer_persona", "customerPersona"),
         serialization_alias="customerPersona",

@@ -61,7 +61,6 @@ def seed_database():
         if not sa:
             sa = User(
                 email="admin@havenstays.local",
-                username="admin",
                 full_name="Administrator",
                 password_hash=hash_password("Admin2026!#"),
                 role=Role.ADMIN,
@@ -77,7 +76,6 @@ def seed_database():
             mfa_sec = generate_mfa_secret()
             legacy_admin = User(
                 email="admin@havenstays.com",
-                username="admin_legacy",
                 full_name="Admin Legacy",
                 password_hash=hash_password("AdminSecurePass123!"),
                 role=Role.ADMIN,
@@ -95,7 +93,6 @@ def seed_database():
         if not stf:
             stf = User(
                 email="staff.desk@havenstays.local",
-                username="staff_desk",
                 full_name="Chloe Bennett (Front Desk)",
                 password_hash=hash_password("StaffDesk2026!#"),
                 role=Role.STAFF,
@@ -112,7 +109,6 @@ def seed_database():
         if not fd:
             fd = User(
                 email="frontdesk@havenstays.com",
-                username="frontdesk_hq01",
                 full_name="Chloe Bennett (Front Desk)",
                 password_hash=hash_password("StaffSecurePass123!"),
                 role=Role.STAFF,
@@ -129,7 +125,6 @@ def seed_database():
         if not hk:
             hk = User(
                 email="housekeeping@havenstays.com",
-                username="housekeeping_hq02",
                 full_name="David Chen (Housekeeping)",
                 password_hash=hash_password("StaffSecurePass123!"),
                 role=Role.STAFF,
@@ -146,7 +141,6 @@ def seed_database():
         if not temp_staff:
             temp_staff = User(
                 email="staff.temp@havenstays.local",
-                username="staff_temp",
                 full_name="Temp Staff Member",
                 password_hash=hash_password("TempStaff2026!#"),
                 role=Role.STAFF,
@@ -165,7 +159,6 @@ def seed_database():
         if not alice:
             alice = User(
                 email="guest.alice@example.com",
-                username="guest_alice",
                 full_name="Alice Smith",
                 phone="+15551234567",
                 password_hash=hash_password("AliceGuest2026!#"),
@@ -183,7 +176,6 @@ def seed_database():
         if not bob:
             bob = User(
                 email="resident.bob@example.com",
-                username="resident_bob",
                 full_name="Bob Jones",
                 phone="+15559876543",
                 password_hash=hash_password("BobResident2026!#"),
@@ -201,7 +193,6 @@ def seed_database():
         if not cust1:
             cust1 = User(
                 email="guest.nobooking1@gmail.com",
-                username="guest_nobook1",
                 full_name="Sophia Martinez",
                 password_hash=hash_password("CustomerPass123!@"),
                 role=Role.CUSTOMER,
@@ -215,7 +206,6 @@ def seed_database():
         if not cust2:
             cust2 = User(
                 email="guest.nobooking2@gmail.com",
-                username="guest_nobook2",
                 full_name="Liam Gallagher",
                 password_hash=hash_password("CustomerPass123!@"),
                 role=Role.CUSTOMER,
@@ -230,7 +220,6 @@ def seed_database():
             enc_doc, l4, l_hash = process_id_document("PASS987654321")
             resident_p = User(
                 email="resident.pending@gmail.com",
-                username="resident_alex",
                 full_name="Alex Rivera",
                 password_hash=hash_password("CustomerPass123!@"),
                 role=Role.CUSTOMER,
@@ -249,7 +238,6 @@ def seed_database():
         if not hotel_guest:
             hotel_guest = User(
                 email="guest.hotel@gmail.com",
-                username="guest_hotel",
                 full_name="Grace Hopper",
                 password_hash=hash_password("CustomerPass123!@"),
                 role=Role.CUSTOMER,
@@ -265,7 +253,6 @@ def seed_database():
         if not hostel_guest:
             hostel_guest = User(
                 email="guest.hostel@gmail.com",
-                username="guest_hostel",
                 full_name="Julian Thorne",
                 password_hash=hash_password("CustomerPass123!@"),
                 role=Role.CUSTOMER,
@@ -282,7 +269,6 @@ def seed_database():
         if not carol:
             carol = User(
                 email="unverified.carol@example.com",
-                username="unverified_carol",
                 full_name="Carol Miller",
                 password_hash=hash_password("CarolUnverified2026!#"),
                 role=Role.CUSTOMER,
@@ -304,7 +290,6 @@ def seed_database():
         if not dan:
             dan = User(
                 email="locked.dan@example.com",
-                username="locked_dan",
                 full_name="Dan Locked",
                 password_hash=hash_password("DanLocked2026!#"),
                 role=Role.CUSTOMER,
@@ -323,7 +308,6 @@ def seed_database():
             raw_codes = ["11111111", "22222222", "33333333", "44444444", "55555555", "66666666", "77777777", "88888888"]
             eve = User(
                 email="mfa.eve@example.com",
-                username="mfa_eve",
                 full_name="Eve Authenticator",
                 password_hash=hash_password("EveMfa2026!#"),
                 role=Role.CUSTOMER,
@@ -346,7 +330,6 @@ def seed_database():
         if not frank:
             frank = User(
                 email="pending.frank@example.com",
-                username="pending_frank",
                 full_name="Frank Residence",
                 password_hash=hash_password("FrankPending2026!#"),
                 role=Role.CUSTOMER,

@@ -11,7 +11,6 @@ import {
 export interface CustomerUser {
   id: string;
   email: string | null;
-  username: string | null;
   full_name: string | null;
   phone: string | null;
   role: 'CUSTOMER';
