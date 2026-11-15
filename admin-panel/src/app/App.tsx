@@ -211,6 +211,34 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
               </Link>
             )}
 
+            {canAccess(user.role, user.staffRole, 'VIEW_PROPERTIES') && (
+              <Link
+                to="/properties"
+                className={`flex items-center space-x-2.5 px-3 py-2 rounded-none ${
+                  location.pathname === '/properties'
+                    ? 'bg-slate-900 text-white dark:bg-blue-600'
+                    : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
+                }`}
+              >
+                <Building2 className="w-4 h-4" />
+                <span>Properties</span>
+              </Link>
+            )}
+
+            {canAccess(user.role, user.staffRole, 'VIEW_PROPERTIES') && (
+              <Link
+                to="/inventory"
+                className={`flex items-center space-x-2.5 px-3 py-2 rounded-none ${
+                  location.pathname === '/inventory' || location.pathname.startsWith('/properties/') && location.pathname.endsWith('/inventory')
+                    ? 'bg-slate-900 text-white dark:bg-blue-600'
+                    : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
+                }`}
+              >
+                <Building2 className="w-4 h-4" />
+                <span>Unit Inventory</span>
+              </Link>
+            )}
+
             {canAccess(user.role, user.staffRole, 'VIEW_USERS') && (
               <Link
                 to="/users"
@@ -264,34 +292,6 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
               >
                 <DoorOpen className="w-4 h-4" />
                 <span>Active Stays</span>
-              </Link>
-            )}
-
-            {canAccess(user.role, user.staffRole, 'VIEW_PROPERTIES') && (
-              <Link
-                to="/properties"
-                className={`flex items-center space-x-2.5 px-3 py-2 rounded-none ${
-                  location.pathname === '/properties'
-                    ? 'bg-slate-900 text-white dark:bg-blue-600'
-                    : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
-                }`}
-              >
-                <Building2 className="w-4 h-4" />
-                <span>Properties</span>
-              </Link>
-            )}
-
-            {canAccess(user.role, user.staffRole, 'VIEW_PROPERTIES') && (
-              <Link
-                to="/inventory"
-                className={`flex items-center space-x-2.5 px-3 py-2 rounded-none ${
-                  location.pathname === '/inventory' || location.pathname.startsWith('/properties/') && location.pathname.endsWith('/inventory')
-                    ? 'bg-slate-900 text-white dark:bg-blue-600'
-                    : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
-                }`}
-              >
-                <Building2 className="w-4 h-4" />
-                <span>Unit Inventory</span>
               </Link>
             )}
 

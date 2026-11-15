@@ -33,6 +33,7 @@ from app.modules.inventory.schemas import (
     PropertyFeeCreateRequest,
     PropertyUpdateRequest,
     UnitCreateRequest,
+    UnitUpdateRequest,
 )
 
 HOSTEL_TYPES = {PropertyType.HOSTEL_BOYS.value, PropertyType.HOSTEL_GIRLS.value, PropertyType.HOSTEL_COED.value}
@@ -379,6 +380,141 @@ def create_unit(db: Session, actor: User, prop: Property, payload: UnitCreateReq
         db.rollback()
         raise ConflictError(
             f"Unit code or smart-lock ID already exists in this property: {payload.unit_number}",
+            code="UNIT_CONFLICT",
+        ) from error
+    return unit
+
+
+def update_unit(
+    db: Session,
+    actor: User,
+    prop: Property,
+    unit: Unit,
+    payload: UnitUpdateRequest,
+) -> Unit:
+    require_admin(actor)
+    if unit.type not in (UnitType.ROOM.value, UnitType.SUITE.value) or unit.parent_id:
+        raise BadRequestError("Only rooms and suites can be edited", code="INVALID_UNIT_TYPE")
+    unit_type = payload.type.value if payload.type else unit.type
+    if prop.type in BED_LEVEL_TYPES and unit_type == UnitType.SUITE.value:
+        raise BadRequestError("Hostel properties cannot contain suites", code="INVALID_UNIT_TYPE")
+    if prop.type == PropertyType.HOTEL.value and unit_type not in (
+        UnitType.ROOM.value,
+        UnitType.SUITE.value,
+    ):
+        raise BadRequestError("Hotels can only contain rooms and suites", code="INVALID_UNIT_TYPE")
+    if prop.type == PropertyType.HOTEL.value and payload.beds_per_room is not None:
+        raise BadRequestError("Hotel rooms cannot have configured beds", code="INVALID_UNIT_TYPE")
+
+    capacity = payload.beds_per_room if payload.beds_per_room is not None else payload.capacity
+    _validate_unit_type(prop, unit_type, payload.category.value, capacity)
+    sharing_type = payload.sharing_type
+    if prop.type in BED_LEVEL_TYPES and unit_type == UnitType.ROOM.value:
+        sharing_type = sharing_type or (
+            SharingType.DORMITORY
+            if payload.category == UnitCategory.DORMITORY
+            else {
+                1: SharingType.SINGLE,
+                2: SharingType.DOUBLE,
+                3: SharingType.TRIPLE,
+            }.get(capacity)
+        )
+        if sharing_type is None:
+            raise BadRequestError("Hostel rooms require a sharing type")
+        if sharing_type == SharingType.DORMITORY:
+            if capacity < 4 or payload.category != UnitCategory.DORMITORY:
+                raise BadRequestError("Dormitory rooms require the dormitory category and at least four beds")
+        else:
+            expected_capacity = {
+                SharingType.SINGLE: 1,
+                SharingType.DOUBLE: 2,
+                SharingType.TRIPLE: 3,
+            }[sharing_type]
+            if capacity != expected_capacity or payload.category == UnitCategory.DORMITORY:
+                raise BadRequestError(
+                    f"{sharing_type.value.title()} sharing requires {expected_capacity} beds and a non-dormitory category"
+                )
+    elif payload.beds_per_room is not None or sharing_type is not None:
+        raise BadRequestError("Sharing and bed count are only valid for hostel rooms")
+
+    children = db.scalars(
+        select(Unit)
+        .where(Unit.parent_id == unit.id)
+        .order_by(Unit.unit_number)
+        .with_for_update()
+    ).all()
+    active_children = [child for child in children if child.is_active]
+    if unit_type != unit.type and children:
+        raise ConflictError(
+            "The unit type cannot be changed while it has bed records",
+            code="UNIT_BEDS_EXIST",
+        )
+    target_bed_count = payload.beds_per_room
+    if target_bed_count is not None and target_bed_count < len(active_children):
+        removable = sorted(
+            (child for child in active_children if child.status == UnitStatus.AVAILABLE.value),
+            key=lambda child: child.unit_number,
+            reverse=True,
+        )
+        excess_count = len(active_children) - target_bed_count
+        if len(removable) < excess_count:
+            raise ConflictError(
+                "Beds can only be removed when they are available and unassigned",
+                code="UNIT_BEDS_IN_USE",
+            )
+        for child in removable[:excess_count]:
+            child.is_active = False
+
+    floor_record = _floor_record(db, prop, payload.floor)
+    old_number = unit.unit_number
+    if old_number != payload.unit_number:
+        for index, child in enumerate(children, start=1):
+            child.unit_number = f"__EDIT-{child.id}"
+        db.flush()
+    unit.unit_number = payload.unit_number
+    unit.floor = payload.floor
+    unit.floor_id = floor_record.id
+    unit.type = unit_type
+    unit.category = payload.category.value
+    unit.sharing_type = sharing_type.value if sharing_type else None
+    unit.capacity = capacity
+    unit.default_price_per_night = payload.default_price_per_night
+    unit.default_recurring_monthly_rate = payload.base_rate_monthly
+
+    active_children = [child for child in children if child.is_active]
+    for child in active_children:
+        child.floor = payload.floor
+        child.floor_id = floor_record.id
+        child.category = unit.category
+        child.sharing_type = unit.sharing_type
+        child.default_recurring_monthly_rate = payload.base_rate_monthly
+    if old_number != payload.unit_number:
+        for index, child in enumerate(children, start=1):
+            child.unit_number = f"{payload.unit_number}-{_bed_code(index)}"
+
+    if target_bed_count is not None and target_bed_count > len(active_children):
+        next_bed_number = len(children) + 1
+        for bed_number in range(next_bed_number, next_bed_number + target_bed_count - len(active_children)):
+            db.add(
+                Unit(
+                    property_id=prop.id,
+                    floor_id=floor_record.id,
+                    parent_id=unit.id,
+                    unit_number=f"{unit.unit_number}-{_bed_code(bed_number)}",
+                    floor=payload.floor,
+                    type=UnitType.BED.value,
+                    category=unit.category,
+                    sharing_type=unit.sharing_type,
+                    capacity=1,
+                    default_recurring_monthly_rate=payload.base_rate_monthly,
+                )
+            )
+    try:
+        db.flush()
+    except IntegrityError as error:
+        db.rollback()
+        raise ConflictError(
+            f"Unit code already exists in this property: {payload.unit_number}",
             code="UNIT_CONFLICT",
         ) from error
     return unit

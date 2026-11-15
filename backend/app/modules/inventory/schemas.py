@@ -142,6 +142,26 @@ class UnitStatusRequest(InventoryRequest):
     status: UnitStatus
 
 
+class UnitUpdateRequest(InventoryRequest):
+    unit_number: str = Field(alias="unitNumber", min_length=1, max_length=64)
+    floor: int = Field(ge=0, le=100)
+    type: UnitType | None = None
+    category: UnitCategory
+    sharing_type: SharingType | None = Field(default=None, alias="sharingType")
+    capacity: int = Field(ge=1, le=100)
+    beds_per_room: int | None = Field(default=None, alias="bedsPerRoom", ge=1, le=100)
+    base_rate_monthly: Decimal | None = Field(
+        default=None, alias="baseRateMonthly", ge=0, max_digits=12, decimal_places=2
+    )
+    default_price_per_night: Decimal | None = Field(
+        default=None, alias="defaultPricePerNight", ge=0, max_digits=12, decimal_places=2
+    )
+
+
+class StayRoomChangeRequest(InventoryRequest):
+    new_unit_id: str | None = Field(default=None, alias="newUnitId", min_length=1, max_length=36)
+
+
 class StayAssignmentCreateRequest(InventoryRequest):
     unit_id: str = Field(alias="unitId", min_length=1, max_length=36)
     user_id: str = Field(alias="userId", min_length=1, max_length=36)

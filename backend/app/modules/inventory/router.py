@@ -31,6 +31,7 @@ from app.db.models import (
     BillingStrategy,
     CustomerPersona,
     CustomerPropertyLink,
+    DepositEscrow,
     PaymentReceipt,
     Property,
     PropertyFeeConfig,
@@ -65,6 +66,7 @@ from app.modules.inventory.schemas import (
     StayAssignmentResponse,
     StayCheckInRequest,
     StayCheckOutRequest,
+    StayRoomChangeRequest,
     StayHistoryItem,
     StayOccupantResponse,
     StayOccupantsUpdate,
@@ -72,6 +74,7 @@ from app.modules.inventory.schemas import (
     UnitCreateRequest,
     UnitResponse,
     UnitStatusRequest,
+    UnitUpdateRequest,
     UtilityMeterReadingRequest,
     UtilityMeterReadingResponse,
 )
@@ -89,6 +92,7 @@ from app.modules.inventory.service import (
     require_admin,
     soft_delete_property,
     unit_public_record,
+    update_unit,
     update_property,
 )
 
@@ -794,6 +798,30 @@ def check_in_stay_assignment_endpoint(
         raise NotFoundError("Stay assignment not found")
     if assignment.status != AssignmentStatus.RESERVED.value:
         raise ConflictError("Only reserved assignments can be checked in")
+    is_scheduled_room_change = bool(
+        assignment.notes and assignment.notes.startswith("Scheduled room change from ")
+    )
+    source_assignment_id = None
+    now = datetime.now(timezone.utc)
+    if is_scheduled_room_change:
+        effective_check_in = assignment.expected_check_in
+        property_timezone = ZoneInfo(assignment.unit.property.timezone)
+        if effective_check_in.tzinfo is None:
+            effective_check_in = effective_check_in.replace(tzinfo=property_timezone)
+        if effective_check_in > datetime.now(property_timezone):
+            raise ConflictError("This room change is not effective yet")
+        source_assignment_id = assignment.notes.split(";", 1)[0].removeprefix(
+            "Scheduled room change from "
+        )
+        source_assignment = db.scalar(
+            select(UnitAssignment)
+            .where(UnitAssignment.id == source_assignment_id)
+            .with_for_update()
+        )
+        if source_assignment and source_assignment.is_active:
+            raise ConflictError(
+                "Check out the current room before completing the scheduled room change"
+            )
     unit = assignment.unit
     prop = unit.property
     if unit.status != UnitStatus.RESERVED.value:
@@ -808,7 +836,6 @@ def check_in_stay_assignment_endpoint(
         db.rollback()
         raise ConflictError("The assigned unit is no longer ready for check-in")
 
-    now = datetime.now(timezone.utc)
     assignment.actual_check_in = now
     assignment.status = AssignmentStatus.CHECKED_IN.value
     assignment.is_active = True
@@ -821,8 +848,22 @@ def check_in_stay_assignment_endpoint(
             else CustomerPersona.HOSTEL_GUEST.value
         )
     )
-    escrow = ensure_deposit_escrow(db, prop, assignment)
-    if escrow:
+    transferred_escrow = None
+    if is_scheduled_room_change:
+        transferred_escrow = db.scalar(
+            select(DepositEscrow)
+            .where(
+                DepositEscrow.property_id == prop.id,
+                DepositEscrow.user_id == assignment.user_id,
+                DepositEscrow.unit_assignment_id == source_assignment_id,
+            )
+            .order_by(DepositEscrow.created_at.desc())
+            .with_for_update()
+        )
+        if transferred_escrow:
+            transferred_escrow.unit_assignment_id = assignment.id
+    escrow = transferred_escrow or ensure_deposit_escrow(db, prop, assignment)
+    if escrow and not transferred_escrow:
         if payload.deposit_payment_amount != escrow.amount:
             raise BadRequestError(
                 "The configured security deposit must be collected in full at check-in",
@@ -846,7 +887,9 @@ def check_in_stay_assignment_endpoint(
                 received_by_user_id=actor.id,
             )
         )
-    elif payload.deposit_payment_amount > 0 or payload.deposit_payment_method is not None:
+    elif not escrow and (
+        payload.deposit_payment_amount > 0 or payload.deposit_payment_method is not None
+    ):
         raise BadRequestError(
             "This property has no active security deposit configuration",
             code="SECURITY_DEPOSIT_NOT_CONFIGURED",
@@ -872,7 +915,11 @@ def check_in_stay_assignment_endpoint(
         actor_user_id=actor.id,
         target_user_id=assignment.user_id,
         property_id=prop.id,
-        details={"assignmentId": assignment.id, "unitId": unit.id},
+        details={
+            "assignmentId": assignment.id,
+            "unitId": unit.id,
+            "depositTransferred": transferred_escrow is not None,
+        },
         ip=get_client_ip(request),
         user_agent=request.headers.get("user-agent"),
     )
@@ -987,6 +1034,178 @@ def list_active_stay_assignments_endpoint(
         query = query.where(Unit.type == unit_type)
     assignments = db.scalars(query).all()
     return [_stay_assignment_response(assignment) for assignment in assignments]
+
+
+@inventory_router.get(
+    "/stay/assignments/scheduled",
+    response_model=list[StayAssignmentResponse],
+)
+def list_scheduled_stay_assignments_endpoint(
+    property_id: str | None = Query(default=None, alias="propertyId"),
+    actor: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db),
+    property_scope: set[str] = Depends(get_property_scope),
+):
+    _require_front_desk_or_admin(actor)
+    if property_id and property_id not in property_scope:
+        raise NotFoundError("Property not found")
+    query = (
+        select(UnitAssignment)
+        .join(Unit, Unit.id == UnitAssignment.unit_id)
+        .options(
+            selectinload(UnitAssignment.user),
+            selectinload(UnitAssignment.unit).selectinload(Unit.property),
+            selectinload(UnitAssignment.stay_record),
+        )
+        .where(
+            UnitAssignment.status == AssignmentStatus.RESERVED.value,
+            UnitAssignment.is_active.is_(False),
+            UnitAssignment.notes.like("Scheduled room change from %"),
+            Unit.property_id == property_id if property_id else Unit.property_id.in_(property_scope),
+        )
+        .order_by(UnitAssignment.expected_check_in, UnitAssignment.created_at)
+    )
+    assignments = db.scalars(query).all()
+    return [_stay_assignment_response(assignment) for assignment in assignments]
+
+
+@inventory_router.post(
+    "/stay/assignments/{assignment_id}/change-room",
+    response_model=StayAssignmentResponse,
+)
+def schedule_stay_room_change_endpoint(
+    assignment_id: str,
+    payload: StayRoomChangeRequest,
+    request: Request,
+    actor: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db),
+    property_scope: set[str] = Depends(get_property_scope),
+):
+    _require_front_desk_or_admin(actor)
+    assignment = db.scalar(
+        select(UnitAssignment)
+        .options(selectinload(UnitAssignment.user), selectinload(UnitAssignment.unit).selectinload(Unit.property))
+        .where(UnitAssignment.id == assignment_id)
+        .with_for_update()
+    )
+    if (
+        not assignment
+        or assignment.status != AssignmentStatus.CHECKED_IN.value
+        or not assignment.is_active
+    ):
+        raise NotFoundError("Active stay assignment not found")
+    unit = assignment.unit
+    prop = _scoped_property(db, actor, unit.property_id, property_scope)
+    local_now = datetime.now(ZoneInfo(prop.timezone))
+    month_end = date(
+        local_now.year,
+        local_now.month,
+        calendar.monthrange(local_now.year, local_now.month)[1],
+    )
+    next_month = (
+        date(local_now.year + 1, 1, 1)
+        if local_now.month == 12
+        else date(local_now.year, local_now.month + 1, 1)
+    )
+    scheduled_checkout = datetime.combine(month_end, time.max, tzinfo=local_now.tzinfo)
+    scheduled_checkin = datetime.combine(next_month, time.min, tzinfo=local_now.tzinfo)
+    if assignment.expected_check_out:
+        raise ConflictError(
+            "This stay already has a scheduled check-out",
+            code="STAY_ALREADY_SCHEDULED",
+        )
+
+    next_assignment = None
+    if payload.new_unit_id:
+        new_unit = db.scalar(
+            select(Unit)
+            .where(
+                Unit.id == payload.new_unit_id,
+                Unit.property_id == prop.id,
+                Unit.is_active.is_(True),
+            )
+            .with_for_update()
+        )
+        if (
+            not new_unit
+            or new_unit.status != UnitStatus.AVAILABLE.value
+            or new_unit.type != unit.type
+            or new_unit.id == unit.id
+        ):
+            raise BadRequestError(
+                "Choose a different available unit of the same type",
+                code="UNIT_UNAVAILABLE",
+            )
+        rate = (
+            new_unit.default_recurring_monthly_rate
+            if assignment.billing_strategy == BillingStrategy.RECURRING_MONTHLY.value
+            else new_unit.default_price_per_night
+        )
+        if rate is None:
+            raise BadRequestError(
+                "The selected room has no standard rate configured",
+                code="UNIT_RATE_REQUIRED",
+            )
+        existing_assignment = db.scalar(
+            select(UnitAssignment.id).where(
+                UnitAssignment.user_id == assignment.user_id,
+                UnitAssignment.is_active.is_(True),
+                UnitAssignment.id != assignment.id,
+            ).limit(1)
+        )
+        if existing_assignment:
+            raise ConflictError(
+                "This customer already has another active stay",
+                code="CUSTOMER_ALREADY_ASSIGNED",
+            )
+        next_assignment = UnitAssignment(
+            unit_id=new_unit.id,
+            user_id=assignment.user_id,
+            billing_strategy=assignment.billing_strategy,
+            status=AssignmentStatus.RESERVED.value,
+            standard_rate=rate,
+            agreed_monthly_rate=(
+                rate
+                if assignment.billing_strategy == BillingStrategy.RECURRING_MONTHLY.value
+                else None
+            ),
+            agreed_price_per_night=(
+                rate
+                if assignment.billing_strategy == BillingStrategy.PER_NIGHT_STAY.value
+                else None
+            ),
+            actor_id=actor.id,
+            expected_check_in=scheduled_checkin,
+            is_active=False,
+            notes=(
+                f"Scheduled room change from {assignment.id}; "
+                "stay starts in the next calendar month."
+            ),
+        )
+        new_unit.status = UnitStatus.RESERVED.value
+        db.add(next_assignment)
+
+    assignment.expected_check_out = scheduled_checkout
+    write_audit_log(
+        db,
+        action="STAY_ROOM_CHANGE_SCHEDULED" if next_assignment else "STAY_DEASSIGNMENT_SCHEDULED",
+        actor_user_id=actor.id,
+        target_user_id=assignment.user_id,
+        property_id=prop.id,
+        details={
+            "assignmentId": assignment.id,
+            "currentUnitId": unit.id,
+            "newUnitId": payload.new_unit_id,
+            "effectiveDate": next_month.isoformat(),
+            "scheduledCheckOut": scheduled_checkout.isoformat(),
+            "nextAssignmentId": next_assignment.id if next_assignment else None,
+        },
+        ip=get_client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+    )
+    db.commit()
+    db.refresh(assignment)
+    return _stay_assignment_response(assignment)
 
 
 @inventory_router.get(
@@ -1327,6 +1546,131 @@ def create_unit_endpoint(
     db.commit()
     db.refresh(unit)
     return _unit_response(unit, reveal_internal=True)
+
+
+@inventory_router.put("/units/{unit_id}", response_model=UnitResponse)
+def update_unit_endpoint(
+    unit_id: str,
+    payload: UnitUpdateRequest,
+    request: Request,
+    actor: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db),
+    property_scope: set[str] = Depends(get_property_scope),
+):
+    require_admin(actor)
+    unit = db.scalar(
+        select(Unit).options(selectinload(Unit.children)).where(Unit.id == unit_id)
+    )
+    if not unit:
+        raise NotFoundError("Unit not found")
+    prop = _scoped_property(db, actor, unit.property_id, property_scope)
+    before = {
+        "unitNumber": unit.unit_number,
+        "floor": unit.floor,
+        "category": unit.category,
+        "capacity": unit.capacity,
+        "sharingType": unit.sharing_type,
+        "monthlyRate": str(unit.default_recurring_monthly_rate) if unit.default_recurring_monthly_rate is not None else None,
+        "nightlyRate": str(unit.default_price_per_night) if unit.default_price_per_night is not None else None,
+    }
+    unit = update_unit(db, actor, prop, unit, payload)
+    write_audit_log(
+        db,
+        action="INVENTORY_UNIT_UPDATED",
+        actor_user_id=actor.id,
+        property_id=prop.id,
+        details={
+            "entity": "unit",
+            "unitId": unit.id,
+            "before": before,
+            "after": {
+                "unitNumber": unit.unit_number,
+                "floor": unit.floor,
+                "category": unit.category,
+                "capacity": unit.capacity,
+                "sharingType": unit.sharing_type,
+                "monthlyRate": str(unit.default_recurring_monthly_rate) if unit.default_recurring_monthly_rate is not None else None,
+                "nightlyRate": str(unit.default_price_per_night) if unit.default_price_per_night is not None else None,
+            },
+        },
+        ip=get_client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+    )
+    db.commit()
+    db.refresh(unit)
+    return _unit_response(unit, reveal_internal=True)
+
+
+@inventory_router.delete("/units/{unit_id}", status_code=204)
+def delete_unit_endpoint(
+    unit_id: str,
+    request: Request,
+    actor: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db),
+    property_scope: set[str] = Depends(get_property_scope),
+):
+    require_admin(actor)
+    unit = db.scalar(
+        select(Unit).options(selectinload(Unit.children)).where(Unit.id == unit_id)
+    )
+    if not unit:
+        raise NotFoundError("Unit not found")
+    prop = _scoped_property(db, actor, unit.property_id, property_scope)
+    if unit.type not in (UnitType.ROOM.value, UnitType.SUITE.value) or unit.parent_id:
+        raise BadRequestError("Only rooms and suites can be removed", code="INVALID_UNIT_TYPE")
+    child_units = list(unit.children)
+    units = [unit, *child_units]
+    if any(
+        item.is_active and item.status in (UnitStatus.RESERVED.value, UnitStatus.OCCUPIED.value)
+        for item in units
+    ):
+        raise ConflictError(
+            "Rooms with current or future assignments cannot be deleted",
+            code="UNIT_IN_USE",
+        )
+    active_assignment_id = db.scalar(
+        select(UnitAssignment.id)
+        .where(
+            UnitAssignment.unit_id.in_([item.id for item in units]),
+            UnitAssignment.is_active.is_(True),
+        )
+        .limit(1)
+    )
+    if active_assignment_id:
+        raise ConflictError("Rooms with active stays cannot be deleted", code="UNIT_IN_USE")
+
+    has_assignment_history = db.scalar(
+        select(UnitAssignment.id)
+        .where(UnitAssignment.unit_id.in_([item.id for item in units]))
+        .limit(1)
+    )
+    before = {"unitNumber": unit.unit_number, "status": unit.status}
+    if has_assignment_history:
+        for item in units:
+            item.is_active = False
+    else:
+        for item in reversed(child_units):
+            db.delete(item)
+        db.delete(unit)
+    write_audit_log(
+        db,
+        action="INVENTORY_UNIT_DELETED",
+        actor_user_id=actor.id,
+        property_id=prop.id,
+        details={
+            "entity": "unit",
+            "unitId": unit.id,
+            "before": before,
+            "after": {
+                "isActive": False,
+                "permanentlyDeleted": not bool(has_assignment_history),
+            },
+        },
+        ip=get_client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+    )
+    db.commit()
+    return None
 
 
 @inventory_router.post(

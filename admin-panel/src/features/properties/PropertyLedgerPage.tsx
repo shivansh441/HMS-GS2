@@ -25,7 +25,7 @@ const hostelTypes = ['HOSTEL_BOYS', 'HOSTEL_GIRLS', 'HOSTEL_COED', 'CO_LIVING'];
 
 export const PropertyLedgerPage: React.FC = () => {
   const { propertyId } = useParams<{ propertyId: string }>();
-  const { properties, selectedPropertyId, user } = useAuth();
+  const { properties, selectedPropertyId, setSelectedPropertyId, user } = useAuth();
   const canViewLedger = user?.role === 'ADMIN'
     || (user?.role === 'STAFF' && user.staffRole === 'FRONT_DESK');
   const activePropertyId = propertyId
@@ -70,7 +70,8 @@ export const PropertyLedgerPage: React.FC = () => {
     <div className="space-y-5">
       {property && (
         <Link
-          to={`/properties/${encodeURIComponent(property.id)}/inventory`}
+          to="/inventory"
+          onClick={() => setSelectedPropertyId(property.id)}
           className="inline-flex items-center gap-2 text-xs font-bold uppercase text-blue-700 hover:text-blue-900 dark:text-blue-300"
         >
           <ArrowLeft className="h-4 w-4" />

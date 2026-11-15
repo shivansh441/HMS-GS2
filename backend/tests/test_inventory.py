@@ -1,6 +1,8 @@
-from datetime import datetime, timedelta, timezone
+import calendar
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
@@ -10,7 +12,9 @@ from app.core.permissions import Role
 from app.core.security import create_access_token
 from app.db.models import (
     AuditLog,
+    DepositEscrow,
     Floor,
+    PaymentReceipt,
     Property,
     PropertyFeeConfig,
     StayOccupant,
@@ -21,6 +25,7 @@ from app.db.models import (
     UserPropertyAccess,
     UtilityMeterReading,
 )
+from app.modules.billing.service import generate_monthly_invoices
 
 
 def _headers(db_session, email: str = "admin@havenstays.local") -> dict[str, str]:
@@ -979,6 +984,7 @@ def test_preallocated_stay_check_in_and_check_out_lifecycle(client: TestClient, 
     )
     assert stay_record is not None and stay_record.is_active
 
+
     occupants_response = client.put(
         f"/api/v1/stay/assignments/{assignment_data['id']}/occupants",
         headers=headers,
@@ -1076,3 +1082,246 @@ def test_property_soft_delete_hides_property(client: TestClient, db_session):
     stored = db_session.get(Property, prop["id"])
     assert stored is not None
     assert stored.is_deleted is True
+
+
+def test_admin_can_edit_and_delete_unassigned_room(client: TestClient, db_session):
+    headers = _headers(db_session)
+    prop = _create_property(client, headers, "HOSTEL_BOYS")
+    created = client.post(
+        f"/api/v1/properties/{prop['id']}/units",
+        headers=headers,
+        json={
+            "unitNumber": "EDIT-101",
+            "floor": 1,
+            "type": "ROOM",
+            "category": "CLASSIC",
+            "sharingType": "DOUBLE",
+            "capacity": 2,
+            "bedsPerRoom": 2,
+            "baseRateMonthly": "9000.00",
+        },
+    )
+    assert created.status_code == 201, created.text
+    room_id = created.json()["id"]
+
+    updated = client.put(
+        f"/api/v1/units/{room_id}",
+        headers=headers,
+        json={
+            "unitNumber": "EDIT-201",
+            "floor": 2,
+            "category": "CLASSIC",
+            "sharingType": "SINGLE",
+            "capacity": 1,
+            "bedsPerRoom": 1,
+            "baseRateMonthly": "9500.00",
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["unitNumber"] == "EDIT-201"
+    assert updated.json()["floor"] == 2
+    assert updated.json()["capacity"] == 1
+
+    matrix = client.get(
+        f"/api/v1/properties/{prop['id']}/units/matrix",
+        headers=headers,
+    )
+    rooms = [room for floor in matrix.json()["floors"] for room in floor["rooms"]]
+    edited_room = next(room for room in rooms if room["id"] == room_id)
+    assert edited_room["unitNumber"] == "EDIT-201"
+    assert len(edited_room["beds"]) == 1
+    assert edited_room["beds"][0]["unitNumber"] == "EDIT-201-A"
+
+    deleted = client.delete(f"/api/v1/units/{room_id}", headers=headers)
+    assert deleted.status_code == 204, deleted.text
+    assert db_session.get(Unit, room_id) is None
+
+
+def test_hotel_room_can_be_changed_to_suite(client: TestClient, db_session):
+    headers = _headers(db_session)
+    prop = _create_property(client, headers, "HOTEL")
+    created = client.post(
+        f"/api/v1/properties/{prop['id']}/units",
+        headers=headers,
+        json={
+            "unitNumber": "SUITE-101",
+            "floor": 1,
+            "type": "ROOM",
+            "category": "CLASSIC",
+            "capacity": 2,
+            "defaultPricePerNight": "180.00",
+        },
+    )
+    assert created.status_code == 201, created.text
+
+    updated = client.put(
+        f"/api/v1/units/{created.json()['id']}",
+        headers=headers,
+        json={
+            "unitNumber": "SUITE-101",
+            "floor": 1,
+            "type": "SUITE",
+            "category": "DELUXE",
+            "capacity": 2,
+            "defaultPricePerNight": "240.00",
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["type"] == "SUITE"
+    assert updated.json()["category"] == "DELUXE"
+
+
+def test_room_change_is_scheduled_for_next_month_and_keeps_fee_periods(client: TestClient, db_session):
+    headers = _headers(db_session)
+    prop = _create_property(client, headers, "HOSTEL_COED")
+    room_ids = []
+    for room_number in ("MOVE-101", "MOVE-102"):
+        response = client.post(
+            f"/api/v1/properties/{prop['id']}/units",
+            headers=headers,
+            json={
+                "unitNumber": room_number,
+                "floor": 1,
+                "type": "ROOM",
+                "category": "CLASSIC",
+                "sharingType": "DOUBLE",
+                "capacity": 2,
+                "bedsPerRoom": 2,
+                "baseRateMonthly": "9000.00" if room_number == "MOVE-101" else "10500.00",
+            },
+        )
+        assert response.status_code == 201, response.text
+        room_ids.append(response.json()["id"])
+    beds = db_session.scalars(
+        select(Unit)
+        .where(Unit.parent_id.in_(room_ids), Unit.type == "BED")
+        .order_by(Unit.unit_number)
+    ).all()
+    guest = User(
+        email=f"move-{uuid4().hex[:8]}@example.test",
+        full_name="Room Change Guest",
+        password_hash="not-used",
+        role=Role.CUSTOMER,
+        status="ACTIVE",
+    )
+    db_session.add(guest)
+    db_session.commit()
+    assigned = client.post(
+        "/api/v1/stay/assignments",
+        headers=headers,
+        json={
+            "unitId": beds[0].id,
+            "userId": guest.id,
+            "expectedCheckIn": datetime.now(timezone.utc).isoformat(),
+            "billingStrategy": "RECURRING_MONTHLY",
+        },
+    )
+    assert assigned.status_code == 201, assigned.text
+    assignment_id = assigned.json()["id"]
+    admin = db_session.scalar(select(User).where(User.email == "admin@havenstays.local"))
+    assert admin is not None
+    escrow = DepositEscrow(
+        property_id=prop["id"],
+        unit_assignment_id=assignment_id,
+        user_id=guest.id,
+        amount=Decimal("5000.00"),
+        collected_amount=Decimal("5000.00"),
+        status="HELD",
+    )
+    db_session.add(escrow)
+    db_session.flush()
+    receipt = PaymentReceipt(
+        property_id=prop["id"],
+        user_id=guest.id,
+        deposit_escrow_id=escrow.id,
+        amount=Decimal("5000.00"),
+        payment_method="CASH",
+        received_by_user_id=admin.id,
+    )
+    db_session.add(receipt)
+    db_session.commit()
+
+    deleted_assigned_room = client.delete(
+        f"/api/v1/units/{room_ids[0]}",
+        headers=headers,
+    )
+    assert deleted_assigned_room.status_code == 409
+
+    scheduled = client.post(
+        f"/api/v1/stay/assignments/{assignment_id}/change-room",
+        headers=headers,
+        json={"newUnitId": beds[2].id},
+    )
+    assert scheduled.status_code == 200, scheduled.text
+    scheduled_room_changes = client.get(
+        f"/api/v1/stay/assignments/scheduled?propertyId={prop['id']}",
+        headers=headers,
+    )
+    assert scheduled_room_changes.status_code == 200, scheduled_room_changes.text
+    assert any(item["unitId"] == beds[2].id for item in scheduled_room_changes.json())
+    old_checkout = datetime.fromisoformat(scheduled.json()["expectedCheckOut"])
+    property_record = db_session.get(Property, prop["id"])
+    assert property_record is not None
+    today = datetime.now(ZoneInfo(property_record.timezone)).date()
+    expected_month_end = date(
+        today.year,
+        today.month,
+        calendar.monthrange(today.year, today.month)[1],
+    )
+    assert old_checkout.date() == expected_month_end
+
+    pending_assignment = db_session.scalar(
+        select(UnitAssignment).where(
+            UnitAssignment.user_id == guest.id,
+            UnitAssignment.unit_id == beds[2].id,
+        )
+    )
+    assert pending_assignment is not None
+    expected_next_month = (
+        date(today.year + 1, 1, 1)
+        if today.month == 12
+        else date(today.year, today.month + 1, 1)
+    )
+    assert pending_assignment.expected_check_in.date() == expected_next_month
+    assert pending_assignment.status == "RESERVED"
+    assert pending_assignment.is_active is False
+    assert pending_assignment.agreed_monthly_rate == Decimal("10500.00")
+    target_bed = db_session.get(Unit, beds[2].id)
+    assert target_bed is not None
+    db_session.refresh(target_bed)
+    assert target_bed.status == "RESERVED"
+
+    current_month = today.replace(day=1)
+    current_invoices, _ = generate_monthly_invoices(db_session, property_record, current_month)
+    assert [invoice.unit_assignment_id for invoice in current_invoices] == [assignment_id]
+
+    pending_assignment.expected_check_in = datetime.now(timezone.utc)
+    db_session.commit()
+    premature_checkin = client.post(
+        f"/api/v1/stay/assignments/{pending_assignment.id}/check-in",
+        headers=headers,
+        json={"depositPaymentAmount": "5000.00", "depositPaymentMethod": "CASH"},
+    )
+    assert premature_checkin.status_code == 409
+    source_checkout = client.post(
+        f"/api/v1/stay/assignments/{assignment_id}/check-out",
+        headers=headers,
+        json={"folioSettled": True, "keycardReturned": True},
+    )
+    assert source_checkout.status_code == 200, source_checkout.text
+    checkin = client.post(
+        f"/api/v1/stay/assignments/{pending_assignment.id}/check-in",
+        headers=headers,
+        json={"depositPaymentAmount": "5000.00", "depositPaymentMethod": "CASH"},
+    )
+    assert checkin.status_code == 200, checkin.text
+    db_session.refresh(escrow)
+    assert escrow.unit_assignment_id == pending_assignment.id
+    assert db_session.scalar(
+        select(func.count(PaymentReceipt.id)).where(PaymentReceipt.deposit_escrow_id == escrow.id)
+    ) == 1
+    db_session.refresh(target_bed)
+    assert target_bed.status == "OCCUPIED"
+    db_session.commit()
+    next_month_invoices, _ = generate_monthly_invoices(db_session, property_record, expected_next_month)
+    assert [invoice.unit_assignment_id for invoice in next_month_invoices] == [pending_assignment.id]
