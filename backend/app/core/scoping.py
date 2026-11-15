@@ -1,4 +1,4 @@
-from sqlalchemy import and_, exists, or_, select
+from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.errors import ForbiddenError, NotFoundError
@@ -77,6 +77,7 @@ class ScopedQuery:
         effective_scope: set[str],
         role_filter: str | None = None,
         segment_filter: str | None = None,
+        sort_by: str = "NEWEST",
         search: str | None = None,
         limit: int = 50,
         offset: int = 0,
@@ -129,7 +130,16 @@ class ScopedQuery:
             )
 
         total_count = len(db.scalars(query).all())
+        name_sort = func.lower(func.coalesce(User.full_name, User.email, ""))
+        if sort_by == "A_TO_Z":
+            ordering = (name_sort.asc(), User.id.asc())
+        elif sort_by == "Z_TO_A":
+            ordering = (name_sort.desc(), User.id.asc())
+        elif sort_by == "OLDEST":
+            ordering = (User.created_at.asc(), User.id.asc())
+        else:
+            ordering = (User.created_at.desc(), User.id.desc())
         users = db.scalars(
-            query.order_by(User.created_at.desc()).offset(offset).limit(limit)
+            query.order_by(*ordering).offset(offset).limit(limit)
         ).all()
         return list(users), total_count

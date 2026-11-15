@@ -1,5 +1,6 @@
 import secrets
 from datetime import date, datetime, timedelta, timezone
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Query, Request, status
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
@@ -445,6 +446,11 @@ def list_users(
     role: str | None = Query(None, description="Filter by user role"),
     segment: str | None = Query(None, description="Optional segment filter (e.g. registered_no_booking)"),
     search: str | None = Query(None, description="Search by name or email"),
+    sort_by: Literal["A_TO_Z", "Z_TO_A", "NEWEST", "OLDEST"] = Query(
+        "NEWEST",
+        alias="sortBy",
+        description="Order users by name or account creation date",
+    ),
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
     admin_user: User = Depends(get_current_admin_user),
@@ -457,6 +463,7 @@ def list_users(
         effective_scope=effective_scope,
         role_filter=role,
         segment_filter=segment,
+        sort_by=sort_by,
         search=search,
         limit=limit,
         offset=offset,

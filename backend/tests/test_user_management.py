@@ -1,4 +1,5 @@
 import re
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -37,6 +38,66 @@ def _create_property(db_session, name: str, property_type: str = "HOTEL") -> Pro
     db_session.add(prop)
     db_session.commit()
     return prop
+
+
+def test_admin_user_directory_sorts_users_before_pagination(client: TestClient, db_session):
+    headers = _admin_headers(db_session)
+    token = uuid4().hex[:10]
+    sort_users = [
+        User(
+            email=f"sort-{token}-alpha@example.com",
+            full_name="Alpha Sort",
+            role=Role.CUSTOMER.value,
+            status="ACTIVE",
+            password_hash="unused",
+            created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        ),
+        User(
+            email=f"sort-{token}-middle@example.com",
+            full_name="Middle Sort",
+            role=Role.CUSTOMER.value,
+            status="ACTIVE",
+            password_hash="unused",
+            created_at=datetime(2026, 3, 1, tzinfo=timezone.utc),
+        ),
+        User(
+            email=f"sort-{token}-zulu@example.com",
+            full_name="Zulu Sort",
+            role=Role.CUSTOMER.value,
+            status="ACTIVE",
+            password_hash="unused",
+            created_at=datetime(2026, 2, 1, tzinfo=timezone.utc),
+        ),
+    ]
+    db_session.add_all(sort_users)
+    db_session.commit()
+
+    expected_order = {
+        "A_TO_Z": ["alpha", "middle", "zulu"],
+        "Z_TO_A": ["zulu", "middle", "alpha"],
+        "NEWEST": ["middle", "zulu", "alpha"],
+        "OLDEST": ["alpha", "zulu", "middle"],
+    }
+    for sort_by, suffixes in expected_order.items():
+        sorted_suffixes = []
+        for offset in (0, 2):
+            response = client.get(
+                "/api/v1/admin/users",
+                headers=headers,
+                params={
+                    "role": "CUSTOMER",
+                    "search": token,
+                    "sortBy": sort_by,
+                    "limit": 2,
+                    "offset": offset,
+                },
+            )
+            assert response.status_code == 200, response.text
+            sorted_suffixes.extend(
+                user["email"].split("-")[-1].split("@")[0]
+                for user in response.json()["items"]
+            )
+        assert sorted_suffixes == suffixes
 
 
 def test_admin_can_create_view_and_update_staff_account(client: TestClient, db_session):

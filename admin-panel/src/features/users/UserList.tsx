@@ -1,9 +1,11 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../lib/auth-context';
 import { apiClient } from '../../lib/api';
 import { User, UserListResponse } from '../../types';
 import { LoadingIndicator } from '../../components/ui/LoadingIndicator';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
+import { SortByOption, SortBySelect } from '../../components/ui/SortBySelect';
 import { Search, Filter, UserCheck, Eye, Plus, DoorOpen, Trash2 } from 'lucide-react';
 import { UserEditor } from './UserEditor';
 import {
@@ -43,6 +45,20 @@ interface DeskInventory {
 
 type UserAction = 'deactivate' | 'force-logout' | 'reset-mfa' | 'reactivate' | 'resend-invite' | 'issue-reset-link' | 'archive';
 
+interface UserDirectoryNavigationState {
+  openCreateUser?: boolean;
+  role?: UserForm['role'];
+}
+
+type UserSortBy = 'A_TO_Z' | 'Z_TO_A' | 'NEWEST' | 'OLDEST';
+
+const userSortOptions: SortByOption<UserSortBy>[] = [
+  { value: 'A_TO_Z', label: 'A to Z' },
+  { value: 'Z_TO_A', label: 'Z to A' },
+  { value: 'NEWEST', label: 'Newest first' },
+  { value: 'OLDEST', label: 'Oldest first' },
+];
+
 const userActionLabels: Record<UserAction, string> = {
   deactivate: 'set this account inactive',
   'force-logout': 'force logout this admin',
@@ -55,12 +71,15 @@ const userActionLabels: Record<UserAction, string> = {
 
 export const UserList: React.FC = () => {
   const { user: currentAdmin, selectedPropertyId, properties } = useAuth();
+  const location = useLocation();
+  const navigate = useNavigate();
   const [users, setUsers] = useState<User[]>([]);
   const [primaryAdminId, setPrimaryAdminId] = useState<string | null>(null);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState<string>('ALL');
+  const [sortBy, setSortBy] = useState<UserSortBy>('NEWEST');
   const [actionUserId, setActionUserId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
@@ -150,6 +169,7 @@ export const UserList: React.FC = () => {
       const params = new URLSearchParams();
       params.set('limit', String(limit));
       params.set('offset', String(page * limit));
+      params.set('sortBy', sortBy);
 
       if (roleFilter !== 'ALL') {
         params.set('role', roleFilter);
@@ -170,7 +190,7 @@ export const UserList: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [page, roleFilter, search, selectedPropertyId]);
+  }, [page, roleFilter, search, selectedPropertyId, sortBy]);
 
   useEffect(() => {
     fetchUsers();
@@ -207,7 +227,7 @@ export const UserList: React.FC = () => {
     setPage(0);
   };
 
-  const openCreateUser = (role: UserForm['role']) => {
+  const openCreateUser = useCallback((role: UserForm['role']) => {
     const scopedPropertyId =
       selectedPropertyId && selectedPropertyId !== 'ALL' && properties.some((property) => property.id === selectedPropertyId)
         ? selectedPropertyId
@@ -239,7 +259,14 @@ export const UserList: React.FC = () => {
     setEditorError(null);
     setCreateMenuOpen(false);
     setEditorMode('create');
-  };
+  }, [properties, selectedPropertyId]);
+
+  useEffect(() => {
+    const navigationState = location.state as UserDirectoryNavigationState | null;
+    if (!navigationState?.openCreateUser) return;
+    openCreateUser(navigationState.role || 'STAFF');
+    navigate(location.pathname, { replace: true, state: null });
+  }, [location.pathname, location.state, navigate, openCreateUser]);
 
   const openUser = (target: User) => {
     setSelectedUserId(target.id);
@@ -518,20 +545,6 @@ export const UserList: React.FC = () => {
           </p>
         </div>
 
-        {/* Search */}
-        <div className="relative w-full md:w-72">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => {
-              setSearch(e.target.value);
-              setPage(0);
-            }}
-            placeholder="Search email or name..."
-            className="w-full pl-9 pr-3 py-1.5 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-xs text-slate-900 dark:text-white focus:outline-none focus:border-blue-600 rounded-none font-mono"
-          />
-        </div>
         {isAdmin && (
           <div className="relative flex shrink-0">
             <button
@@ -612,6 +625,29 @@ export const UserList: React.FC = () => {
         </button>
         ))}
 
+        <SortBySelect
+          value={sortBy}
+          options={userSortOptions}
+          onChange={(value) => {
+            setSortBy(value);
+            setPage(0);
+          }}
+        />
+
+        <div className="relative ml-auto w-full md:w-72">
+          <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+          <input
+            type="text"
+            value={search}
+            onChange={(event) => {
+              setSearch(event.target.value);
+              setPage(0);
+            }}
+            placeholder="Search email or name..."
+            aria-label="Search users"
+            className="w-full rounded-none border border-slate-300 bg-white py-1.5 pl-9 pr-3 font-mono text-xs text-slate-900 focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+          />
+        </div>
       </div>
 
       {/* Users Table */}

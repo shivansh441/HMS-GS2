@@ -1022,6 +1022,9 @@ class StaffProfile(Base):
     salary_disbursements: Mapped[list["StaffSalaryDisbursement"]] = relationship(
         "StaffSalaryDisbursement", back_populates="staff", cascade="all, delete-orphan"
     )
+    advances: Mapped[list["StaffAdvance"]] = relationship(
+        "StaffAdvance", back_populates="staff", cascade="all, delete-orphan"
+    )
 
 
 class StaffAttendance(Base):
@@ -1062,6 +1065,10 @@ class StaffSalaryDisbursement(Base):
     year: Mapped[int] = mapped_column(Integer, nullable=False)
     month: Mapped[int] = mapped_column(Integer, nullable=False)
     payable_salary: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    advance_deduction: Mapped[Decimal] = mapped_column(
+        Numeric(10, 2), default=Decimal("0.00"), server_default=text("0.00"), nullable=False
+    )
+    paid_amount: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
     payment_status: Mapped[PaymentStatus] = mapped_column(
         SAEnum(
             PaymentStatus,
@@ -1092,3 +1099,25 @@ class StaffSalaryDisbursement(Base):
     staff: Mapped["StaffProfile"] = relationship(
         "StaffProfile", back_populates="salary_disbursements"
     )
+
+
+class StaffAdvance(Base):
+    __tablename__ = "staff_advances"
+    __table_args__ = (
+        Index("ix_staff_advances_staff_id", "staff_id"),
+        CheckConstraint("amount > 0", name="ck_staff_advances_positive_amount"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    staff_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("staff_profiles.id", ondelete="CASCADE"), nullable=False
+    )
+    amount: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    created_by_user_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+
+    staff: Mapped["StaffProfile"] = relationship("StaffProfile", back_populates="advances")
