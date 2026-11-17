@@ -37,12 +37,21 @@ class RazorpayPaymentVerificationRequest(BillingRequest):
     signature: str = Field(alias="razorpay_signature", min_length=1, max_length=128)
 
 
+class InvoiceAdditionalFeeResponse(BaseModel):
+    fee_type: str = Field(alias="feeType")
+    name: str
+    amount: Decimal
+
+
 class InvoiceResponse(BaseModel):
     id: str
     invoice_number: str = Field(alias="invoiceNumber")
+    unit_assignment_id: str = Field(alias="unitAssignmentId")
     property_id: str = Field(alias="propertyId")
     property_name: str = Field(alias="propertyName")
     currency: str
+    hosteler_id: str = Field(alias="hostelerId")
+    hosteler_name: str = Field(alias="hostelerName")
     unit_number: str = Field(alias="unitNumber")
     billing_month: date = Field(alias="billingMonth")
     due_date: date = Field(alias="dueDate")
@@ -50,6 +59,9 @@ class InvoiceResponse(BaseModel):
     mess_fee: Decimal = Field(alias="messFee")
     electricity_arrears: Decimal = Field(alias="electricityArrears")
     water_arrears: Decimal = Field(alias="waterArrears")
+    additional_fees: list["InvoiceAdditionalFeeResponse"] = Field(
+        alias="additionalFees"
+    )
     total_amount: Decimal = Field(alias="totalAmount")
     paid_amount: Decimal = Field(alias="paidAmount")
     balance: Decimal

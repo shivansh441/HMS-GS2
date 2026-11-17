@@ -824,6 +824,9 @@ class MonthlyInvoice(Base):
     mess_fee: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, nullable=False)
     electricity_arrears: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, nullable=False)
     water_arrears: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, nullable=False)
+    additional_fees: Mapped[list[dict[str, str]]] = mapped_column(
+        JSON, default=list, server_default=text("'[]'"), nullable=False
+    )
     total_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     paid_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0, nullable=False)
     status: Mapped[str] = mapped_column(String(16), default="UNPAID", nullable=False)

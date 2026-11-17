@@ -13,7 +13,17 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.core.permissions import Role
 from app.core.security import create_access_token
-from app.db.models import DepositEscrow, MonthlyInvoice, PaymentReceipt, Unit, User
+from app.db.models import (
+    DepositEscrow,
+    MonthlyInvoice,
+    PaymentReceipt,
+    Property,
+    PropertyFeeConfig,
+    StayRecord,
+    Unit,
+    User,
+    UtilityMeterReading,
+)
 from app.modules.billing import service as billing_service
 
 
@@ -88,10 +98,17 @@ def test_monthly_invoice_arrears_receipts_and_deposit_escrow(
     prop = _billing_property(client, headers)
     _configure_fee(client, headers, prop["id"], "MESS_FEE", "Mess", "1000")
     _configure_fee(client, headers, prop["id"], "SECURITY_DEPOSIT", "Deposit", "5000")
+    _configure_fee(client, headers, prop["id"], "MAINTENANCE_FEE", "Maintenance", "300")
+    _configure_fee(client, headers, prop["id"], "CUSTOM", "Laundry", "100")
     _configure_fee(
         client, headers, prop["id"], "ELECTRICITY_FEE", "Electricity", rate="8", unit="KWH"
     )
     _configure_fee(client, headers, prop["id"], "WATER_CHARGE", "Water", rate="2", unit="LITER")
+    empty_ledger = client.get(
+        f"/api/v1/billing/properties/{prop['id']}/invoices", headers=headers
+    )
+    assert empty_ledger.status_code == 200
+    assert empty_ledger.json() == []
 
     room_response = client.post(
         f"/api/v1/properties/{prop['id']}/units",
@@ -137,6 +154,19 @@ def test_monthly_invoice_arrears_receipts_and_deposit_escrow(
     )
     assert assignment_response.status_code == 201, assignment_response.text
     assignment_id = assignment_response.json()["id"]
+    assignment_options = client.get(
+        f"/api/v1/billing/properties/{prop['id']}/assignments", headers=headers
+    )
+    assert assignment_options.status_code == 200
+    assert assignment_options.json() == [
+        {
+            "id": assignment_id,
+            "userId": customer.id,
+            "userName": "Ledger Customer",
+            "unitNumber": "A1-A",
+            "billingStrategy": "RECURRING_MONTHLY",
+        }
+    ]
     escrow = db_session.scalar(
         select(DepositEscrow).where(DepositEscrow.unit_assignment_id == assignment_id)
     )
@@ -173,19 +203,23 @@ def test_monthly_invoice_arrears_receipts_and_deposit_escrow(
         )
         assert reading_response.status_code == 201, reading_response.text
 
-    generation = client.post(
-        "/api/v1/billing/invoices/generate-monthly",
-        headers=headers,
-        params={"billingMonth": billing_month.strftime("%Y-%m"), "propertyId": prop["id"]},
+    property_invoices = client.get(
+        f"/api/v1/billing/properties/{prop['id']}/invoices", headers=headers
     )
-    assert generation.status_code == 200, generation.text
-    invoice = generation.json()["invoices"][0]
-    assert generation.json()["createdCount"] == 1
+    assert property_invoices.status_code == 200, property_invoices.text
+    invoice = property_invoices.json()[0]
+    assert invoice["hostelerName"] == "Ledger Customer"
+    assert invoice["hostelerId"] == customer.id
+    assert invoice["unitAssignmentId"] == assignment_id
+    assert invoice["additionalFees"] == [
+        {"feeType": "CUSTOM", "name": "Laundry", "amount": "100.00"},
+        {"feeType": "MAINTENANCE_FEE", "name": "Maintenance", "amount": "300.00"},
+    ]
     assert invoice["unitFee"] == "6500.00"
     assert invoice["messFee"] == "1000.00"
     assert invoice["electricityArrears"] == "160.00"
     assert invoice["waterArrears"] == "20.00"
-    assert invoice["totalAmount"] == "7680.00"
+    assert invoice["totalAmount"] == "8080.00"
 
     rerun = client.post(
         "/api/v1/billing/invoices/generate-monthly",
@@ -198,6 +232,33 @@ def test_monthly_invoice_arrears_receipts_and_deposit_escrow(
     stored_invoice = db_session.get(MonthlyInvoice, invoice["id"])
     assert stored_invoice is not None
     assert stored_invoice.status == "UNPAID"
+    property_invoices = client.get(
+        f"/api/v1/billing/properties/{prop['id']}/invoices", headers=headers
+    )
+    assert property_invoices.status_code == 200
+    assert [item["id"] for item in property_invoices.json()] == [invoice["id"]]
+
+    stay_record = db_session.scalar(
+        select(StayRecord).where(StayRecord.assignment_id == assignment_id)
+    )
+    assert stay_record is not None
+    stay_record.persona = "HOTEL_GUEST"
+    db_session.commit()
+    hidden_invoices = client.get(
+        f"/api/v1/billing/properties/{prop['id']}/invoices", headers=headers
+    )
+    assert hidden_invoices.status_code == 200
+    assert hidden_invoices.json() == []
+    next_month = (billing_month + timedelta(days=32)).replace(day=1)
+    property_record = db_session.get(Property, prop["id"])
+    assert property_record is not None
+    non_hosteler_invoices, skipped_count = billing_service.generate_monthly_invoices(
+        db_session, property_record, next_month
+    )
+    assert non_hosteler_invoices == []
+    assert skipped_count == 0
+    stay_record.persona = "HOSTELER"
+    db_session.commit()
 
     receipt_response = client.post(
         f"/api/v1/billing/invoices/{invoice['id']}/payments",
@@ -214,7 +275,7 @@ def test_monthly_invoice_arrears_receipts_and_deposit_escrow(
         "/api/v1/billing/me/invoices", headers=_token(customer, "customer")
     )
     assert customer_invoices.status_code == 200, customer_invoices.text
-    assert customer_invoices.json()[0]["balance"] == "7180.00"
+    assert customer_invoices.json()[0]["balance"] == "7580.00"
 
     monkeypatch.setattr(settings, "RAZORPAY_KEY_ID", "test_key")
     monkeypatch.setattr(settings, "RAZORPAY_KEY_SECRET", "test_secret")
@@ -222,7 +283,7 @@ def test_monthly_invoice_arrears_receipts_and_deposit_escrow(
     payment_id = "pay_test_456"
     order_data = {
         "id": order_id,
-        "amount": 718000,
+        "amount": 758000,
         "receipt": invoice["id"],
         "currency": prop["currency"],
         "notes": {"invoiceId": invoice["id"], "customerId": customer.id},
@@ -231,7 +292,7 @@ def test_monthly_invoice_arrears_receipts_and_deposit_escrow(
     def fake_razorpay_request(method, path, payload=None):
         if method == "POST":
             assert path == "/orders"
-            assert payload["amount"] == 718000
+            assert payload["amount"] == 758000
             return order_data
         if path == f"/orders/{order_id}":
             return order_data
@@ -239,7 +300,7 @@ def test_monthly_invoice_arrears_receipts_and_deposit_escrow(
             return {
                 "order_id": order_id,
                 "status": "captured",
-                "amount": 718000,
+                "amount": 758000,
                 "currency": prop["currency"],
                 "method": "upi",
             }
@@ -283,7 +344,7 @@ def test_monthly_invoice_arrears_receipts_and_deposit_escrow(
     paid_invoice = db_session.get(MonthlyInvoice, invoice["id"])
     assert paid_invoice is not None
     assert paid_invoice.status == "PAID"
-    assert paid_invoice.paid_amount == Decimal("7680.00")
+    assert paid_invoice.paid_amount == Decimal("8080.00")
 
     duplicate_deposit_payment = client.post(
         f"/api/v1/billing/deposits/{escrow.id}/payments",
@@ -291,6 +352,41 @@ def test_monthly_invoice_arrears_receipts_and_deposit_escrow(
         json={"amount": "1", "paymentMethod": "CASH"},
     )
     assert duplicate_deposit_payment.status_code == 400
+    electricity_config = db_session.scalar(
+        select(PropertyFeeConfig).where(
+            PropertyFeeConfig.property_id == prop["id"],
+            PropertyFeeConfig.fee_type == "ELECTRICITY_FEE",
+        )
+    )
+    laundry_config = db_session.scalar(
+        select(PropertyFeeConfig).where(
+            PropertyFeeConfig.property_id == prop["id"],
+            PropertyFeeConfig.fee_type == "CUSTOM",
+        )
+    )
+    electricity_reading = db_session.scalar(
+        select(UtilityMeterReading).where(
+            UtilityMeterReading.unit_assignment_id == assignment_id,
+            UtilityMeterReading.fee_type == "ELECTRICITY_FEE",
+        )
+    )
+    assert electricity_config is not None
+    assert laundry_config is not None
+    assert electricity_reading is not None
+    electricity_config.is_active = False
+    laundry_config.is_active = False
+    electricity_reading.billing_status = "QUEUED"
+    db_session.commit()
+    month_after_next = (next_month + timedelta(days=32)).replace(day=1)
+    inactive_fee_invoices, _ = billing_service.generate_monthly_invoices(
+        db_session, property_record, month_after_next
+    )
+    assert len(inactive_fee_invoices) == 1
+    assert inactive_fee_invoices[0].electricity_arrears == Decimal("0")
+    assert inactive_fee_invoices[0].additional_fees == [
+        {"feeType": "MAINTENANCE_FEE", "name": "Maintenance", "amount": "300.00"}
+    ]
+    assert inactive_fee_invoices[0].total_amount == Decimal("7800.00")
 
 
 def test_razorpay_verifies_and_captures_authorized_payments(monkeypatch):

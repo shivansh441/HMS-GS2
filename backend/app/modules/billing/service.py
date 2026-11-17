@@ -89,13 +89,15 @@ def generate_monthly_invoices(
             UnitAssignment.is_active.is_(True),
             UnitAssignment.billing_strategy == "RECURRING_MONTHLY",
         )
-        .with_for_update()
+        .with_for_update(of=UnitAssignment)
     ).all()
     next_month_start = date.fromordinal(current_month_end.toordinal() + 1)
     eligible_assignments = [
         assignment
         for assignment in assignments
-        if assignment.expected_check_in.date() < next_month_start
+        if assignment.stay_record is not None
+        and assignment.stay_record.persona == "HOSTELER"
+        and assignment.expected_check_in.date() < next_month_start
         and (
             assignment.expected_check_out is None
             or assignment.expected_check_out.date() >= current_month_start
@@ -121,6 +123,32 @@ def generate_monthly_invoices(
         else None
     )
     mess_fee = mess_config.amount if mess_config else Decimal("0")
+    additional_fee_configs = db.scalars(
+        select(PropertyFeeConfig)
+        .where(
+            PropertyFeeConfig.property_id == prop.id,
+            PropertyFeeConfig.is_active.is_(True),
+            PropertyFeeConfig.pricing_basis == "FIXED_FLAT",
+            PropertyFeeConfig.billing_timing == "ADVANCE",
+            PropertyFeeConfig.fee_type.notin_(
+                ("UNIT_FEE", "MESS_FEE", "SECURITY_DEPOSIT")
+            ),
+            PropertyFeeConfig.amount > 0,
+        )
+        .order_by(PropertyFeeConfig.fee_type)
+    ).all()
+    active_metered_fee_types = set(
+        db.scalars(
+            select(PropertyFeeConfig.fee_type).where(
+                PropertyFeeConfig.property_id == prop.id,
+                PropertyFeeConfig.is_active.is_(True),
+                PropertyFeeConfig.pricing_basis == "METERED",
+                PropertyFeeConfig.billing_timing == "ARREARS",
+                PropertyFeeConfig.rate_per_unit.is_not(None),
+                PropertyFeeConfig.unit_of_measure.is_not(None),
+            )
+        ).all()
+    )
     created: list[MonthlyInvoice] = []
     skipped = 0
 
@@ -138,23 +166,18 @@ def generate_monthly_invoices(
                 f"Assignment {assignment.id} has no monthly standard or agreed rate",
                 code="MONTHLY_RATE_REQUIRED",
             )
-        is_hosteler = (
-            assignment.stay_record is not None
-            and assignment.stay_record.persona == "HOSTELER"
-        )
-        readings = (
-            db.scalars(
+        readings = []
+        if active_metered_fee_types:
+            readings = db.scalars(
                 select(UtilityMeterReading)
                 .where(
                     UtilityMeterReading.unit_assignment_id == assignment.id,
+                    UtilityMeterReading.fee_type.in_(active_metered_fee_types),
                     UtilityMeterReading.billing_status == "QUEUED",
                     UtilityMeterReading.period_end <= previous_month_end,
                 )
                 .with_for_update()
             ).all()
-            if is_hosteler
-            else []
-        )
         electricity_arrears = sum(
             (row.amount for row in readings if row.fee_type == "ELECTRICITY_FEE"),
             start=Decimal("0"),
@@ -163,8 +186,26 @@ def generate_monthly_invoices(
             (row.amount for row in readings if row.fee_type == "WATER_CHARGE"),
             start=Decimal("0"),
         )
-        assignment_mess_fee = mess_fee if is_hosteler else Decimal("0")
-        total_amount = unit_fee + assignment_mess_fee + electricity_arrears + water_arrears
+        assignment_mess_fee = mess_fee
+        additional_fees = [
+            {
+                "feeType": config.fee_type,
+                "name": config.name,
+                "amount": str(config.amount),
+            }
+            for config in additional_fee_configs
+        ]
+        additional_fees_total = sum(
+            (config.amount for config in additional_fee_configs),
+            start=Decimal("0"),
+        )
+        total_amount = (
+            unit_fee
+            + assignment_mess_fee
+            + electricity_arrears
+            + water_arrears
+            + additional_fees_total
+        )
         invoice = MonthlyInvoice(
             invoice_number=f"INV-{prop.code}-{billing_month:%Y%m}-{uuid4().hex[:8].upper()}",
             property_id=prop.id,
@@ -176,6 +217,7 @@ def generate_monthly_invoices(
             mess_fee=assignment_mess_fee,
             electricity_arrears=electricity_arrears,
             water_arrears=water_arrears,
+            additional_fees=additional_fees,
             total_amount=total_amount,
         )
         db.add(invoice)

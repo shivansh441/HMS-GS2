@@ -18,6 +18,7 @@ from app.db.models import (
     PaymentReceipt,
     Property,
     PropertyFeeConfig,
+    StayRecord,
     Unit,
     UnitAssignment,
     User,
@@ -83,9 +84,12 @@ def _invoice_response(db: Session, invoice: MonthlyInvoice) -> InvoiceResponse:
     return InvoiceResponse(
         id=invoice.id,
         invoiceNumber=invoice.invoice_number,
+        unitAssignmentId=invoice.unit_assignment_id,
         propertyId=invoice.property_id,
         propertyName=prop.name,
         currency=prop.currency,
+        hostelerId=assignment.user_id,
+        hostelerName=assignment.user.full_name or assignment.user.email or assignment.user_id,
         unitNumber=unit.unit_number,
         billingMonth=invoice.billing_month,
         dueDate=invoice.due_date,
@@ -93,6 +97,7 @@ def _invoice_response(db: Session, invoice: MonthlyInvoice) -> InvoiceResponse:
         messFee=invoice.mess_fee,
         electricityArrears=invoice.electricity_arrears,
         waterArrears=invoice.water_arrears,
+        additionalFees=invoice.additional_fees or [],
         totalAmount=invoice.total_amount,
         paidAmount=invoice.paid_amount,
         balance=invoice.total_amount - invoice.paid_amount,
@@ -183,15 +188,37 @@ def generate_invoices_endpoint(
 )
 def list_property_invoices_endpoint(
     property_id: str,
+    request: Request,
     actor: User = Depends(get_current_admin_user),
     db: Session = Depends(get_db),
     property_scope: set[str] = Depends(get_property_scope),
 ):
     _require_front_desk(actor)
     prop = _scoped_property(db, actor, property_id, property_scope)
+    billing_month = datetime.now(ZoneInfo(prop.timezone)).date().replace(day=1)
+    generated, skipped = generate_monthly_invoices(db, prop, billing_month)
+    if generated:
+        write_audit_log(
+            db,
+            action="MONTHLY_INVOICES_GENERATED",
+            actor_user_id=actor.id,
+            property_id=prop.id,
+            details={
+                "billingMonth": billing_month.strftime("%Y-%m"),
+                "createdCount": len(generated),
+                "skippedCount": skipped,
+                "trigger": "PROPERTY_LEDGER",
+            },
+            ip=get_client_ip(request),
+            user_agent=request.headers.get("user-agent"),
+        )
+        db.commit()
     invoices = db.scalars(
         select(MonthlyInvoice)
+        .join(UnitAssignment, UnitAssignment.id == MonthlyInvoice.unit_assignment_id)
+        .join(StayRecord, StayRecord.assignment_id == UnitAssignment.id)
         .where(MonthlyInvoice.property_id == prop.id)
+        .where(StayRecord.persona == "HOSTELER")
         .order_by(MonthlyInvoice.billing_month.desc(), MonthlyInvoice.invoice_number)
         .limit(500)
     ).all()
@@ -491,9 +518,13 @@ def create_utility_reading_endpoint(
         raise BadRequestError("Current meter reading cannot be below the previous reading")
 
     assignment = db.scalar(
-        select(UnitAssignment).where(
+        select(UnitAssignment)
+        .join(StayRecord, StayRecord.assignment_id == UnitAssignment.id)
+        .where(
             UnitAssignment.id == payload.unit_assignment_id,
             UnitAssignment.is_active.is_(True),
+            UnitAssignment.billing_strategy == "RECURRING_MONTHLY",
+            StayRecord.persona == "HOSTELER",
         )
     )
     unit = db.get(Unit, assignment.unit_id) if assignment else None
@@ -588,10 +619,13 @@ def list_property_assignments_endpoint(
     assignments = db.scalars(
         select(UnitAssignment)
         .join(Unit, Unit.id == UnitAssignment.unit_id)
+        .join(StayRecord, StayRecord.assignment_id == UnitAssignment.id)
         .options(joinedload(UnitAssignment.user), joinedload(UnitAssignment.unit))
         .where(
             Unit.property_id == prop.id,
             UnitAssignment.is_active.is_(True),
+            UnitAssignment.billing_strategy == "RECURRING_MONTHLY",
+            StayRecord.persona == "HOSTELER",
         )
         .order_by(Unit.unit_number)
     ).all()

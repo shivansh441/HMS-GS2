@@ -34,6 +34,8 @@ import {
   Utensils,
 } from 'lucide-react';
 
+const hostelPropertyTypes = ['HOSTEL_BOYS', 'HOSTEL_GIRLS', 'HOSTEL_COED', 'CO_LIVING'];
+
 // Route Guards
 const RequireAuth: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, isLoading } = useAuth();
@@ -92,6 +94,8 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const location = useLocation();
   const activeProperty = properties.find((property) => property.id === selectedPropertyId);
   const showMessManagement = selectedPropertyId === 'ALL' || activeProperty?.hasMessFacility === true;
+  const showFeeLedger = selectedPropertyId === 'ALL'
+    || hostelPropertyTypes.includes(activeProperty?.type || '');
 
   if (!user) return null;
 
@@ -295,7 +299,7 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
               </Link>
             )}
 
-            {(user.role === 'ADMIN' || user.staffRole === 'FRONT_DESK') && (
+            {(user.role === 'ADMIN' || user.staffRole === 'FRONT_DESK') && showFeeLedger && (
               <Link
                 to="/admin/billing"
                 className={`flex items-center space-x-2.5 px-3 py-2 rounded-none ${

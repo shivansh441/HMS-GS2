@@ -20,8 +20,6 @@ def main() -> None:
         ).all()
         for prop in properties:
             today = datetime.now(ZoneInfo(prop.timezone)).date()
-            if today.day != 1:
-                continue
             invoices, skipped = generate_monthly_invoices(
                 db, prop, today.replace(day=1)
             )

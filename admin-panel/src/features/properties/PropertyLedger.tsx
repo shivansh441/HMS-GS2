@@ -7,23 +7,19 @@ import { LoadingIndicator } from '../../components/ui/LoadingIndicator';
 interface Invoice {
   id: string;
   invoiceNumber: string;
+  unitAssignmentId: string;
+  hostelerId: string;
+  hostelerName: string;
+  propertyName: string;
   unitNumber: string;
   billingMonth: string;
   unitFee: number | string;
   messFee: number | string;
   electricityArrears: number | string;
   waterArrears: number | string;
+  additionalFees: Array<{ feeType: string; name: string; amount: number | string }>;
   totalAmount: number | string;
   paidAmount: number | string;
-  balance: number | string;
-  status: string;
-}
-
-interface Deposit {
-  id: string;
-  unitAssignmentId: string;
-  amount: number | string;
-  collectedAmount: number | string;
   balance: number | string;
   status: string;
 }
@@ -33,20 +29,28 @@ interface Assignment {
   userId: string;
   userName: string | null;
   unitNumber: string;
-  billingStrategy: string;
 }
 
-interface Receipt {
-  id: string;
-  receiptNumber: string;
-  amount: number | string;
-  paymentMethod: string;
-  reference: string | null;
-  receivedAt: string;
+interface LedgerRow {
+  assignment: Assignment;
+  invoice?: Invoice;
 }
+
+type UtilityFeeType = 'ELECTRICITY_FEE' | 'WATER_CHARGE';
+type UtilityReadings = { previousReading: string; currentReading: string };
+
+interface PropertyFee {
+  feeType: string;
+  name: string;
+  pricingBasis: string;
+  billingTiming: string;
+}
+
+type ConfiguredUtilityFee = PropertyFee & { feeType: UtilityFeeType };
 
 const inputClass =
   'w-full border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-white';
+const tableCellClass = 'whitespace-nowrap border-t border-slate-200 p-3 align-middle dark:border-slate-700';
 const paymentMethods = ['CASH', 'UPI', 'CARD', 'BANK_TRANSFER'] as const;
 
 function getErrorMessage(error: unknown) {
@@ -54,30 +58,31 @@ function getErrorMessage(error: unknown) {
   return axiosError.response?.data?.error?.message || axiosError.message || 'Financial ledger request failed.';
 }
 
-function monthString(date: Date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+function previousMonthString(date: Date) {
+  const previous = new Date(date.getFullYear(), date.getMonth() - 1, 1);
+  return `${previous.getFullYear()}-${String(previous.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function monthPeriod(month: string) {
+  const [year, monthNumber] = month.split('-').map(Number);
+  const lastDay = new Date(year, monthNumber, 0).getDate();
+  return {
+    periodStart: `${month}-01`,
+    periodEnd: `${month}-${String(lastDay).padStart(2, '0')}`,
+  };
 }
 
 export const PropertyLedger: React.FC<{
   propertyId: string;
+  propertyName: string;
   currency: string;
-  canGenerate: boolean;
-}> = ({ propertyId, currency, canGenerate }) => {
-  const [month, setMonth] = useState(monthString(new Date()));
-  const [readingMonth, setReadingMonth] = useState(() => {
-    const previous = new Date();
-    previous.setDate(1);
-    previous.setMonth(previous.getMonth() - 1);
-    return monthString(previous);
-  });
-  const [invoices, setInvoices] = useState<Invoice[]>([]);
-  const [deposits, setDeposits] = useState<Deposit[]>([]);
+  canRecordUtilities: boolean;
+}> = ({ propertyId, propertyName, currency, canRecordUtilities }) => {
+  const [utilityMonth, setUtilityMonth] = useState(previousMonthString(new Date()));
   const [assignments, setAssignments] = useState<Assignment[]>([]);
-  const [receipts, setReceipts] = useState<Receipt[]>([]);
-  const [selectedAssignmentId, setSelectedAssignmentId] = useState('');
-  const [utilityType, setUtilityType] = useState<'ELECTRICITY_FEE' | 'WATER_CHARGE'>('ELECTRICITY_FEE');
-  const [previousReading, setPreviousReading] = useState('');
-  const [currentReading, setCurrentReading] = useState('');
+  const [utilityFees, setUtilityFees] = useState<ConfiguredUtilityFee[]>([]);
+  const [utilityReadings, setUtilityReadings] = useState<Record<string, UtilityReadings>>({});
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [paymentAmounts, setPaymentAmounts] = useState<Record<string, string>>({});
   const [paymentMethodsByTarget, setPaymentMethodsByTarget] = useState<Record<string, string>>({});
   const [referenceByTarget, setReferenceByTarget] = useState<Record<string, string>>({});
@@ -90,67 +95,57 @@ export const PropertyLedger: React.FC<{
     setLoading(true);
     setErrorMessage('');
     try {
-      const [invoiceResponse, depositResponse, assignmentResponse, receiptResponse] = await Promise.all([
+      const [invoiceResponse, assignmentResponse, feeResponse] = await Promise.all([
         apiClient.get<Invoice[]>(`/billing/properties/${encodeURIComponent(propertyId)}/invoices`),
-        apiClient.get<Deposit[]>(`/billing/properties/${encodeURIComponent(propertyId)}/deposits`),
         apiClient.get<Assignment[]>(`/billing/properties/${encodeURIComponent(propertyId)}/assignments`),
-        apiClient.get<Receipt[]>(`/billing/properties/${encodeURIComponent(propertyId)}/receipts`),
+        apiClient.get<PropertyFee[]>(`/properties/${encodeURIComponent(propertyId)}/fees`),
       ]);
+      const configuredUtilityFees = feeResponse.data.filter(
+        (fee): fee is ConfiguredUtilityFee =>
+          (fee.feeType === 'ELECTRICITY_FEE' || fee.feeType === 'WATER_CHARGE') &&
+          fee.pricingBasis === 'METERED' &&
+          fee.billingTiming === 'ARREARS',
+      );
       setInvoices(invoiceResponse.data);
-      setDeposits(depositResponse.data);
       setAssignments(assignmentResponse.data);
-      setReceipts(receiptResponse.data);
-      if (!selectedAssignmentId && assignmentResponse.data.length) {
-        setSelectedAssignmentId(assignmentResponse.data[0].id);
-      }
+      setUtilityFees(configuredUtilityFees);
     } catch (error: unknown) {
       setErrorMessage(getErrorMessage(error));
     } finally {
       setLoading(false);
     }
-  }, [propertyId, selectedAssignmentId]);
+  }, [propertyId]);
 
   useEffect(() => {
     void loadLedger();
   }, [loadLedger]);
 
-  const generateInvoices = async () => {
-    setWorking(true);
-    setErrorMessage('');
-    setSuccessMessage('');
-    try {
-      const { data } = await apiClient.post<{ createdCount: number; skippedCount: number }>(
-        '/billing/invoices/generate-monthly',
-        null,
-        { params: { billingMonth: month, propertyId } },
-      );
-      setSuccessMessage(`${data.createdCount} invoice(s) created; ${data.skippedCount} already existed.`);
-      await loadLedger();
-    } catch (error: unknown) {
-      setErrorMessage(getErrorMessage(error));
-    } finally {
-      setWorking(false);
+  const recordUtilityReading = async (assignmentId: string, utilityFeeType: UtilityFeeType) => {
+    const readingKey = `${assignmentId}:${utilityFeeType}`;
+    const reading = utilityReadings[readingKey];
+    if (!reading?.previousReading || !reading.currentReading) {
+      setErrorMessage('Enter both meter readings.');
+      return;
     }
-  };
-
-  const recordPayment = async (targetId: string, targetType: 'invoice' | 'deposit') => {
-    const target = targetType === 'invoice'
-      ? invoices.find((invoice) => invoice.id === targetId)
-      : deposits.find((deposit) => deposit.id === targetId);
-    const endpoint = targetType === 'invoice'
-      ? `/billing/invoices/${encodeURIComponent(targetId)}/payments`
-      : `/billing/deposits/${encodeURIComponent(targetId)}/payments`;
     setWorking(true);
     setErrorMessage('');
     setSuccessMessage('');
     try {
-      await apiClient.post(endpoint, {
-        amount: paymentAmounts[targetId] || String(target?.balance ?? 0),
-        paymentMethod: paymentMethodsByTarget[targetId] || 'CASH',
-        ...(referenceByTarget[targetId]?.trim() ? { reference: referenceByTarget[targetId].trim() } : {}),
+      const { periodStart, periodEnd } = monthPeriod(utilityMonth);
+      await apiClient.post('/billing/utility-readings', {
+        propertyId,
+        unitAssignmentId: assignmentId,
+        feeType: utilityFeeType,
+        periodStart,
+        periodEnd,
+        previousReading: reading.previousReading,
+        currentReading: reading.currentReading,
       });
-      setSuccessMessage('Payment receipt recorded.');
-      await loadLedger();
+      setSuccessMessage('Meter reading saved.');
+      setUtilityReadings((current) => ({
+        ...current,
+        [readingKey]: { previousReading: '', currentReading: '' },
+      }));
     } catch (error: unknown) {
       setErrorMessage(getErrorMessage(error));
     } finally {
@@ -158,31 +153,20 @@ export const PropertyLedger: React.FC<{
     }
   };
 
-  const recordMeterReading = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const start = new Date(`${readingMonth}-01T00:00:00`);
-    const end = new Date(start.getFullYear(), start.getMonth() + 1, 0);
-    const periodStart = `${readingMonth}-01`;
-    const periodEnd = `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, '0')}-${String(end.getDate()).padStart(2, '0')}`;
+  const recordPayment = async (invoiceId: string) => {
+    const invoice = invoices.find((item) => item.id === invoiceId);
     setWorking(true);
     setErrorMessage('');
     setSuccessMessage('');
     try {
-      await apiClient.post(
-        '/billing/utility-readings',
-        {
-          propertyId,
-          unitAssignmentId: selectedAssignmentId,
-          feeType: utilityType,
-          periodStart,
-          periodEnd,
-          previousReading,
-          currentReading,
-        },
-      );
-      setSuccessMessage(`Utility amount queued as ${readingMonth} arrears for the next monthly invoice.`);
-      setPreviousReading('');
-      setCurrentReading('');
+      await apiClient.post(`/billing/invoices/${encodeURIComponent(invoiceId)}/payments`, {
+        amount: paymentAmounts[invoiceId] || String(invoice?.balance ?? 0),
+        paymentMethod: paymentMethodsByTarget[invoiceId] || 'CASH',
+        ...(referenceByTarget[invoiceId]?.trim()
+          ? { reference: referenceByTarget[invoiceId].trim() }
+          : {}),
+      });
+      setSuccessMessage('Invoice payment recorded.');
       await loadLedger();
     } catch (error: unknown) {
       setErrorMessage(getErrorMessage(error));
@@ -191,138 +175,189 @@ export const PropertyLedger: React.FC<{
     }
   };
 
-  const depositsDue = deposits.filter((deposit) => Number(deposit.balance) > 0);
+  const invoiceByAssignment = new Map(invoices.map((invoice) => [invoice.unitAssignmentId, invoice]));
+  const rows: LedgerRow[] = invoices.map((invoice) => ({
+    assignment: assignments.find((item) => item.id === invoice.unitAssignmentId) || {
+      id: invoice.unitAssignmentId,
+      userId: invoice.hostelerId,
+      userName: invoice.hostelerName,
+      unitNumber: invoice.unitNumber,
+    },
+    invoice,
+  }));
+  rows.push(
+    ...assignments
+      .filter((assignment) => !invoiceByAssignment.has(assignment.id))
+      .map((assignment) => ({ assignment, invoice: undefined })),
+  );
+  const latestInvoiceByAssignment = new Map<string, Invoice>();
+  for (const invoice of invoices) {
+    const latest = latestInvoiceByAssignment.get(invoice.unitAssignmentId);
+    if (!latest || invoice.billingMonth > latest.billingMonth) {
+      latestInvoiceByAssignment.set(invoice.unitAssignmentId, invoice);
+    }
+  }
+  const activeAssignmentIds = new Set(assignments.map((assignment) => assignment.id));
+  const columnCount = 8 + utilityFees.length;
 
   return (
-    <section className="space-y-5 border-t border-slate-200 pt-5 dark:border-slate-800">
+    <section className="space-y-5">
       <header className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h2 className="text-sm font-bold uppercase">Financial ledger</h2>
-          <p className="mt-1 text-xs text-slate-500">
-            Monthly rent and mess are invoiced in advance; metered utilities are carried as prior-month arrears.
-          </p>
+        <h2 className="text-sm font-bold uppercase">Monthly bills</h2>
+        <div className="flex items-center gap-2">
+          {canRecordUtilities && utilityFees.length > 0 && (
+            <label className="flex items-center gap-2 text-xs font-semibold">
+              Meter month
+              <input type="month" value={utilityMonth} onChange={(event) => setUtilityMonth(event.target.value)} className={`${inputClass} w-auto`} />
+            </label>
+          )}
+          <button type="button" onClick={() => void loadLedger()} disabled={loading} className="inline-flex items-center gap-2 border border-slate-300 px-3 py-2 text-xs font-bold dark:border-slate-700">
+            <RefreshCw className="h-3.5 w-3.5" /> Refresh
+          </button>
         </div>
-        <button type="button" onClick={() => void loadLedger()} disabled={loading} className="inline-flex items-center gap-2 border border-slate-300 px-3 py-2 text-xs font-bold dark:border-slate-700">
-          <RefreshCw className="h-3.5 w-3.5" /> Refresh
-        </button>
       </header>
       {errorMessage && <div role="alert" className="border border-red-300 bg-red-50 p-3 text-sm text-red-800">{errorMessage}</div>}
       {successMessage && <div role="status" className="border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-800">{successMessage}</div>}
 
-      {canGenerate && (
-        <div className="flex flex-wrap items-end gap-3 border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
-          <label className="space-y-1 text-xs font-semibold">
-            Invoice month
-            <input type="month" value={month} onChange={(event) => setMonth(event.target.value)} className={inputClass} />
-          </label>
-          <button type="button" onClick={() => void generateInvoices()} disabled={working || !month} className="bg-blue-700 px-3 py-2 text-xs font-bold uppercase text-white disabled:opacity-60">
-            Generate monthly invoices
-          </button>
-        </div>
-      )}
-
-      <div className="space-y-3">
-        <h3 className="text-xs font-bold uppercase">Invoices</h3>
-        {loading ? <LoadingIndicator label="Loading ledger" /> : invoices.length === 0 ? (
-          <p className="border border-slate-200 bg-white p-4 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-800">No invoices have been generated.</p>
-        ) : invoices.map((invoice) => (
-          <article key={invoice.id} className="space-y-3 border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
-            <div className="flex flex-wrap justify-between gap-2 text-xs">
-              <div><strong>{invoice.invoiceNumber}</strong> · {invoice.unitNumber} · {invoice.billingMonth.slice(0, 7)}</div>
-              <div>{invoice.status} · Balance {currency} {Number(invoice.balance).toLocaleString()}</div>
-            </div>
-            <p className="text-[11px] text-slate-500">
-              Rent {invoice.unitFee} + Mess {invoice.messFee} + Electricity arrears {invoice.electricityArrears} + Water arrears {invoice.waterArrears}
-            </p>
-            {Number(invoice.balance) > 0 ? (
-              <div className="grid gap-2 sm:grid-cols-4">
-                <input aria-label="Payment amount" type="number" min="0.01" max={Number(invoice.balance)} step="0.01" value={paymentAmounts[invoice.id] ?? String(invoice.balance)} onChange={(event) => setPaymentAmounts((current) => ({ ...current, [invoice.id]: event.target.value }))} className={inputClass} />
-                <select aria-label="Payment method" value={paymentMethodsByTarget[invoice.id] || 'CASH'} onChange={(event) => setPaymentMethodsByTarget((current) => ({ ...current, [invoice.id]: event.target.value }))} className={inputClass}>
-                  {paymentMethods.map((method) => <option key={method} value={method}>{method.replace('_', ' ')}</option>)}
-                </select>
-                <input aria-label="Payment reference" maxLength={100} placeholder="Reference (optional)" value={referenceByTarget[invoice.id] || ''} onChange={(event) => setReferenceByTarget((current) => ({ ...current, [invoice.id]: event.target.value }))} className={inputClass} />
-                <button type="button" disabled={working} onClick={() => void recordPayment(invoice.id, 'invoice')} className="inline-flex items-center justify-center gap-2 bg-emerald-700 px-3 py-2 text-xs font-bold uppercase text-white disabled:opacity-60"><Save className="h-4 w-4" /> Record receipt</button>
-              </div>
-            ) : <p className="text-xs font-semibold text-emerald-700">Paid in full</p>}
-          </article>
-        ))}
-      </div>
-
-      <div className="space-y-3">
-        <h3 className="text-xs font-bold uppercase">Security deposit escrow</h3>
-        {depositsDue.map((deposit) => (
-          <article key={deposit.id} className="grid gap-2 border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800 sm:grid-cols-4">
-            <p className="self-center text-xs">Assignment {deposit.unitAssignmentId.slice(0, 8)} · Remaining {currency} {Number(deposit.balance).toLocaleString()}</p>
-            <input aria-label="Deposit amount" type="number" min="0.01" max={Number(deposit.balance)} step="0.01" value={paymentAmounts[deposit.id] ?? String(deposit.balance)} onChange={(event) => setPaymentAmounts((current) => ({ ...current, [deposit.id]: event.target.value }))} className={inputClass} />
-            <select aria-label="Deposit payment method" value={paymentMethodsByTarget[deposit.id] || 'CASH'} onChange={(event) => setPaymentMethodsByTarget((current) => ({ ...current, [deposit.id]: event.target.value }))} className={inputClass}>
-              {paymentMethods.map((method) => <option key={method} value={method}>{method.replace('_', ' ')}</option>)}
-            </select>
-            <button type="button" disabled={working} onClick={() => void recordPayment(deposit.id, 'deposit')} className="bg-emerald-700 px-3 py-2 text-xs font-bold uppercase text-white disabled:opacity-60">Collect deposit</button>
-          </article>
-        ))}
-        {!loading && depositsDue.length === 0 && <p className="border border-slate-200 bg-white p-4 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-800">No outstanding security deposits.</p>}
-      </div>
-
-      <div className="space-y-3">
-        <h3 className="text-xs font-bold uppercase">Meter reading entry · active stays</h3>
-        <div className="overflow-x-auto border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
-          <table className="w-full min-w-[560px] text-left text-xs">
-            <thead className="bg-slate-50 text-[10px] uppercase tracking-wide text-slate-500 dark:bg-slate-900">
-              <tr><th className="p-3">Unit</th><th className="p-3">Resident</th><th className="p-3">Billing</th><th className="p-3">Reading entry</th></tr>
-            </thead>
-            <tbody>
-              {assignments.map((assignment) => (
-                <tr key={assignment.id} className="border-t border-slate-100 dark:border-slate-700">
-                  <td className="p-3 font-semibold">{assignment.unitNumber}</td>
-                  <td className="p-3">{assignment.userName || assignment.userId}</td>
-                  <td className="p-3">{assignment.billingStrategy.replaceAll('_', ' ')}</td>
-                  <td className="p-3">
-                    <button
-                      type="button"
-                      onClick={() => setSelectedAssignmentId(assignment.id)}
-                      aria-pressed={selectedAssignmentId === assignment.id}
-                      className={`px-3 py-1.5 font-semibold ${selectedAssignmentId === assignment.id ? 'bg-blue-700 text-white' : 'border border-slate-300 text-slate-700 dark:border-slate-600 dark:text-slate-200'}`}
-                    >
-                      {selectedAssignmentId === assignment.id ? 'Selected' : 'Enter reading'}
-                    </button>
+      <div className="overflow-x-auto border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
+        <table className="w-full min-w-[1250px] border-collapse text-left text-xs">
+          <thead className="bg-slate-100 uppercase text-slate-500 dark:bg-slate-900 dark:text-slate-400">
+            <tr>
+              <th className="p-3">Hosteler</th>
+              <th className="p-3">Hostel / room no.</th>
+              <th className="p-3">Month</th>
+              <th className="p-3">Rent</th>
+              <th className="p-3">Mess</th>
+              {utilityFees.map((fee) => <th key={fee.feeType} className="p-3">{fee.name}</th>)}
+              <th className="p-3">Other fees</th>
+              <th className="p-3">Total / balance</th>
+              <th className="p-3">Payment</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr><td colSpan={columnCount} className="p-8 text-center text-slate-500"><LoadingIndicator label="Loading ledger" /></td></tr>
+            ) : rows.length === 0 ? (
+              <tr><td colSpan={columnCount} className="p-8 text-center text-slate-500">No hostelers.</td></tr>
+            ) : rows.map(({ assignment, invoice }) => {
+              const isLatestInvoice = invoice
+                ? latestInvoiceByAssignment.get(assignment.id)?.id === invoice.id
+                : true;
+              const canEnterReadings =
+                canRecordUtilities &&
+                utilityFees.length > 0 &&
+                activeAssignmentIds.has(assignment.id) &&
+                isLatestInvoice;
+              const otherFees = [
+                ...(invoice && !utilityFees.some((fee) => fee.feeType === 'ELECTRICITY_FEE') && Number(invoice.electricityArrears) > 0
+                  ? [{ name: 'Electricity', amount: invoice.electricityArrears }]
+                  : []),
+                ...(invoice && !utilityFees.some((fee) => fee.feeType === 'WATER_CHARGE') && Number(invoice.waterArrears) > 0
+                  ? [{ name: 'Water', amount: invoice.waterArrears }]
+                  : []),
+                ...(invoice?.additionalFees || []),
+              ];
+              return (
+                <tr key={invoice?.id || assignment.id} className="border-t border-slate-200 align-top dark:border-slate-700">
+                  <td className={tableCellClass}>
+                    <div className="font-bold">{assignment.userName || 'Hosteler'}</div>
+                    <div className="mt-1 font-mono text-[10px] text-slate-500">{assignment.userId}</div>
+                  </td>
+                  <td className={tableCellClass}>
+                    <div>{propertyName}</div>
+                    <div className="mt-1 text-slate-500">{assignment.unitNumber}</div>
+                  </td>
+                  <td className={tableCellClass}>
+                    {invoice ? (
+                      <>
+                        <div>{invoice.billingMonth.slice(0, 7)}</div>
+                        <div className="mt-1 text-slate-500">{invoice.invoiceNumber}</div>
+                      </>
+                    ) : '—'}
+                  </td>
+                  <td className={tableCellClass}>{invoice ? `${currency} ${Number(invoice.unitFee).toLocaleString()}` : '—'}</td>
+                  <td className={tableCellClass}>{invoice ? `${currency} ${Number(invoice.messFee).toLocaleString()}` : '—'}</td>
+                  {utilityFees.map((fee) => {
+                    const amount = fee.feeType === 'ELECTRICITY_FEE'
+                      ? Number(invoice?.electricityArrears ?? 0)
+                      : Number(invoice?.waterArrears ?? 0);
+                    const readingKey = `${assignment.id}:${fee.feeType}`;
+                    const reading = utilityReadings[readingKey] || { previousReading: '', currentReading: '' };
+                    return (
+                      <td key={fee.feeType} className={`${tableCellClass} min-w-56`}>
+                        {invoice && <div className="mb-2 font-semibold">{currency} {amount.toLocaleString()}</div>}
+                        {canEnterReadings ? (
+                          <div className="flex min-w-52 flex-col gap-1">
+                            <input
+                              aria-label={`${fee.name} previous reading for ${assignment.userName || assignment.userId}`}
+                              type="number"
+                              min="0"
+                              step="0.001"
+                              placeholder="Previous"
+                              value={reading.previousReading}
+                              onChange={(event) => setUtilityReadings((current) => ({
+                                ...current,
+                                [readingKey]: { ...reading, previousReading: event.target.value },
+                              }))}
+                              className={inputClass}
+                            />
+                            <input
+                              aria-label={`${fee.name} current reading for ${assignment.userName || assignment.userId}`}
+                              type="number"
+                              min="0"
+                              step="0.001"
+                              placeholder="Current"
+                              value={reading.currentReading}
+                              onChange={(event) => setUtilityReadings((current) => ({
+                                ...current,
+                                [readingKey]: { ...reading, currentReading: event.target.value },
+                              }))}
+                              className={inputClass}
+                            />
+                            <button
+                              type="button"
+                              disabled={working || !utilityMonth || !reading.previousReading || !reading.currentReading}
+                              onClick={() => void recordUtilityReading(assignment.id, fee.feeType)}
+                              className="bg-blue-700 px-3 py-2 text-xs font-bold uppercase text-white disabled:opacity-60"
+                            >
+                              Save
+                            </button>
+                          </div>
+                        ) : !invoice || amount === 0 ? '—' : null}
+                      </td>
+                    );
+                  })}
+                  <td className={tableCellClass}>
+                    {otherFees.length === 0 ? '—' : otherFees.map((fee, index) => (
+                      <div key={`${fee.name}-${index}`}>{fee.name}: {currency} {Number(fee.amount).toLocaleString()}</div>
+                    ))}
+                  </td>
+                  <td className={tableCellClass}>
+                    {invoice ? (
+                      <>
+                        <div className="font-bold">{currency} {Number(invoice.totalAmount).toLocaleString()}</div>
+                        <div className="mt-1 text-slate-500">{invoice.status} · Balance {currency} {Number(invoice.balance).toLocaleString()}</div>
+                      </>
+                    ) : '—'}
+                  </td>
+                  <td className={tableCellClass}>
+                    {invoice && Number(invoice.balance) > 0 ? (
+                      <div className="flex min-w-64 flex-col gap-2">
+                        <input aria-label={`Payment amount for ${invoice.hostelerName}`} type="number" min="0.01" max={Number(invoice.balance)} step="0.01" value={paymentAmounts[invoice.id] ?? String(invoice.balance)} onChange={(event) => setPaymentAmounts((current) => ({ ...current, [invoice.id]: event.target.value }))} className={inputClass} />
+                        <select aria-label={`Payment method for ${invoice.hostelerName}`} value={paymentMethodsByTarget[invoice.id] || 'CASH'} onChange={(event) => setPaymentMethodsByTarget((current) => ({ ...current, [invoice.id]: event.target.value }))} className={inputClass}>
+                          {paymentMethods.map((method) => <option key={method} value={method}>{method.replace('_', ' ')}</option>)}
+                        </select>
+                        <input aria-label={`Payment reference for ${invoice.hostelerName}`} maxLength={100} placeholder="Reference" value={referenceByTarget[invoice.id] || ''} onChange={(event) => setReferenceByTarget((current) => ({ ...current, [invoice.id]: event.target.value }))} className={inputClass} />
+                        <button type="button" disabled={working} onClick={() => void recordPayment(invoice.id)} className="inline-flex items-center justify-center gap-2 bg-emerald-700 px-3 py-2 text-xs font-bold uppercase text-white disabled:opacity-60"><Save className="h-4 w-4" /> Record payment</button>
+                      </div>
+                    ) : invoice ? <span className="font-semibold text-emerald-700">Paid</span> : '—'}
                   </td>
                 </tr>
-              ))}
-              {!loading && assignments.length === 0 && <tr><td className="p-4 text-slate-500" colSpan={4}>No active stays are available for meter readings.</td></tr>}
-            </tbody>
-          </table>
-        </div>
-        <h3 className="text-xs font-bold uppercase">Month-end utility readings</h3>
-        {selectedAssignmentId && (
-          <p className="text-xs text-slate-500">
-            Selected: {assignments.find((assignment) => assignment.id === selectedAssignmentId)?.unitNumber || 'Active stay'}
-          </p>
-        )}
-        <form onSubmit={recordMeterReading} className="grid gap-3 border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800 sm:grid-cols-2 lg:grid-cols-5">
-          <label className="space-y-1 text-xs font-semibold">Utility
-            <select value={utilityType} onChange={(event) => setUtilityType(event.target.value as typeof utilityType)} className={inputClass}>
-              <option value="ELECTRICITY_FEE">Electricity</option><option value="WATER_CHARGE">Water</option>
-            </select>
-          </label>
-          <label className="space-y-1 text-xs font-semibold">Completed month
-            <input required type="month" value={readingMonth} onChange={(event) => setReadingMonth(event.target.value)} className={inputClass} />
-          </label>
-          <label className="space-y-1 text-xs font-semibold">Previous reading
-            <input required type="number" min="0" step="0.001" value={previousReading} onChange={(event) => setPreviousReading(event.target.value)} className={inputClass} />
-          </label>
-          <label className="space-y-1 text-xs font-semibold">Current reading
-            <input required type="number" min="0" step="0.001" value={currentReading} onChange={(event) => setCurrentReading(event.target.value)} className={inputClass} />
-          </label>
-          <button type="submit" disabled={working || assignments.length === 0} className="bg-blue-700 px-3 py-2 text-xs font-bold uppercase text-white disabled:opacity-60">Queue arrears</button>
-        </form>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
-
-      {receipts.length > 0 && (
-        <div className="space-y-2">
-          <h3 className="text-xs font-bold uppercase">Recent receipts</h3>
-          {receipts.map((receipt) => <p key={receipt.id} className="border border-slate-200 bg-white p-3 text-xs dark:border-slate-700 dark:bg-slate-800">{receipt.receiptNumber} · {new Date(receipt.receivedAt).toLocaleString()} · {currency} {receipt.amount} · {receipt.paymentMethod} {receipt.reference && `· ${receipt.reference}`}</p>)}
-        </div>
-      )}
     </section>
   );
 };
