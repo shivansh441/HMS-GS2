@@ -54,10 +54,12 @@ export const customerApiClient = axios.create({
   headers: {
     'Content-Type': 'application/json',
     'X-Requested-With': 'haven',
+    'X-Client-Application': 'public-website',
   },
 });
 
 customerApiClient.interceptors.request.use((config: InternalAxiosRequestConfig) => {
+  config.headers['X-Client-Application'] = 'public-website';
   if (inMemoryCustomerToken) {
     config.headers.Authorization = `Bearer ${inMemoryCustomerToken}`;
   }
@@ -75,6 +77,7 @@ const refreshCustomerToken = () => {
           headers: {
             'Content-Type': 'application/json',
             'X-Requested-With': 'haven',
+            'X-Client-Application': 'public-website',
           },
         },
       )

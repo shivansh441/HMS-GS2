@@ -24,6 +24,7 @@ from app.db.models import (
 from app.db.session import SessionLocal
 
 MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+NON_AUDITED_PATHS = {"/api/v1/website/analytics/page-view"}
 REDACTED_KEYS = {
     "password",
     "currentpassword",
@@ -414,7 +415,10 @@ class AuditTrailMiddleware:
             await self.app(scope, receive, send)
             return
 
-        record_event = scope.get("method", "").upper() in MUTATING_METHODS
+        is_audited_path = scope.get("path") not in NON_AUDITED_PATHS
+        record_event = (
+            is_audited_path and scope.get("method", "").upper() in MUTATING_METHODS
+        )
         body_chunks: list[bytes] = []
         body_size = 0
         body_truncated = False
@@ -446,7 +450,9 @@ class AuditTrailMiddleware:
             logger.exception("Request failed while audit middleware was observing it")
             raise
         finally:
-            if record_event or response_status in {403, 429}:
+            if record_event or (
+                is_audited_path and response_status in {403, 429}
+            ):
                 raw_body = b"".join(body_chunks)
                 if record_event:
                     payload, attempted_email = _request_payload(

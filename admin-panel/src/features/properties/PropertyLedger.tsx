@@ -4,6 +4,7 @@ import { BedDouble, CircleDollarSign, FileText, Save, Wallet } from 'lucide-reac
 import { apiClient } from '../../lib/api';
 import { LoadingIndicator } from '../../components/ui/LoadingIndicator';
 import { PaymentCollectionModal } from '../billing/PaymentCollectionModal';
+import { TablePagination } from '../../components/ui/TablePagination';
 
 interface Invoice {
   id: string;
@@ -52,6 +53,7 @@ type ConfiguredUtilityFee = PropertyFee & { feeType: UtilityFeeType };
 const inputClass =
   'w-full border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-white';
 const tableCellClass = 'whitespace-nowrap border-t border-slate-100 p-3 align-middle dark:border-slate-800';
+const ledgerPageSize = 10;
 
 function getErrorMessage(error: unknown) {
   const axiosError = error as AxiosError<{ error?: { message?: string } }>;
@@ -101,6 +103,11 @@ export const PropertyLedger: React.FC<{
   const [working, setWorking] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
+  const [page, setPage] = useState(1);
+
+  useEffect(() => {
+    setPage(1);
+  }, [propertyId]);
 
   const loadLedger = useCallback(async () => {
     setLoading(true);
@@ -211,6 +218,9 @@ export const PropertyLedger: React.FC<{
       .filter((assignment) => !invoiceByAssignment.has(assignment.id))
       .map((assignment) => ({ assignment, invoice: undefined })),
   );
+  const pageCount = Math.max(1, Math.ceil(rows.length / ledgerPageSize));
+  const currentPage = Math.min(page, pageCount);
+  const pageRows = rows.slice((currentPage - 1) * ledgerPageSize, currentPage * ledgerPageSize);
   const latestInvoiceByAssignment = new Map<string, Invoice>();
   for (const invoice of invoices) {
     const latest = latestInvoiceByAssignment.get(invoice.unitAssignmentId);
@@ -275,7 +285,7 @@ export const PropertyLedger: React.FC<{
               <tr><td colSpan={columnCount} className="p-8 text-center text-slate-500"><LoadingIndicator label="Loading ledger" /></td></tr>
             ) : rows.length === 0 ? (
               <tr><td colSpan={columnCount} className="p-8 text-center text-slate-500">No hostelers.</td></tr>
-            ) : rows.map(({ assignment, invoice }) => {
+            ) : pageRows.map(({ assignment, invoice }) => {
               const isLatestInvoice = invoice
                 ? latestInvoiceByAssignment.get(assignment.id)?.id === invoice.id
                 : true;
@@ -394,6 +404,14 @@ export const PropertyLedger: React.FC<{
           </tbody>
         </table>
       </div>
+      <TablePagination
+        label="Property ledger"
+        page={currentPage}
+        pageCount={pageCount}
+        pageSize={ledgerPageSize}
+        totalItems={rows.length}
+        onPageChange={setPage}
+      />
       {selectedInvoice && (
         <PaymentCollectionModal
           kind="invoice"

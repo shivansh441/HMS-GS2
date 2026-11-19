@@ -6,6 +6,7 @@ import { useAuth } from '../../lib/auth-context';
 import { apiClient } from '../../lib/api';
 import { BackLinkButton } from '../../components/ui/BackLinkButton';
 import { LoadingIndicator } from '../../components/ui/LoadingIndicator';
+import { TablePagination } from '../../components/ui/TablePagination';
 
 type PaymentMode = 'CASH' | 'BANK_TRANSFER' | 'UPI';
 type StaffRole = 'FRONT_DESK' | 'MAINTENANCE' | 'HOUSEKEEPING';
@@ -60,6 +61,7 @@ interface EligibleStaffUsersResponse {
 const currentDate = new Date();
 const currentMonth = currentDate.getMonth() + 1;
 const currentYear = currentDate.getFullYear();
+const payrollPageSize = 10;
 const inputClass =
   'w-full border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-white focus:border-blue-600 focus:outline-none font-mono rounded-none';
 const periodSelectClass =
@@ -109,6 +111,30 @@ export const StaffPayrollBoard: React.FC = () => {
   const [transactionReference, setTransactionReference] = useState('');
   const [deductAdvance, setDeductAdvance] = useState(false);
   const [advanceDeduction, setAdvanceDeduction] = useState('');
+  const [assignmentPage, setAssignmentPage] = useState(1);
+  const [staffPage, setStaffPage] = useState(1);
+  const salaryAssignmentRowCount = assignedStaff.length + eligibleUsers.length;
+  const salaryAssignmentPageCount = Math.max(
+    1,
+    Math.ceil(salaryAssignmentRowCount / payrollPageSize),
+  );
+  const currentAssignmentPage = Math.min(assignmentPage, salaryAssignmentPageCount);
+  const assignmentPageStart = (currentAssignmentPage - 1) * payrollPageSize;
+  const assignmentPageEnd = assignmentPageStart + payrollPageSize;
+  const visibleAssignedStaff = assignedStaff.slice(
+    assignmentPageStart,
+    Math.min(assignmentPageEnd, assignedStaff.length),
+  );
+  const visibleEligibleUsers = eligibleUsers.slice(
+    Math.max(0, assignmentPageStart - assignedStaff.length),
+    Math.max(0, assignmentPageEnd - assignedStaff.length),
+  );
+  const staffPageCount = Math.max(1, Math.ceil(staff.length / payrollPageSize));
+  const currentStaffPage = Math.min(staffPage, staffPageCount);
+  const visibleStaff = staff.slice(
+    (currentStaffPage - 1) * payrollPageSize,
+    currentStaffPage * payrollPageSize,
+  );
 
   const loadStaff = useCallback(async () => {
     setLoading(true);
@@ -137,6 +163,10 @@ export const StaffPayrollBoard: React.FC = () => {
   useEffect(() => {
     void loadStaff();
   }, [loadStaff]);
+
+  useEffect(() => {
+    setStaffPage(1);
+  }, [year, month]);
 
   const daysInMonth = useMemo(() => new Date(year, month, 0).getDate(), [year, month]);
   const yearOptions = Array.from(
@@ -178,6 +208,7 @@ export const StaffPayrollBoard: React.FC = () => {
   const paymentNet = paymentGross - (deductAdvance ? Number(advanceDeduction || 0) : 0);
 
   const openSalaryAssignment = async () => {
+    setAssignmentPage(1);
     setSelectedSalaries({});
     setAdvanceAmounts({});
     setEditingAssignedSalaries({});
@@ -417,7 +448,7 @@ export const StaffPayrollBoard: React.FC = () => {
                         </tr>
                       </thead>
                       <tbody>
-                        {assignedStaff.map((member) => {
+                        {visibleAssignedStaff.map((member) => {
                           const salaryValue = salaryEdits[member.id] ?? String(member.baseMonthlySalary);
                           const editingSalary = editingAssignedSalaries[member.id] === true;
                           return (
@@ -502,7 +533,7 @@ export const StaffPayrollBoard: React.FC = () => {
                             </tr>
                           );
                         })}
-                        {eligibleUsers.map((eligibleUser) => {
+                        {visibleEligibleUsers.map((eligibleUser) => {
                           const selected = selectedSalaries[eligibleUser.id] !== undefined;
                           const atSelectionLimit = Object.keys(selectedSalaries).length >= 100;
                           return (
@@ -569,6 +600,14 @@ export const StaffPayrollBoard: React.FC = () => {
                       </tbody>
                     </table>
                   </div>
+                  <TablePagination
+                    label="Staff salary assignments"
+                    page={currentAssignmentPage}
+                    pageCount={salaryAssignmentPageCount}
+                    pageSize={payrollPageSize}
+                    totalItems={salaryAssignmentRowCount}
+                    onPageChange={setAssignmentPage}
+                  />
                   {eligibleUsers.length === 0 && (
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <p className="text-slate-500">No unassigned accounts are available.</p>
@@ -713,7 +752,7 @@ export const StaffPayrollBoard: React.FC = () => {
                 <tr><td colSpan={9} className="p-8 text-center text-slate-500"><LoadingIndicator label="Loading staff" /></td></tr>
               ) : staff.length === 0 ? (
                 <tr><td colSpan={9} className="p-8 text-center text-slate-500">No staff profiles in this property scope.</td></tr>
-              ) : staff.map((member) => {
+              ) : visibleStaff.map((member) => {
               const assignedPropertyNames = member.assignedPropertyNames ?? [];
               const workedDaysInput = workedDays[member.id] ??
                 String(member.workedDays ?? member.totalDays);
@@ -860,6 +899,14 @@ export const StaffPayrollBoard: React.FC = () => {
               })}
             </tbody>
           </table>
+          <TablePagination
+            label="Staff payroll"
+            page={currentStaffPage}
+            pageCount={staffPageCount}
+            pageSize={payrollPageSize}
+            totalItems={staff.length}
+            onPageChange={setStaffPage}
+          />
           <div className="flex items-center justify-between gap-3 p-3">
             <span className="text-slate-500">{selectedAttendanceCount} selected</span>
             <button

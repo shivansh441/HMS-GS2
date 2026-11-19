@@ -4,6 +4,7 @@ import { ArrowLeft, Filter, History, RefreshCw, Search } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { LoadingIndicator } from '../../components/ui/LoadingIndicator';
 import { SortByOption, SortBySelect } from '../../components/ui/SortBySelect';
+import { TablePagination } from '../../components/ui/TablePagination';
 import { apiClient } from '../../lib/api';
 import { useAuth } from '../../lib/auth-context';
 
@@ -73,6 +74,7 @@ interface HistoryItem {
 
 type HistoryTab = 'ALL' | 'CONVERTED' | 'UNCONVERTED';
 type HistorySort = 'A_TO_Z' | 'Z_TO_A' | 'NEWEST' | 'OLDEST';
+const historyPageSize = 10;
 
 const historySortOptions: SortByOption<HistorySort>[] = [
   { value: 'A_TO_Z', label: 'A to Z' },
@@ -105,6 +107,7 @@ export const ReservationHistoryPage: React.FC = () => {
   const [sortOrder, setSortOrder] = useState<HistorySort>('NEWEST');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [page, setPage] = useState(1);
 
   const loadReservations = useCallback(async () => {
     setLoading(true);
@@ -150,6 +153,10 @@ export const ReservationHistoryPage: React.FC = () => {
   useEffect(() => {
     void loadReservations();
   }, [loadReservations]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [activeTab, dateFrom, dateTo, search, selectedPropertyId, sortOrder]);
 
   const staysForReservation = (reservation: Reservation) => activeStays.filter((stay) =>
     reservation.status === 'CONVERTED' &&
@@ -237,6 +244,10 @@ export const ReservationHistoryPage: React.FC = () => {
         ? b.createdAt.localeCompare(a.createdAt)
         : a.createdAt.localeCompare(b.createdAt);
     });
+  const pageCount = Math.max(1, Math.ceil(visibleItems.length / historyPageSize));
+  const currentPage = Math.min(page, pageCount);
+  const pageStart = (currentPage - 1) * historyPageSize;
+  const pageItems = visibleItems.slice(pageStart, pageStart + historyPageSize);
 
   return (
     <section className="space-y-5">
@@ -335,8 +346,9 @@ export const ReservationHistoryPage: React.FC = () => {
       {loading ? (
         <LoadingIndicator label="Loading reservation history" className="p-8" />
       ) : (
-        <div className="overflow-x-auto border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
-          <table className="w-full min-w-[900px] text-left text-xs">
+        <>
+          <div className="overflow-x-auto border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
+            <table className="w-full min-w-[900px] text-left text-xs">
             <thead className="bg-slate-100 text-[10px] uppercase tracking-wide text-slate-500 dark:bg-slate-900 dark:text-slate-400">
               <tr>
                 <th className="px-3 py-3">Reservation / guest</th>
@@ -349,7 +361,7 @@ export const ReservationHistoryPage: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
-              {visibleItems.map((item) => {
+              {pageItems.map((item) => {
                 const property = properties.find((candidate) => candidate.id === item.propertyId);
                 return (
                   <tr key={item.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/40">
@@ -392,9 +404,18 @@ export const ReservationHistoryPage: React.FC = () => {
                   </td>
                 </tr>
               )}
-            </tbody>
-          </table>
-        </div>
+              </tbody>
+            </table>
+          </div>
+          <TablePagination
+            label="Reservation history"
+            page={currentPage}
+            pageCount={pageCount}
+            pageSize={historyPageSize}
+            totalItems={visibleItems.length}
+            onPageChange={setPage}
+          />
+        </>
       )}
     </section>
   );

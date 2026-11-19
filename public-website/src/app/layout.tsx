@@ -4,6 +4,7 @@ import { Navbar } from '../components/Navbar';
 import { Footer } from '../components/Footer';
 import { CustomerAuthProvider } from '../lib/auth-context';
 import { BRAND } from '../lib/constants';
+import { WebsiteAnalyticsTracker } from '../components/WebsiteAnalyticsTracker';
 
 export const metadata: Metadata = {
   title: {
@@ -34,6 +35,7 @@ export default function RootLayout({
     <html lang="en" className="scroll-smooth">
       <body className="bg-stone-50 text-slate-900 antialiased font-sans selection:bg-amber-200 selection:text-slate-900">
         <CustomerAuthProvider>
+          <WebsiteAnalyticsTracker />
           <div className="min-h-screen flex flex-col">
             <Navbar />
             <main className="flex-1">{children}</main>

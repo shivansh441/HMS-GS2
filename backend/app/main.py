@@ -32,6 +32,9 @@ from app.modules.properties.router import properties_router
 from app.modules.reservations.router import reservations_router
 from app.modules.staff.router import staff_router
 from app.modules.users.router import users_router
+from app.modules.website.api_health import ApiHealthMiddleware
+from app.modules.website.router import website_router
+
 
 def enforce_staff_read_only(
     request: Request,
@@ -76,6 +79,7 @@ app = FastAPI(
 
 app.state.audit_session_factory = SessionLocal
 app.add_middleware(AuditTrailMiddleware)
+app.add_middleware(ApiHealthMiddleware)
 
 # Attach Slowapi Rate Limiter
 app.state.limiter = limiter
@@ -130,6 +134,7 @@ app.include_router(users_router, prefix=api_v1_prefix)
 app.include_router(reservations_router, prefix=api_v1_prefix)
 app.include_router(staff_router, prefix=api_v1_prefix)
 app.include_router(audit_router, prefix=api_v1_prefix)
+app.include_router(website_router, prefix=api_v1_prefix)
 app.include_router(dev_router, prefix=api_v1_prefix)
 
 logger.info("Haven Stays FastAPI application initialized successfully")

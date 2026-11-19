@@ -8,7 +8,9 @@ export interface ApiOperation {
   label: string;
 }
 
-type TrackedRequestConfig = InternalAxiosRequestConfig & { operationOverlayId?: number };
+type TrackedRequestConfig = InternalAxiosRequestConfig & {
+  operationOverlayId?: number;
+};
 
 let nextOperationId = 0;
 let apiOperationsSnapshot: ApiOperation[] = [];
@@ -90,11 +92,13 @@ export const apiClient = axios.create({
   headers: {
     'Content-Type': 'application/json',
     'X-Requested-With': 'haven',
+    'X-Client-Application': 'admin-panel',
   },
 });
 
 // Request interceptor: attach bearer token and X-Property-Id header
 apiClient.interceptors.request.use((config: InternalAxiosRequestConfig) => {
+  config.headers['X-Client-Application'] = 'admin-panel';
   if (inMemoryAccessToken) {
     config.headers.Authorization = `Bearer ${inMemoryAccessToken}`;
   }
@@ -116,13 +120,17 @@ let refreshPromise: Promise<string> | null = null;
 
 export const refreshAdminSession = (): Promise<string> => {
   if (!refreshPromise) {
+    const refreshUrl = `${API_BASE_URL}/admin/auth/refresh`;
     refreshPromise = axios
       .post<{ accessToken: string }>(
-        `${API_BASE_URL}/admin/auth/refresh`,
+        refreshUrl,
         {},
         {
           withCredentials: true,
-          headers: { 'X-Requested-With': 'haven' },
+          headers: {
+            'X-Requested-With': 'haven',
+            'X-Client-Application': 'admin-panel',
+          },
         },
       )
       .then(({ data }) => {

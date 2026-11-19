@@ -5,6 +5,7 @@ import { useAuth } from '../../lib/auth-context';
 import { apiClient } from '../../lib/api';
 import { LoadingIndicator } from '../../components/ui/LoadingIndicator';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
+import { TablePagination } from '../../components/ui/TablePagination';
 import { GuestStayEntryForm } from '../stays/GuestStayEntryForm';
 import { Property } from '../../types';
 
@@ -100,6 +101,7 @@ const emptyForm: InventoryForm = {
 };
 
 const hostelTypes = ['HOSTEL_BOYS', 'HOSTEL_GIRLS', 'HOSTEL_COED', 'CO_LIVING'];
+const inventoryPageSize = 10;
 const inputClass =
   'w-full border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-white';
 const inventoryFilterClass =
@@ -224,6 +226,13 @@ export const PropertyInventory: React.FC = () => {
   const [roomChangeSaving, setRoomChangeSaving] = useState(false);
   const [scheduledCheckInAssignment, setScheduledCheckInAssignment] = useState<StayAssignment | null>(null);
   const [scheduledCheckInSaving, setScheduledCheckInSaving] = useState(false);
+  const [allInventoryPage, setAllInventoryPage] = useState(1);
+  const [floorPages, setFloorPages] = useState<Record<number, number>>({});
+
+  useEffect(() => {
+    setAllInventoryPage(1);
+    setFloorPages({});
+  }, [activePropertyId, floorFilter, inventoryPropertyFilter, occupancyFilter, roomCapacityFilter]);
 
   const isHotel = property?.type === 'HOTEL';
   const isHostel = hostelTypes.includes(property?.type || '');
@@ -276,6 +285,17 @@ export const PropertyInventory: React.FC = () => {
         rooms: filteredFloors.find((floor) => floor.floorNumber === floorNumber)?.rooms ?? [],
       }));
   const filteredRoomCount = visibleFloors.reduce((total, floor) => total + floor.rooms.length, 0);
+  const pagedVisibleFloors = visibleFloors.map((floor) => {
+    const pageCount = Math.max(1, Math.ceil(floor.rooms.length / inventoryPageSize));
+    const currentPage = Math.min(floorPages[floor.floorNumber] ?? 1, pageCount);
+    const start = (currentPage - 1) * inventoryPageSize;
+    return {
+      ...floor,
+      currentPage,
+      pageCount,
+      visibleRooms: floor.rooms.slice(start, start + inventoryPageSize),
+    };
+  });
 
   const loadInventory = async () => {
     setLoading(true);
@@ -566,6 +586,20 @@ export const PropertyInventory: React.FC = () => {
       (inventoryPropertyFilter === 'ALL' || inventoryProperty.id === inventoryPropertyFilter)
       && !inventoryRooms.some(({ property: roomProperty }) => roomProperty.id === inventoryProperty.id),
     );
+    const inventoryRows = [
+      ...filteredInventoryRooms.map((room) => ({ kind: 'room' as const, room })),
+      ...propertiesWithoutRooms.map(({ property: inventoryProperty }) => ({
+        kind: 'empty' as const,
+        property: inventoryProperty,
+      })),
+    ];
+    const inventoryPageCount = Math.max(1, Math.ceil(inventoryRows.length / inventoryPageSize));
+    const currentInventoryPage = Math.min(allInventoryPage, inventoryPageCount);
+    const inventoryPageStart = (currentInventoryPage - 1) * inventoryPageSize;
+    const visibleInventoryRows = inventoryRows.slice(
+      inventoryPageStart,
+      inventoryPageStart + inventoryPageSize,
+    );
     const selectedInventoryProperty = allPropertyInventories.find(
       ({ property: inventoryProperty }) => inventoryProperty.id === inventoryPropertyFilter,
     )?.property;
@@ -664,8 +698,9 @@ export const PropertyInventory: React.FC = () => {
             No rooms match the selected property.
           </p>
         ) : (
-          <div className="overflow-visible border border-slate-300 bg-white dark:border-slate-700 dark:bg-slate-800">
-            <table className="w-full border-collapse text-left text-xs">
+          <>
+            <div className="overflow-visible border border-slate-300 bg-white dark:border-slate-700 dark:bg-slate-800">
+              <table className="w-full border-collapse text-left text-xs">
               <thead>
                 <tr className="border-b border-slate-300 bg-slate-100 font-mono text-[11px] uppercase tracking-wider text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
                   {inventoryPropertyFilter === 'ALL' && <th className="px-3 py-2.5 font-semibold">Property</th>}
@@ -679,7 +714,23 @@ export const PropertyInventory: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200 font-mono dark:divide-slate-700">
-            {filteredInventoryRooms.map(({ property: inventoryProperty, floorNumber, room, assignments, scheduledAssignments: roomScheduledAssignments }) => {
+            {visibleInventoryRows.map((inventoryRow) => {
+              if (inventoryRow.kind === 'empty') {
+                return (
+                  <tr key={inventoryRow.property.id} className="hover:bg-slate-50 dark:hover:bg-slate-750">
+                    <td colSpan={inventoryPropertyFilter === 'ALL' ? 8 : 7} className="px-3 py-2.5 text-slate-500">
+                      {inventoryRow.property.name} · {inventoryRow.property.code}: no rooms have been added.
+                    </td>
+                  </tr>
+                );
+              }
+              const {
+                property: inventoryProperty,
+                floorNumber,
+                room,
+                assignments,
+                scheduledAssignments: roomScheduledAssignments,
+              } = inventoryRow.room;
               const isPropertyHotel = inventoryProperty.type === 'HOTEL';
               const filledBeds = room.beds.length > 0
                 ? room.beds.filter((bed) => bed.status === 'OCCUPIED').length
@@ -766,16 +817,18 @@ export const PropertyInventory: React.FC = () => {
                 </td>
               </tr>
             );})}
-            {propertiesWithoutRooms.map(({ property: inventoryProperty }) => (
-              <tr key={inventoryProperty.id} className="hover:bg-slate-50 dark:hover:bg-slate-750">
-                <td colSpan={inventoryPropertyFilter === 'ALL' ? 8 : 7} className="px-3 py-2.5 text-slate-500">
-                  {inventoryProperty.name} · {inventoryProperty.code}: no rooms have been added.
-                </td>
-              </tr>
-            ))}
               </tbody>
-            </table>
-          </div>
+              </table>
+            </div>
+            <TablePagination
+              label="All property inventory"
+              page={currentInventoryPage}
+              pageCount={inventoryPageCount}
+              pageSize={inventoryPageSize}
+              totalItems={inventoryRows.length}
+              onPageChange={setAllInventoryPage}
+            />
+          </>
         )}
       </div>
     );
@@ -1051,7 +1104,7 @@ export const PropertyInventory: React.FC = () => {
               ? 'No rooms match this occupancy filter.'
               : `No rooms match the selected floor and occupancy filters.`}
           </p>
-        ) : visibleFloors.map((floor) => (
+        ) : pagedVisibleFloors.map((floor) => (
           <div key={floor.floorNumber} className="space-y-3">
             <div className="overflow-visible border border-slate-300 bg-white dark:border-slate-700 dark:bg-slate-800">
               <table className="w-full border-collapse text-left text-xs">
@@ -1068,7 +1121,7 @@ export const PropertyInventory: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200 font-mono dark:divide-slate-700">
-            {floor.rooms.map((room) => {
+            {floor.visibleRooms.map((room) => {
               const roomAssignments = activeAssignments.filter(
                 (assignment) => assignment.unitId === room.id || room.beds.some((bed) => bed.id === assignment.unitId),
               );
@@ -1216,6 +1269,17 @@ export const PropertyInventory: React.FC = () => {
                 </tbody>
               </table>
             </div>
+            <TablePagination
+              label={`Floor ${floor.floorNumber} inventory`}
+              page={floor.currentPage}
+              pageCount={floor.pageCount}
+              pageSize={inventoryPageSize}
+              totalItems={floor.rooms.length}
+              onPageChange={(nextPage) => setFloorPages((current) => ({
+                ...current,
+                [floor.floorNumber]: nextPage,
+              }))}
+            />
           </div>
         ))}
       </section>}

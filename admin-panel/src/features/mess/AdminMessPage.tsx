@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { AxiosError } from 'axios';
 import { useAuth } from '../../lib/auth-context';
 import { apiClient } from '../../lib/api';
+import { TablePagination } from '../../components/ui/TablePagination';
 
 type MealCategory = 'BREAKFAST' | 'LUNCH' | 'SNACKS' | 'DINNER';
 type DietaryType = 'VEG' | 'NON_VEG' | 'EGGETARIAN';
@@ -46,6 +47,7 @@ interface MealForm {
 }
 
 const categories: MealCategory[] = ['BREAKFAST', 'LUNCH', 'SNACKS', 'DINNER'];
+const facilityPageSize = 10;
 const dietaryTypes: DietaryType[] = ['VEG', 'NON_VEG', 'EGGETARIAN'];
 const inputClass = 'w-full border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-900';
 const emptyMealForm: MealForm = {
@@ -91,11 +93,18 @@ export const AdminMessPage: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
+  const [facilityPage, setFacilityPage] = useState(1);
 
   const isPastDate = scheduledDate < localDateString(new Date());
   const isLockedDate = scheduledDate <= localDateString(new Date());
   const selectedFacility = facilities.find((facility) => facility.id === selectedMessId) || null;
   const totalCapacity = facilities.reduce((total, facility) => total + (facility.capacity || 0), 0);
+  const facilityPageCount = Math.max(1, Math.ceil(facilities.length / facilityPageSize));
+  const currentFacilityPage = Math.min(facilityPage, facilityPageCount);
+  const visibleFacilities = facilities.slice(
+    (currentFacilityPage - 1) * facilityPageSize,
+    currentFacilityPage * facilityPageSize,
+  );
   const groupedMeals = useMemo(
     () => categories.map((category) => ({
       category,
@@ -134,6 +143,10 @@ export const AdminMessPage: React.FC = () => {
   useEffect(() => {
     void loadData();
   }, [loadData]);
+
+  useEffect(() => {
+    setFacilityPage(1);
+  }, [activePropertyId, allPropertiesSelected]);
 
   useEffect(() => {
     if (!selectedMessId || !scheduledDate) {
@@ -289,7 +302,7 @@ export const AdminMessPage: React.FC = () => {
                 <tr><th className="p-3">Mess facility</th><th className="p-3">Hostel</th><th className="p-3">Type</th><th className="p-3">Default</th><th className="p-3">Capacity</th></tr>
               </thead>
               <tbody>
-                {facilities.map((facility) => (
+                {visibleFacilities.map((facility) => (
                   <tr key={facility.id} className="border-t border-slate-100 dark:border-slate-700">
                     <td className="p-3 font-semibold">{facility.name}</td>
                     <td className="p-3">{facility.propertyName}</td>
@@ -302,6 +315,14 @@ export const AdminMessPage: React.FC = () => {
               </tbody>
             </table>
           </div>
+          <TablePagination
+            label="Mess facilities"
+            page={currentFacilityPage}
+            pageCount={facilityPageCount}
+            pageSize={facilityPageSize}
+            totalItems={facilities.length}
+            onPageChange={setFacilityPage}
+          />
           {!facilities.length && properties.some((property) => property.hasMessFacility) && (
             <p className="text-xs text-slate-500">Choose a mess-enabled hostel from the property selector to configure its facility.</p>
           )}

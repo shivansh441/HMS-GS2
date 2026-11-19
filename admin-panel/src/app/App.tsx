@@ -13,6 +13,7 @@ import { ReservationHistoryPage } from '../features/reservations/ReservationHist
 import { StaysAndBillingPage } from '../features/stays/StaysAndBillingPage';
 import { StaffPayrollBoard } from '../features/staff/StaffPayrollBoard';
 import { AdminMessPage } from '../features/mess/AdminMessPage';
+import { WebsiteMonitor } from '../features/website/WebsiteMonitor';
 import { canAccess, PermissionKey } from '../lib/permissions';
 import { LoadingIndicator } from '../components/ui/LoadingIndicator';
 import { OperationOverlay } from '../components/ui/OperationOverlay';
@@ -31,6 +32,7 @@ import {
   Clock,
   WalletCards,
   Utensils,
+  Globe2,
 } from 'lucide-react';
 
 // Route Guards
@@ -92,9 +94,13 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const activeProperty = properties.find((property) => property.id === selectedPropertyId);
   const showMessManagement = selectedPropertyId === 'ALL' || activeProperty?.hasMessFacility === true;
   if (!user) return null;
+  const showSystemSection =
+    user.role === 'ADMIN' ||
+    canAccess(user.role, user.staffRole, 'VIEW_AUDIT_LOGS') ||
+    canAccess(user.role, user.staffRole, 'VIEW_SECURITY');
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-100 dark:bg-slate-900 text-slate-900 dark:text-slate-100">
+    <div className="h-screen overflow-hidden flex flex-col bg-slate-100 dark:bg-slate-900 text-slate-900 dark:text-slate-100">
       {/* Idle Logout Warning Modal */}
       {idleWarningVisible && (
         <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
@@ -191,7 +197,7 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
       </header>
 
       {/* Main Container */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 min-h-0 flex overflow-hidden">
         {/* Role-Aware Sidebar */}
         <aside className="w-56 bg-white dark:bg-slate-800 border-r border-slate-300 dark:border-slate-700 flex flex-col shrink-0">
           <nav className="p-2 space-y-0.5 text-xs font-mono">
@@ -307,32 +313,58 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
               </Link>
             )}
 
-            {canAccess(user.role, user.staffRole, 'VIEW_AUDIT_LOGS') && (
-              <Link
-                to="/admin/audit"
-                className={`flex items-center space-x-2.5 px-3 py-2 rounded-none ${
-                  location.pathname === '/audit' || location.pathname === '/admin/audit'
-                    ? 'bg-slate-900 text-white dark:bg-blue-600'
-                    : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
-                }`}
+            {showSystemSection && (
+              <div
+                role="group"
+                aria-labelledby="system-sidebar-heading"
+                className="mt-3 border-t border-slate-200 pt-2 dark:border-slate-700"
               >
-                <FileText className="w-4 h-4" />
-                <span>Audit Logs</span>
-              </Link>
-            )}
-
-            {canAccess(user.role, user.staffRole, 'VIEW_SECURITY') && (
-              <Link
-                to="/security"
-                className={`flex items-center space-x-2.5 px-3 py-2 rounded-none ${
-                  location.pathname === '/security'
-                    ? 'bg-slate-900 text-white dark:bg-blue-600'
-                    : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
-                }`}
-              >
-                <Shield className="w-4 h-4" />
-                <span>Security & Sessions</span>
-              </Link>
+                <div
+                  id="system-sidebar-heading"
+                  className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400"
+                >
+                  System
+                </div>
+                {user.role === 'ADMIN' && (
+                  <Link
+                    to="/admin/website"
+                    className={`flex items-center space-x-2.5 px-3 py-2 rounded-none ${
+                      location.pathname === '/admin/website'
+                        ? 'bg-slate-900 text-white dark:bg-blue-600'
+                        : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
+                    }`}
+                  >
+                    <Globe2 className="w-4 h-4" />
+                    <span>Platform Monitor</span>
+                  </Link>
+                )}
+                {canAccess(user.role, user.staffRole, 'VIEW_AUDIT_LOGS') && (
+                  <Link
+                    to="/admin/audit"
+                    className={`flex items-center space-x-2.5 px-3 py-2 rounded-none ${
+                      location.pathname === '/audit' || location.pathname === '/admin/audit'
+                        ? 'bg-slate-900 text-white dark:bg-blue-600'
+                        : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
+                    }`}
+                  >
+                    <FileText className="w-4 h-4" />
+                    <span>Audit Logs</span>
+                  </Link>
+                )}
+                {canAccess(user.role, user.staffRole, 'VIEW_SECURITY') && (
+                  <Link
+                    to="/security"
+                    className={`flex items-center space-x-2.5 px-3 py-2 rounded-none ${
+                      location.pathname === '/security'
+                        ? 'bg-slate-900 text-white dark:bg-blue-600'
+                        : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
+                    }`}
+                  >
+                    <Shield className="w-4 h-4" />
+                    <span>Security & Sessions</span>
+                  </Link>
+                )}
+              </div>
             )}
           </nav>
 
@@ -343,7 +375,7 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         </aside>
 
         {/* Content View */}
-        <main className="flex-1 overflow-y-auto p-6">
+        <main className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain p-6">
           {allowedPropertyIds.length === 0 && (
             <div className="mb-5 border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-3 text-xs font-semibold text-amber-900 dark:text-amber-200">
               No property assigned yet, contact an admin
@@ -378,6 +410,14 @@ export const App: React.FC = () => {
                 element={
                   <RequirePermission permission="VIEW_USERS">
                     <StaffPayrollBoard />
+                  </RequirePermission>
+                }
+              />
+              <Route
+                path="/admin/website"
+                element={
+                  <RequirePermission permission="VIEW_WEBSITE_MONITOR">
+                    <WebsiteMonitor />
                   </RequirePermission>
                 }
               />

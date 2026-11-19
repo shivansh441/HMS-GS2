@@ -50,6 +50,7 @@ class Settings(BaseSettings):
     OAUTH_MODE: str = "mock" # mock | production
     PUBLIC_WEBSITE_URL: str = "http://localhost:3000"
     ADMIN_PANEL_URL: str = "http://localhost:5173"
+    TRUST_CLOUDFLARE_HEADERS: bool = False
     RAZORPAY_KEY_ID: str = ""
     RAZORPAY_KEY_SECRET: str = ""
     AUDIT_RATE_VARIANCE_LIMIT: float = 0.20

@@ -18,6 +18,9 @@ export default function PrivacyPage() {
         <p>
           Sensitive verification credentials, such as government identification document numbers, are encrypted at rest using AES-256-GCM authenticated encryption and never logged in plain text.
         </p>
+        <p>
+          To understand public website traffic and service reliability, our analytics dataset retains visited page paths, a network-masked address, browser and device categories, and the referring website domain. Approximate country is recorded only when explicitly enabled for a trusted hosting edge. We do not collect precise location or connect these page views to customer accounts. Website analytics records are retained for up to 30 days.
+        </p>
       </div>
     </div>
   );

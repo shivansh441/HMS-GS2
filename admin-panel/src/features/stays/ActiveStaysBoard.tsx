@@ -5,6 +5,7 @@ import { useAuth } from '../../lib/auth-context';
 import { apiClient } from '../../lib/api';
 import { LoadingIndicator } from '../../components/ui/LoadingIndicator';
 import { PaymentCollectionModal } from '../billing/PaymentCollectionModal';
+import { TablePagination } from '../../components/ui/TablePagination';
 
 interface StayAssignment {
   id: string;
@@ -68,6 +69,7 @@ function formatCurrency(value: number | string, currency: string) {
 }
 
 const hostelPropertyTypes = new Set(['HOSTEL_BOYS', 'HOSTEL_GIRLS', 'HOSTEL_COED', 'CO_LIVING']);
+const activeStaysPageSize = 10;
 
 export const ActiveStaysBoard: React.FC<ActiveStaysBoardProps> = ({
   refreshSignal = 0,
@@ -86,6 +88,7 @@ export const ActiveStaysBoard: React.FC<ActiveStaysBoardProps> = ({
   const [errorMessage, setErrorMessage] = useState('');
   const [workingId, setWorkingId] = useState('');
   const [selectedStay, setSelectedStay] = useState<StayAssignment | null>(null);
+  const [page, setPage] = useState(1);
 
   const loadStays = useCallback(async () => {
     setLoading(true);
@@ -131,6 +134,17 @@ export const ActiveStaysBoard: React.FC<ActiveStaysBoardProps> = ({
   useEffect(() => {
     if (refreshSignal > 0) void loadStays();
   }, [loadStays, refreshSignal]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [selectedPropertyId]);
+
+  const pageCount = Math.max(1, Math.ceil(stays.length / activeStaysPageSize));
+  const currentPage = Math.min(page, pageCount);
+  const visibleStays = stays.slice(
+    (currentPage - 1) * activeStaysPageSize,
+    currentPage * activeStaysPageSize,
+  );
 
   const checkOutStay = async (data: {
     amount: string;
@@ -191,7 +205,7 @@ export const ActiveStaysBoard: React.FC<ActiveStaysBoardProps> = ({
             </tr>
           </thead>
           <tbody>
-            {stays.map((stay) => (
+            {visibleStays.map((stay) => (
               <tr key={stay.id} className="border-t border-slate-100 dark:border-slate-800">
                 <td className="p-3"><strong>{stay.guestName || 'Guest'}</strong><div className="mt-1 text-slate-500">{stay.guestPhone || stay.guestEmail}</div></td>
                 <td className="p-3">{stay.propertyName}<div className="mt-1 text-slate-500">{stay.unitType} {stay.unitNumber} · {stay.unitCategory}</div></td>
@@ -209,6 +223,14 @@ export const ActiveStaysBoard: React.FC<ActiveStaysBoardProps> = ({
           </tbody>
         </table>
       </div>
+      <TablePagination
+        label="Active stays"
+        page={currentPage}
+        pageCount={pageCount}
+        pageSize={activeStaysPageSize}
+        totalItems={stays.length}
+        onPageChange={setPage}
+      />
       {selectedStay && (
         <PaymentCollectionModal
           kind="checkout"

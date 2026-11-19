@@ -345,6 +345,24 @@ class SecurityAlert(Base):
     )
 
 
+class WebsitePageView(Base):
+    __tablename__ = "website_page_views"
+    __table_args__ = (
+        Index("ix_website_page_views_created_path", "created_at", "path"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    path: Mapped[str] = mapped_column(String(512), nullable=False)
+    visitor_ip_masked: Mapped[str] = mapped_column(String(64), nullable=False)
+    country_code: Mapped[str | None] = mapped_column(String(2), nullable=True)
+    referrer_host: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    browser: Mapped[str] = mapped_column(String(32), nullable=False)
+    device_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False, index=True
+    )
+
+
 @sqlalchemy_event.listens_for(AuditLog, "before_update")
 def _prevent_audit_log_update(_mapper, _connection, _target) -> None:
     raise ValueError("Audit logs are immutable")
