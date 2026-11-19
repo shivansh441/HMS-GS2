@@ -44,6 +44,7 @@ from app.db.session import get_db
 from app.modules.auth.deps import get_current_admin_user, get_property_scope
 from app.modules.billing.service import ensure_deposit_escrow
 from app.modules.customer.occupant_service import (
+    get_guest_accounts,
     get_owned_occupant_profiles,
     stay_occupant_from_reservation_occupant,
 )
@@ -173,6 +174,26 @@ def _add_profile_occupant(
     )
 
 
+def _add_guest_account_occupant(
+    reservation: ReservationRequest,
+    guest: User,
+) -> None:
+    full_name = (guest.full_name or guest.email or "Guest").strip()
+    first_name, _, last_name = full_name.partition(" ")
+    reservation.occupants.append(
+        ReservationOccupant(
+            guest_user_id=guest.id,
+            is_primary=False,
+            first_name=first_name[:50] or "Guest",
+            last_name=last_name[:50] or None,
+            email=guest.email,
+            phone=guest.phone,
+            id_type=guest.id_document_type,
+            id_number_encrypted=guest.id_document_number_encrypted,
+        )
+    )
+
+
 @reservations_router.post("", response_model=ReservationResponse, status_code=201)
 def create_reservation(
     payload: ReservationCreateRequest,
@@ -213,7 +234,66 @@ def create_reservation(
             db, actor, request.headers.get("X-Property-Id")
         ):
             raise NotFoundError("Property not found")
+    if payload.primary_guest_user_id and (
+        not actor or actor.role not in (Role.ADMIN, Role.STAFF)
+    ):
+        raise ForbiddenError("Only staff can select a reservation's main guest")
+    primary_guest = None
     primary_user_id = actor.id if actor and actor.role == Role.CUSTOMER else None
+    if payload.primary_guest_user_id:
+        primary_guest = db.get(User, payload.primary_guest_user_id)
+        expected_persona = (
+            CustomerPersona.HOSTELER.value
+            if prop.type in BED_LEVEL_TYPES
+            else CustomerPersona.HOTEL_GUEST.value
+        )
+        if (
+            not primary_guest
+            or primary_guest.role != Role.CUSTOMER.value
+            or primary_guest.status != "ACTIVE"
+            or primary_guest.customer_persona != expected_persona
+            or not primary_guest.phone
+        ):
+            raise BadRequestError(
+                "The selected main guest is not an eligible active customer for this property",
+                code="PRIMARY_GUEST_UNAVAILABLE",
+            )
+        if has_active_user_assignment(db, primary_guest.id):
+            raise ConflictError(
+                "The selected main guest already occupies an assigned room or bed",
+                code="CUSTOMER_ALREADY_ASSIGNED",
+            )
+        primary_user_id = primary_guest.id
+
+    if payload.guest_user_ids and (
+        not actor or actor.role not in (Role.ADMIN, Role.STAFF)
+    ):
+        raise ForbiddenError("Only staff can select additional guest accounts")
+    if payload.guest_user_ids and primary_user_id is None:
+        raise BadRequestError(
+            "Select a main guest before adding additional guest accounts",
+            code="PRIMARY_GUEST_REQUIRED",
+        )
+    if payload.guest_user_ids and prop.type in BED_LEVEL_TYPES:
+        raise BadRequestError(
+            "Hostel bed reservations cannot include additional guest accounts",
+            code="HOSTEL_SINGLE_OCCUPANT_PER_BED",
+        )
+    if payload.guest_user_ids and payload.requested_quantity != 1:
+        raise BadRequestError(
+            "Additional guest accounts can only be added to a single-room reservation",
+            code="GROUP_BOOKING_SINGLE_ROOM",
+        )
+    additional_guests = (
+        get_guest_accounts(db, payload.guest_user_ids, primary_user_id)
+        if payload.guest_user_ids
+        else []
+    )
+    if any(has_active_user_assignment(db, guest.id) for guest in additional_guests):
+        raise ConflictError(
+            "An additional guest already occupies an assigned room or bed",
+            code="GUEST_ALREADY_ASSIGNED",
+        )
     if payload.occupant_profile_ids:
         if payload.requested_quantity != 1:
             raise BadRequestError(
@@ -239,9 +319,17 @@ def create_reservation(
         request_code=_make_request_code(db),
         property_id=prop.id,
         primary_user_id=primary_user_id,
-        guest_name=payload.guest_name,
-        mobile=payload.mobile,
-        email=str(payload.email) if payload.email else None,
+        guest_name=(
+            (primary_guest.full_name or payload.guest_name)
+            if primary_guest
+            else payload.guest_name
+        ),
+        mobile=primary_guest.phone if primary_guest else payload.mobile,
+        email=(
+            primary_guest.email
+            if primary_guest
+            else (str(payload.email) if payload.email else None)
+        ),
         requested_category=payload.requested_category.value,
         requested_type=payload.requested_type.value,
         requested_sharing_type=(
@@ -265,6 +353,8 @@ def create_reservation(
         _add_profile_occupant(reservation, profile)
     for occupant in payload.occupants:
         _add_occupant(reservation, occupant)
+    for guest in additional_guests:
+        _add_guest_account_occupant(reservation, guest)
     db.add(reservation)
     try:
         db.commit()
@@ -623,6 +713,15 @@ def convert_reservation(
         raise ConflictError(
             "This customer already occupies an assigned unit and cannot be assigned another",
             code="CUSTOMER_ALREADY_ASSIGNED",
+        )
+    if any(
+        occupant.guest_user_id
+        and has_active_user_assignment(db, occupant.guest_user_id)
+        for occupant in reservation.occupants
+    ):
+        raise ConflictError(
+            "An additional guest already occupies an assigned room or bed",
+            code="GUEST_ALREADY_ASSIGNED",
         )
     existing_link = db.scalar(
         select(CustomerPropertyLink.id).where(

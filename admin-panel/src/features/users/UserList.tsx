@@ -1178,24 +1178,6 @@ export const UserList: React.FC = () => {
           saveUser={saveUser}
           toggleProperty={toggleProperty}
           setEditorMode={setEditorMode}
-          onStayRegistered={async () => {
-            if (!selectedUserId) return;
-            try {
-              const { data } = await apiClient.get<ManagedUser>(
-                `/admin/users/${encodeURIComponent(selectedUserId)}`,
-              );
-              setSelectedUser(data);
-              setUserForm(formFromUser(data));
-              await fetchUsers();
-            } catch (error: unknown) {
-              const axiosError = error as AxiosError<{ error?: { message?: string } }>;
-              setEditorError(
-                axiosError.response?.data?.error?.message
-                  || axiosError.message
-                  || 'Stay registered, but user details could not be refreshed.',
-              );
-            }
-          }}
         />
       )}
       {pendingAction && (

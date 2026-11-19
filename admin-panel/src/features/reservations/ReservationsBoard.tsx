@@ -1,9 +1,11 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { AxiosError } from 'axios';
-import { Check, CircleDollarSign, Plus, RefreshCw, X } from 'lucide-react';
+import { Check, CircleDollarSign, History, Plus, RefreshCw, X } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../../lib/auth-context';
 import { apiClient } from '../../lib/api';
 import { LoadingIndicator } from '../../components/ui/LoadingIndicator';
+import { GuestStayEntryForm } from '../stays/GuestStayEntryForm';
 
 type ReservationStatus =
   | 'PENDING'
@@ -52,43 +54,6 @@ interface PropertyFeeConfig {
   isActive: boolean;
 }
 
-interface InventoryBed {
-  id: string;
-  unitNumber: string;
-  category: string;
-  sharingType: string | null;
-  status: string;
-}
-
-interface InventoryRoom {
-  id: string;
-  unitNumber: string;
-  type: string;
-  category: string;
-  sharingType: string | null;
-  status: string;
-  beds: InventoryBed[];
-}
-
-interface InventoryFloor {
-  floorNumber: number;
-  rooms: InventoryRoom[];
-}
-
-interface PropertyInventory {
-  propertyId: string;
-  floors: InventoryFloor[];
-}
-
-interface LeadInventoryOption {
-  key: string;
-  label: string;
-  type: string;
-  category: string;
-  sharingType: string | null;
-  availableCount: number;
-}
-
 const columns: ReservationStatus[] = [
   'PENDING',
   'APPROVED',
@@ -99,6 +64,10 @@ const columns: ReservationStatus[] = [
   'NO_SHOW',
 ];
 
+type ReservationStatusFilter = 'ALL' | ReservationStatus;
+type ReservationPropertyFilter = 'ALL' | 'HOSTEL' | 'HOTEL';
+
+const hostelPropertyTypes = new Set(['HOSTEL_BOYS', 'HOSTEL_GIRLS', 'HOSTEL_COED', 'CO_LIVING']);
 const inputClass =
   'w-full border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-white';
 
@@ -113,40 +82,15 @@ function formatDate(value: string | null) {
     : 'Open-ended';
 }
 
-function addCalendarDays(value: string, days: number) {
-  const date = new Date(`${value}T00:00:00Z`);
-  date.setUTCDate(date.getUTCDate() + days);
-  return date.toISOString().slice(0, 10);
-}
-
-function calendarDayDifference(start: string, end: string) {
-  return (
-    Date.parse(`${end}T00:00:00Z`) - Date.parse(`${start}T00:00:00Z`)
-  ) / 86_400_000;
-}
-
 export const ReservationsBoard: React.FC = () => {
   const { properties, selectedPropertyId } = useAuth();
   const [reservations, setReservations] = useState<Reservation[]>([]);
+  const [selectedStatus, setSelectedStatus] = useState<ReservationStatusFilter>('ALL');
+  const [selectedPropertyType, setSelectedPropertyType] = useState<ReservationPropertyFilter>('ALL');
   const [loading, setLoading] = useState(true);
   const [workingId, setWorkingId] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
   const [creating, setCreating] = useState(false);
-  const [creatingLead, setCreatingLead] = useState(false);
-  const [leadErrorMessage, setLeadErrorMessage] = useState('');
-  const [leadPropertyId, setLeadPropertyId] = useState('');
-  const [leadInventory, setLeadInventory] = useState<PropertyInventory | null>(null);
-  const [loadingLeadInventory, setLoadingLeadInventory] = useState(false);
-  const [leadInventoryOption, setLeadInventoryOption] = useState('');
-  const [leadGuestName, setLeadGuestName] = useState('');
-  const [leadMobile, setLeadMobile] = useState('');
-  const [leadEmail, setLeadEmail] = useState('');
-  const [leadQuantity, setLeadQuantity] = useState(1);
-  const [leadAdults, setLeadAdults] = useState(1);
-  const [leadChildren, setLeadChildren] = useState(0);
-  const [leadCheckIn, setLeadCheckIn] = useState('');
-  const [leadCheckOut, setLeadCheckOut] = useState('');
-  const [leadChannel, setLeadChannel] = useState('WALK_IN');
   const [rejecting, setRejecting] = useState<Reservation | null>(null);
   const [rejectionReason, setRejectionReason] = useState('');
   const [converting, setConverting] = useState<Reservation | null>(null);
@@ -174,16 +118,28 @@ export const ReservationsBoard: React.FC = () => {
     setLoading(true);
     setErrorMessage('');
     try {
-      const { data } = await apiClient.get<{ items: Reservation[] }>('/reservations', {
-        params: {
-          status: columns.join(','),
-          ...(selectedPropertyId && selectedPropertyId !== 'ALL'
-            ? { propertyId: selectedPropertyId }
-            : {}),
-          limit: 100,
-        },
-      });
-      setReservations(data.items);
+      const items: Reservation[] = [];
+      let offset = 0;
+      let total = 0;
+      do {
+        const { data } = await apiClient.get<{ items: Reservation[]; total: number }>('/reservations', {
+          params: {
+            status: columns.join(','),
+            ...(selectedPropertyId && selectedPropertyId !== 'ALL'
+              ? { propertyId: selectedPropertyId }
+              : {}),
+            limit: 100,
+            offset,
+          },
+        });
+        items.push(...data.items);
+        total = data.total;
+        if (data.items.length === 0 && offset < total) {
+          throw new Error('The reservation list returned an incomplete page.');
+        }
+        offset += data.items.length;
+      } while (offset < total);
+      setReservations(items);
     } catch (error: unknown) {
       setErrorMessage(getErrorMessage(error));
     } finally {
@@ -195,185 +151,11 @@ export const ReservationsBoard: React.FC = () => {
     void loadReservations();
   }, [loadReservations]);
 
-  useEffect(() => {
-    if (!creating || !leadPropertyId) {
-      setLeadInventory(null);
-      setLoadingLeadInventory(false);
-      return;
-    }
-
-    let active = true;
-    setLeadInventory(null);
-    setLeadInventoryOption('');
-    setLoadingLeadInventory(true);
-    setLeadErrorMessage('');
-    apiClient.get<PropertyInventory>(
-      `/properties/${encodeURIComponent(leadPropertyId)}/units/matrix`,
-    )
-      .then(({ data }) => {
-        if (active) setLeadInventory(data);
-      })
-      .catch((error: unknown) => {
-        if (active) setLeadErrorMessage(getErrorMessage(error));
-      })
-      .finally(() => {
-        if (active) setLoadingLeadInventory(false);
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [creating, leadPropertyId]);
-
-  const leadProperty = properties.find((property) => property.id === leadPropertyId);
-  const leadIsHostel = Boolean(
-    leadProperty &&
-    ['HOSTEL_BOYS', 'HOSTEL_GIRLS', 'HOSTEL_COED', 'CO_LIVING'].includes(leadProperty.type),
-  );
   const convertingProperty = properties.find((property) => property.id === converting?.propertyId);
   const convertingIsHostel = Boolean(
     convertingProperty &&
-    ['HOSTEL_BOYS', 'HOSTEL_GIRLS', 'HOSTEL_COED', 'CO_LIVING'].includes(convertingProperty.type),
+    hostelPropertyTypes.has(convertingProperty.type),
   );
-  const leadInventoryOptions = useMemo<LeadInventoryOption[]>(() => {
-    if (!leadInventory || leadInventory.propertyId !== leadPropertyId) return [];
-
-    const optionCounts = new Map<string, LeadInventoryOption>();
-    for (const room of leadInventory.floors.flatMap((floor) => floor.rooms)) {
-      if (leadIsHostel) {
-        for (const bed of room.beds) {
-          if (bed.status !== 'AVAILABLE') continue;
-          const sharingType = bed.sharingType || room.sharingType;
-          const key = `BED|${bed.category}|${sharingType || ''}`;
-          const existing = optionCounts.get(key);
-          if (existing) {
-            existing.availableCount += 1;
-          } else {
-            optionCounts.set(key, {
-              key,
-              label: `Bed · ${bed.category}${sharingType ? ` · ${sharingType} sharing` : ''}`,
-              type: 'BED',
-              category: bed.category,
-              sharingType,
-              availableCount: 1,
-            });
-          }
-        }
-      } else if (
-        room.status === 'AVAILABLE' &&
-        ['ROOM', 'SUITE'].includes(room.type)
-      ) {
-        const key = `${room.type}|${room.category}`;
-        const existing = optionCounts.get(key);
-        if (existing) {
-          existing.availableCount += 1;
-        } else {
-          optionCounts.set(key, {
-            key,
-            label: `${room.type} · ${room.category}`,
-            type: room.type,
-            category: room.category,
-            sharingType: null,
-            availableCount: 1,
-          });
-        }
-      }
-    }
-    return [...optionCounts.values()].sort((left, right) => left.label.localeCompare(right.label));
-  }, [leadInventory, leadIsHostel, leadPropertyId]);
-  const selectedLeadInventoryOption = leadInventoryOptions.find(
-    (option) => option.key === leadInventoryOption,
-  );
-
-  useEffect(() => {
-    if (
-      leadInventoryOptions.length > 0 &&
-      !leadInventoryOptions.some((option) => option.key === leadInventoryOption)
-    ) {
-      setLeadInventoryOption(leadInventoryOptions[0].key);
-    }
-  }, [leadInventoryOption, leadInventoryOptions]);
-
-  useEffect(() => {
-    if (selectedLeadInventoryOption) {
-      setLeadQuantity((current) =>
-        Math.min(Math.max(current, 1), selectedLeadInventoryOption.availableCount),
-      );
-    }
-  }, [selectedLeadInventoryOption]);
-
-  const openCreateLead = () => {
-    setLeadPropertyId(
-      selectedPropertyId && selectedPropertyId !== 'ALL'
-        ? selectedPropertyId
-        : properties[0]?.id || '',
-    );
-    setErrorMessage('');
-    setLeadErrorMessage('');
-    setLeadInventory(null);
-    setLeadInventoryOption('');
-    setLeadQuantity(1);
-    setCreating(true);
-  };
-
-  const createLead = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const property = properties.find((item) => item.id === leadPropertyId);
-    if (!property) return;
-    if (!selectedLeadInventoryOption || leadQuantity > selectedLeadInventoryOption.availableCount) {
-      setLeadErrorMessage('Select an available room or bed type and a quantity within current availability.');
-      return;
-    }
-    if (leadIsHostel && leadQuantity > 1) {
-      setLeadErrorMessage('Create a separate hostel reservation for each customer; one customer can be assigned only one bed.');
-      return;
-    }
-    if (leadCheckOut <= leadCheckIn) {
-      setLeadErrorMessage('Choose a check-out date after check-in.');
-      return;
-    }
-    if (leadIsHostel && calendarDayDifference(leadCheckIn, leadCheckOut) === 1) {
-      setLeadErrorMessage('Hostel bed reservations cannot be booked for exactly one night.');
-      return;
-    }
-    if (leadAdults + leadChildren > 100) {
-      setLeadErrorMessage('A reservation can include at most 100 occupants.');
-      return;
-    }
-    setCreatingLead(true);
-    setLeadErrorMessage('');
-    try {
-      await apiClient.post('/reservations', {
-        propertyId: property.id,
-        guestName: leadGuestName.trim(),
-        mobile: leadMobile.trim(),
-        email: leadEmail.trim() || null,
-        requestedCategory: selectedLeadInventoryOption.category,
-        requestedType: selectedLeadInventoryOption.type,
-        ...(selectedLeadInventoryOption.sharingType
-          ? { requestedSharingType: selectedLeadInventoryOption.sharingType }
-          : {}),
-        requestedQuantity: leadQuantity,
-        numberOfAdults: leadAdults,
-        numberOfChildren: leadChildren,
-        expectedCheckIn: leadCheckIn,
-        expectedCheckOut: leadCheckOut,
-        channelOrigin: leadChannel,
-      });
-      setCreating(false);
-      setLeadGuestName('');
-      setLeadMobile('');
-      setLeadEmail('');
-      setLeadCheckIn('');
-      setLeadCheckOut('');
-      await loadReservations();
-    } catch (error: unknown) {
-      setLeadErrorMessage(getErrorMessage(error));
-    } finally {
-      setCreatingLead(false);
-    }
-  };
-
   const updateStatus = async (reservation: Reservation, status: ReservationStatus) => {
     setWorkingId(reservation.id);
     setErrorMessage('');
@@ -474,206 +256,163 @@ export const ReservationsBoard: React.FC = () => {
     }
   };
 
+  const propertyFilteredReservations = reservations.filter((reservation) => {
+    if (selectedPropertyType === 'ALL') return true;
+    const propertyType = properties.find((property) => property.id === reservation.propertyId)?.type;
+    if (selectedPropertyType === 'HOSTEL') return propertyType != null && hostelPropertyTypes.has(propertyType);
+    return propertyType === 'HOTEL';
+  });
+  const selectedReservations = selectedStatus === 'ALL'
+    ? propertyFilteredReservations
+    : propertyFilteredReservations.filter((item) => item.status === selectedStatus);
+
   return (
     <section className="space-y-5">
-      <header className="flex flex-wrap items-end justify-between gap-3 border-b border-slate-200 pb-4 dark:border-slate-800">
-        <div>
-          <h1 className="text-xl font-bold uppercase tracking-wide">Reservations & Leads</h1>
-          <p className="mt-1 text-xs text-slate-500">Review booking requests and allocate available inventory.</p>
-        </div>
-        <button
-          type="button"
-          onClick={openCreateLead}
-          disabled={properties.length === 0}
-          className="inline-flex items-center gap-2 bg-blue-700 px-3 py-2 text-xs font-bold text-white hover:bg-blue-800 disabled:opacity-50"
-        >
-          <Plus className="h-3.5 w-3.5" /> New lead
-        </button>
-        <button
-          type="button"
-          onClick={() => void loadReservations()}
-          disabled={loading}
-          className="inline-flex items-center gap-2 border border-slate-300 px-3 py-2 text-xs font-bold hover:bg-slate-100 disabled:opacity-50 dark:border-slate-700 dark:hover:bg-slate-800"
-        >
-          <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-          Refresh
-        </button>
-      </header>
+      {!creating && (
+        <header className="flex flex-wrap items-end justify-between gap-3 border-b border-slate-200 pb-4 dark:border-slate-800">
+          <div>
+            <h1 className="text-xl font-bold uppercase tracking-wide">Reservations & Leads</h1>
+            <p className="mt-1 text-xs text-slate-500">Review booking requests and allocate available inventory.</p>
+          </div>
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            <Link
+              to="/admin/reservations/history"
+              className="inline-flex items-center gap-2 border border-slate-300 px-3 py-2 text-xs font-bold hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800"
+            >
+              <History className="h-3.5 w-3.5" /> History
+            </Link>
+            <button
+              type="button"
+              onClick={() => {
+                setErrorMessage('');
+                setCreating(true);
+              }}
+              disabled={properties.length === 0}
+              className="inline-flex items-center gap-2 bg-blue-700 px-3 py-2 text-xs font-bold text-white hover:bg-blue-800 disabled:opacity-50"
+            >
+              <Plus className="h-3.5 w-3.5" /> New lead
+            </button>
+            <button
+              type="button"
+              onClick={() => void loadReservations()}
+              disabled={loading}
+              className="inline-flex items-center gap-2 border border-slate-300 px-3 py-2 text-xs font-bold hover:bg-slate-100 disabled:opacity-50 dark:border-slate-700 dark:hover:bg-slate-800"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+              Refresh
+            </button>
+          </div>
+        </header>
+      )}
 
-      {errorMessage && (
+      {errorMessage && !creating && (
         <div role="alert" className="border border-red-300 bg-red-50 p-3 text-sm text-red-800">
           {errorMessage}
         </div>
       )}
 
       {creating && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4">
-          <form onSubmit={createLead} className="max-h-[90vh] w-full max-w-xl space-y-4 overflow-y-auto bg-white p-5 dark:bg-slate-800">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="font-bold">Create reservation lead</h2>
-                <p className="text-xs text-slate-500">Record a walk-in, phone, or OTA request.</p>
-              </div>
-              <button type="button" onClick={() => setCreating(false)} aria-label="Close new lead dialog">
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-            {leadErrorMessage && (
-              <div role="alert" className="border border-red-300 bg-red-50 p-3 text-sm text-red-800">
-                {leadErrorMessage}
-              </div>
-            )}
-            <div className="grid gap-3 sm:grid-cols-2">
-              <label className="block space-y-1 text-xs font-semibold sm:col-span-2">
-                Property
-                <select required value={leadPropertyId} onChange={(event) => {
-                  setLeadPropertyId(event.target.value);
-                  setLeadInventoryOption('');
-                  setLeadQuantity(1);
-                }} className={inputClass}>
-                  {properties.map((property) => (
-                    <option key={property.id} value={property.id}>{property.name}</option>
-                  ))}
-                </select>
-              </label>
-              <label className="block space-y-1 text-xs font-semibold sm:col-span-2">
-                Available {leadIsHostel ? 'bed type' : 'room type'}
-                <select
-                  required
-                  value={leadInventoryOption}
-                  onChange={(event) => setLeadInventoryOption(event.target.value)}
-                  disabled={loadingLeadInventory || leadInventoryOptions.length === 0}
-                  className={inputClass}
-                >
-                  {loadingLeadInventory && <option value="" />}
-                  {!loadingLeadInventory && leadInventoryOptions.length === 0 && (
-                    <option value="">No available {leadIsHostel ? 'beds' : 'rooms'}</option>
-                  )}
-                  {leadInventoryOptions.map((option) => (
-                    <option key={option.key} value={option.key}>
-                      {option.label} · {option.availableCount} available
-                    </option>
-                  ))}
-                </select>
-                {loadingLeadInventory && <LoadingIndicator label="Loading available inventory" />}
-                {!loadingLeadInventory && leadInventoryOptions.length === 0 && !leadErrorMessage && (
-                  <span className="block font-normal text-amber-700">
-                    This property has no currently available {leadIsHostel ? 'beds' : 'rooms'}.
-                  </span>
-                )}
-              </label>
-              <label className="block space-y-1 text-xs font-semibold">
-                Booker name
-                <input required maxLength={100} value={leadGuestName} onChange={(event) => setLeadGuestName(event.target.value)} className={inputClass} />
-              </label>
-              <label className="block space-y-1 text-xs font-semibold">
-                Phone
-                <input required type="tel" maxLength={20} value={leadMobile} onChange={(event) => setLeadMobile(event.target.value)} className={inputClass} />
-              </label>
-              <label className="block space-y-1 text-xs font-semibold">
-                Email (optional)
-                <input type="email" value={leadEmail} onChange={(event) => setLeadEmail(event.target.value)} className={inputClass} />
-              </label>
-              <label className="block space-y-1 text-xs font-semibold">
-                Channel
-                <select value={leadChannel} onChange={(event) => setLeadChannel(event.target.value)} className={inputClass}>
-                  <option value="WALK_IN">Walk-in</option>
-                  <option value="PHONE">Phone</option>
-                  <option value="OTA_IMPORT">OTA import</option>
-                </select>
-              </label>
-              <label className="block space-y-1 text-xs font-semibold">
-                {leadIsHostel ? 'Beds requested' : 'Rooms requested'}
-                <input
-                  required
-                  type="number"
-                  min={1}
-                  max={leadIsHostel ? 1 : selectedLeadInventoryOption?.availableCount || 1}
-                  value={leadQuantity}
-                  onChange={(event) => setLeadQuantity(Number(event.target.value))}
-                  disabled={!selectedLeadInventoryOption}
-                  className={inputClass}
-                />
-                {selectedLeadInventoryOption && (
-                  <span className="block font-normal text-slate-500">
-                    {leadIsHostel
-                      ? 'One bed can be assigned per customer account.'
-                      : `Up to ${selectedLeadInventoryOption.availableCount} currently available.`}
-                  </span>
-                )}
-              </label>
-              <label className="block space-y-1 text-xs font-semibold">
-                Check-in
-                <input required type="date" value={leadCheckIn} onChange={(event) => setLeadCheckIn(event.target.value)} className={inputClass} />
-              </label>
-              <label className="block space-y-1 text-xs font-semibold">
-                Check-out
-                <input
-                  required
-                  type="date"
-                  min={leadCheckIn ? addCalendarDays(leadCheckIn, leadIsHostel ? 2 : 1) : undefined}
-                  value={leadCheckOut}
-                  onChange={(event) => setLeadCheckOut(event.target.value)}
-                  className={inputClass}
-                />
-                {leadIsHostel && (
-                  <span className="block font-normal text-slate-500">
-                    Hostel bed stays must be longer than one night.
-                  </span>
-                )}
-              </label>
-              <label className="block space-y-1 text-xs font-semibold">
-                Adults
-                <input required type="number" min={1} max={100 - leadChildren} value={leadAdults} onChange={(event) => setLeadAdults(Number(event.target.value))} className={inputClass} />
-              </label>
-              <label className="block space-y-1 text-xs font-semibold">
-                Children
-                <input required type="number" min={0} max={100 - leadAdults} value={leadChildren} onChange={(event) => setLeadChildren(Number(event.target.value))} className={inputClass} />
-              </label>
-              <p className="text-xs text-slate-500 sm:col-span-2">
-                Record the booker and guest count now. Add the actual occupants and their IDs to each assigned room or bed when they are known.
-              </p>
-            </div>
-            <button
-              disabled={
-                creatingLead ||
-                loadingLeadInventory ||
-                !selectedLeadInventoryOption ||
-                leadQuantity > (selectedLeadInventoryOption?.availableCount || 0)
-              }
-              className="w-full bg-blue-700 px-3 py-2 text-sm font-bold text-white disabled:opacity-50"
-            >
-              Create lead
-            </button>
-          </form>
-        </div>
+        <GuestStayEntryForm
+          mode="reservation"
+          onCancel={() => setCreating(false)}
+          onComplete={loadReservations}
+        />
       )}
 
-      {loading ? (
+      {!creating && (loading ? (
         <LoadingIndicator label="Loading reservations" className="p-8" />
       ) : (
-        <div className="grid gap-4 xl:grid-cols-4 2xl:grid-cols-7">
-          {columns.map((status) => {
-            const columnReservations = reservations.filter((item) => item.status === status);
-            return (
-              <section
-                key={status}
-                aria-label={`${status} reservations`}
-                className="min-w-0 border border-slate-200 bg-slate-50/70 p-3 dark:border-slate-800 dark:bg-slate-900/50"
-              >
-                <header className="mb-3 flex items-center justify-between">
-                  <h2 className="text-[11px] font-bold uppercase tracking-wider">{status.replace('_', ' ')}</h2>
-                  <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[10px] dark:bg-slate-800">
-                    {columnReservations.length}
+        <div className="space-y-3">
+          <div role="group" aria-label="Filter reservations by property type" className="flex flex-wrap items-center gap-1.5 pt-1">
+            {([
+              ['ALL', 'All properties'],
+              ['HOSTEL', 'Hostels'],
+              ['HOTEL', 'Hotels'],
+            ] as const).map(([propertyType, label]) => {
+              const count = propertyType === 'ALL'
+                ? reservations.length
+                : reservations.filter((reservation) => {
+                  const type = properties.find((property) => property.id === reservation.propertyId)?.type;
+                  return propertyType === 'HOSTEL'
+                    ? type != null && hostelPropertyTypes.has(type)
+                    : type === 'HOTEL';
+                }).length;
+              const isSelected = selectedPropertyType === propertyType;
+              return (
+                <button
+                  key={propertyType}
+                  type="button"
+                  aria-pressed={isSelected}
+                  onClick={() => setSelectedPropertyType(propertyType)}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-mono border ${
+                    isSelected
+                      ? 'bg-slate-900 text-white border-slate-900 dark:bg-blue-600 dark:border-blue-600'
+                      : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-700 hover:bg-slate-100'
+                  }`}
+                >
+                  {label}
+                  <span className={`px-1.5 py-0.5 text-[10px] ${
+                    isSelected
+                      ? 'bg-white/20 text-white'
+                      : 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200'
+                  }`}>
+                    {count}
                   </span>
-                </header>
-                <div className="space-y-3">
-                  {columnReservations.map((reservation) => (
+                </button>
+              );
+            })}
+          </div>
+          <div role="tablist" aria-label="Reservation statuses" className="flex flex-wrap items-center gap-1.5 pt-1">
+            {(['ALL', ...columns] as ReservationStatusFilter[]).map((status) => {
+              const statusCount = status === 'ALL'
+                ? propertyFilteredReservations.length
+                : propertyFilteredReservations.filter((item) => item.status === status).length;
+              const isSelected = selectedStatus === status;
+              return (
+                <button
+                  key={status}
+                  id={`reservation-tab-${status.toLowerCase()}`}
+                  type="button"
+                  role="tab"
+                  aria-selected={isSelected}
+                  aria-controls="reservation-status-panel"
+                  onClick={() => setSelectedStatus(status)}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-mono border ${
+                    isSelected
+                      ? 'bg-slate-900 text-white border-slate-900 dark:bg-blue-600 dark:border-blue-600'
+                      : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-700 hover:bg-slate-100'
+                  }`}
+                >
+                  {status === 'ALL' ? 'All' : status.replaceAll('_', ' ')}
+                  <span className={`px-1.5 py-0.5 text-[10px] ${
+                    isSelected
+                      ? 'bg-white/20 text-white'
+                      : 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200'
+                  }`}>
+                    {statusCount}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          <section
+            id="reservation-status-panel"
+            role="tabpanel"
+            aria-labelledby={`reservation-tab-${selectedStatus.toLowerCase()}`}
+            aria-label={`${selectedStatus === 'ALL' ? 'All' : selectedStatus.replaceAll('_', ' ')} reservations`}
+            className="space-y-3"
+          >
+            {selectedReservations.map((reservation) => (
                     <article
                       key={reservation.id}
                       className="space-y-3 border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-700 dark:bg-slate-800"
                     >
                       <div>
+                        {selectedStatus === 'ALL' && (
+                          <p className="mb-1 text-[10px] font-bold uppercase tracking-wide text-slate-500">
+                            {reservation.status.replaceAll('_', ' ')}
+                          </p>
+                        )}
                         <p className="font-mono text-[10px] font-bold text-blue-700 dark:text-blue-300">
                           {reservation.requestCode}
                         </p>
@@ -737,16 +476,15 @@ export const ReservationsBoard: React.FC = () => {
                         </p>
                       )}
                     </article>
-                  ))}
-                  {columnReservations.length === 0 && (
-                    <p className="py-4 text-center text-[10px] text-slate-400">No requests</p>
-                  )}
-                </div>
-              </section>
-            );
-          })}
+            ))}
+            {selectedReservations.length === 0 && (
+              <p className="border border-slate-200 bg-white py-8 text-center text-xs text-slate-400 dark:border-slate-800 dark:bg-slate-900">
+                No {selectedStatus === 'ALL' ? '' : `${selectedStatus.replaceAll('_', ' ').toLowerCase()} `}reservations
+              </p>
+            )}
+          </section>
         </div>
-      )}
+      ))}
 
       {rejecting && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4">

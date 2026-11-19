@@ -2,7 +2,6 @@ import React from 'react';
 import { Pencil, Save } from 'lucide-react';
 import { AddressFields } from './AddressFields';
 import { AdditionalOccupants } from './AdditionalOccupants';
-import { RepeatStayRegistration } from './RepeatStayRegistration';
 import { LoadingIndicator } from '../../components/ui/LoadingIndicator';
 import { BackLinkButton } from '../../components/ui/BackLinkButton';
 import { CustomerPersona, Property } from '../../types';
@@ -27,7 +26,6 @@ interface UserEditorProps {
   saveUser: (event: React.FormEvent<HTMLFormElement>) => void;
   toggleProperty: (propertyId: string) => void;
   setEditorMode: React.Dispatch<React.SetStateAction<UserEditorMode>>;
-  onStayRegistered: () => Promise<void>;
 }
 
 const isAllPropertyScope = (selectedPropertyId: string | null) =>
@@ -50,7 +48,6 @@ export const UserEditor: React.FC<UserEditorProps> = ({
   saveUser,
   toggleProperty,
   setEditorMode,
-  onStayRegistered,
 }) => (
   <>
     <section aria-labelledby="user-editor-title" className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900 sm:p-6">
@@ -604,21 +601,5 @@ export const UserEditor: React.FC<UserEditorProps> = ({
               </form>
             )}
           </section>
-    {editorMode === 'view' &&
-      isAdmin &&
-      selectedUser?.role === 'CUSTOMER' &&
-      selectedUser.customerPersona === 'HOTEL_GUEST' && (
-        <section className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
-          <h2 className="mb-3 text-sm font-semibold">Stay history</h2>
-          <p className="mb-3 text-xs text-slate-500">
-            Register a separate visit without replacing the existing stay or guest records.
-          </p>
-          <RepeatStayRegistration
-            customer={selectedUser}
-            properties={properties}
-            onRegistered={onStayRegistered}
-          />
-        </section>
-      )}
   </>
 );

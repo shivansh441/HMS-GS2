@@ -33,6 +33,12 @@ class ReservationOccupantPayload(ReservationPayload):
 
 class ReservationCreateRequest(ReservationPayload):
     property_id: str = Field(alias="propertyId", min_length=1, max_length=36)
+    primary_guest_user_id: str | None = Field(
+        default=None, alias="primaryGuestUserId", min_length=1, max_length=36
+    )
+    guest_user_ids: list[str] = Field(
+        default_factory=list, alias="guestUserIds", max_length=99
+    )
     guest_name: str = Field(alias="guestName", min_length=1, max_length=100)
     mobile: str = Field(min_length=1, max_length=20)
     email: EmailStr | None = None
@@ -69,13 +75,23 @@ class ReservationCreateRequest(ReservationPayload):
         if self.requested_sharing_type and self.requested_type != UnitType.BED:
             raise ValueError("Sharing type can only be specified for a bed reservation")
         expected_occupants = self.number_of_adults + self.number_of_children
-        if len(self.occupants) + len(self.occupant_profile_ids) > expected_occupants:
+        if (
+            len(self.occupants)
+            + len(self.occupant_profile_ids)
+            + len(self.guest_user_ids)
+            > expected_occupants
+        ):
             raise ValueError("Reservation occupant details exceed the guest count")
+        if len(self.guest_user_ids) != len(set(self.guest_user_ids)):
+            raise ValueError("An additional guest account cannot be selected more than once")
+        if self.primary_guest_user_id in self.guest_user_ids:
+            raise ValueError("The primary guest cannot also be an additional guest")
         if len(self.occupant_profile_ids) != len(set(self.occupant_profile_ids)):
             raise ValueError("An occupant profile cannot be selected more than once")
         if self.occupant_profile_ids and (
             len(self.occupant_profile_ids)
             + sum(not occupant.is_primary for occupant in self.occupants)
+            + len(self.guest_user_ids)
             != expected_occupants - 1
         ):
             raise ValueError(

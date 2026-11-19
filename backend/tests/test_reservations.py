@@ -7,6 +7,7 @@ from app.core.crypto import decrypt_data, process_id_document
 from app.core.permissions import Role
 from app.core.security import create_access_token
 from app.db.models import (
+    CustomerPersona,
     CustomerOccupantProfile,
     Floor,
     Property,
@@ -435,6 +436,196 @@ def test_saved_occupant_group_cannot_exceed_room_capacity(client, db_session):
     )
     assert conversion.status_code == 400
     assert conversion.json()["error"]["code"] == "OCCUPANT_CAPACITY_EXCEEDED"
+
+
+def test_staff_hotel_reservations_recheck_additional_guest_occupancy_on_conversion(
+    client, db_session
+):
+    suffix = uuid4().hex[:8]
+    prop = Property(
+        code=f"LEAD-{suffix.upper()}",
+        name="Lead Reservation Hotel",
+        type="HOTEL",
+        status="ACTIVE",
+    )
+    db_session.add(prop)
+    db_session.flush()
+    floor = Floor(property_id=prop.id, number=1, name="Ground Floor")
+    db_session.add(floor)
+    db_session.flush()
+    units = [
+        Unit(
+            property_id=prop.id,
+            floor_id=floor.id,
+            unit_number=f"ROOM-{suffix}-{index}",
+            floor=1,
+            type="ROOM",
+            category="CLASSIC",
+            capacity=2,
+            default_price_per_night=100,
+            status="AVAILABLE",
+        )
+        for index in range(1, 3)
+    ]
+
+    def create_hotel_guest(
+        name: str,
+        persona: CustomerPersona = CustomerPersona.HOTEL_GUEST,
+    ):
+        guest_suffix = uuid4().hex[:8]
+        document = process_id_document(f"LEAD-{guest_suffix}")
+        guest = User(
+            email=f"{guest_suffix}@example.com",
+            phone=f"+1555{uuid4().int % 10000000:07d}",
+            full_name=name,
+            password_hash="unused",
+            role=Role.CUSTOMER,
+            status="ACTIVE",
+            customer_persona=persona.value,
+            id_document_type="PASSPORT",
+            id_document_number_encrypted=document[0],
+            id_document_last4=document[1],
+            id_document_lookup_hash=document[2],
+        )
+        db_session.add(guest)
+        return guest
+
+    primary_guest = create_hotel_guest("Primary Lead Guest")
+    second_primary_guest = create_hotel_guest("Second Lead Guest")
+    additional_guest = create_hotel_guest("Additional Lead Guest")
+    db_session.add_all(units)
+    db_session.commit()
+    headers = _admin_headers(db_session)
+
+    def create_lead(main_guest: User):
+        payload = _reservation_payload(prop.id)
+        payload.update(
+            {
+                "primaryGuestUserId": main_guest.id,
+                "guestUserIds": [additional_guest.id],
+                "guestName": main_guest.full_name,
+                "mobile": main_guest.phone,
+                "email": main_guest.email,
+                "numberOfAdults": 2,
+                "occupants": [],
+                "channelOrigin": "WALK_IN",
+            }
+        )
+        return client.post("/api/v1/reservations", headers=headers, json=payload)
+
+    first = create_lead(primary_guest)
+    second = create_lead(second_primary_guest)
+    assert first.status_code == 201, first.text
+    assert second.status_code == 201, second.text
+    first_reservation = db_session.get(ReservationRequest, first.json()["id"])
+    assert first_reservation is not None
+    assert first_reservation.primary_user_id == primary_guest.id
+    occupant = db_session.scalar(
+        select(ReservationOccupant).where(
+            ReservationOccupant.reservation_request_id == first_reservation.id
+        )
+    )
+    assert occupant is not None
+    assert occupant.guest_user_id == additional_guest.id
+
+    for reservation_id in (first.json()["id"], second.json()["id"]):
+        approved = client.patch(
+            f"/api/v1/reservations/{reservation_id}/status",
+            headers=headers,
+            json={"status": "APPROVED"},
+        )
+        assert approved.status_code == 200, approved.text
+
+    first_conversion = client.post(
+        f"/api/v1/reservations/{first.json()['id']}/convert",
+        headers=headers,
+        json={"unitId": units[0].id},
+    )
+    assert first_conversion.status_code == 200, first_conversion.text
+    stay = db_session.get(StayRecord, first_conversion.json()["stayRecordId"])
+    assert stay is not None
+    stay_occupant = db_session.scalar(
+        select(StayOccupant).where(StayOccupant.stay_record_id == stay.id)
+    )
+    assert stay_occupant is not None
+    assert stay_occupant.guest_user_id == additional_guest.id
+
+    second_conversion = client.post(
+        f"/api/v1/reservations/{second.json()['id']}/convert",
+        headers=headers,
+        json={"unitId": units[1].id},
+    )
+    assert second_conversion.status_code == 409, second_conversion.text
+    assert second_conversion.json()["error"]["code"] == "GUEST_ALREADY_ASSIGNED"
+
+
+def test_staff_cannot_add_guest_accounts_to_hostel_or_duplicate_them(client, db_session):
+    headers = _admin_headers(db_session)
+    suffix = uuid4().hex[:8]
+    prop = Property(
+        code=f"HOST-{suffix.upper()}",
+        name="Lead Reservation Hostel",
+        type="HOSTEL_COED",
+        status="ACTIVE",
+    )
+    db_session.add(prop)
+    hostel_guest = User(
+        email=f"hosteler-{suffix}@example.com",
+        phone=f"+1666{uuid4().int % 10000000:07d}",
+        full_name="Hostel Lead Guest",
+        password_hash="unused",
+        role=Role.CUSTOMER,
+        status="ACTIVE",
+        customer_persona=CustomerPersona.HOSTELER.value,
+    )
+    additional_guest = User(
+        email=f"additional-{suffix}@example.com",
+        phone=f"+1777{uuid4().int % 10000000:07d}",
+        full_name="Additional Hotel Guest",
+        password_hash="unused",
+        role=Role.CUSTOMER,
+        status="ACTIVE",
+        customer_persona=CustomerPersona.HOTEL_GUEST.value,
+        id_document_type="PASSPORT",
+        id_document_number_encrypted=process_id_document(f"HOST-{suffix}")[0],
+    )
+    db_session.add_all([prop, hostel_guest, additional_guest])
+    db_session.commit()
+
+    hostel_payload = _reservation_payload(prop.id)
+    hostel_payload.update(
+        {
+            "primaryGuestUserId": hostel_guest.id,
+            "guestUserIds": [additional_guest.id],
+            "guestName": hostel_guest.full_name,
+            "mobile": hostel_guest.phone,
+            "requestedType": "BED",
+            "requestedSharingType": "SINGLE",
+            "numberOfAdults": 2,
+            "occupants": [],
+        }
+    )
+    hostel_response = client.post(
+        "/api/v1/reservations", headers=headers, json=hostel_payload
+    )
+    assert hostel_response.status_code == 400, hostel_response.text
+    assert hostel_response.json()["error"]["code"] == "HOSTEL_SINGLE_OCCUPANT_PER_BED"
+
+    hotel = db_session.scalar(select(Property).where(Property.code == "HQ-01"))
+    assert hotel is not None
+    duplicate_payload = _reservation_payload(hotel.id)
+    duplicate_payload.update(
+        {
+            "primaryGuestUserId": hostel_guest.id,
+            "guestUserIds": [hostel_guest.id, hostel_guest.id],
+            "numberOfAdults": 3,
+            "occupants": [],
+        }
+    )
+    duplicate_response = client.post(
+        "/api/v1/reservations", headers=headers, json=duplicate_payload
+    )
+    assert duplicate_response.status_code == 422, duplicate_response.text
 
 
 def test_reservation_can_defer_actual_occupant_details(client, db_session):

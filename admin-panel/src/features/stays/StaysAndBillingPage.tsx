@@ -1,19 +1,21 @@
 import React, { useState } from 'react';
+import { RefreshCw } from 'lucide-react';
 import { useAuth } from '../../lib/auth-context';
 import { PropertyLedgerPage } from '../properties/PropertyLedgerPage';
 import { ActiveStaysBoard } from './ActiveStaysBoard';
-import { DeskCheckIn } from './DeskCheckIn';
 
 const hostelPropertyTypes = ['HOSTEL_BOYS', 'HOSTEL_GIRLS', 'HOSTEL_COED', 'CO_LIVING'];
 type StaysBillingTab = 'stays' | 'billing';
-type DeskCheckInSource = 'stays' | 'billing';
+
+interface ActiveStayCounts {
+  activeGuests: number;
+  activeHostelers: number;
+}
 
 export const StaysAndBillingPage: React.FC = () => {
   const [activeTab, setActiveTab] = useState<StaysBillingTab>('stays');
-  const [deskCheckInOpen, setDeskCheckInOpen] = useState(false);
-  const [deskCheckInSource, setDeskCheckInSource] = useState<DeskCheckInSource>('stays');
-  const [ledgerRefreshSignal, setLedgerRefreshSignal] = useState(0);
-  const [staysRefreshSignal, setStaysRefreshSignal] = useState(0);
+  const [refreshSignal, setRefreshSignal] = useState(0);
+  const [activeStayCounts, setActiveStayCounts] = useState<ActiveStayCounts | null>(null);
   const { properties, selectedPropertyId, user } = useAuth();
   const selectedProperty = properties.find(
     (property) => property.id === selectedPropertyId,
@@ -30,96 +32,111 @@ export const StaysAndBillingPage: React.FC = () => {
     : showLedger && isHostelScope
       ? 'billing'
       : 'stays';
-  const openDeskCheckIn = (source: DeskCheckInSource) => {
-    setDeskCheckInSource(source);
-    setDeskCheckInOpen(true);
-  };
-  const completeDeskCheckIn = () => {
-    if (deskCheckInSource === 'billing') {
-      setLedgerRefreshSignal((signal) => signal + 1);
-    } else {
-      setStaysRefreshSignal((signal) => signal + 1);
-    }
-  };
+  const totalActiveOccupants = activeStayCounts
+    ? activeStayCounts.activeGuests + activeStayCounts.activeHostelers
+    : '—';
 
   return (
     <div className="space-y-6">
+      <header className="flex flex-wrap items-end justify-between gap-3 border-b border-slate-200 pb-4 dark:border-slate-800">
+        <h1 className="text-xl font-bold uppercase tracking-wide">Stays &amp; Billing</h1>
+        <button
+          type="button"
+          onClick={() => setRefreshSignal((signal) => signal + 1)}
+          className="inline-flex items-center gap-2 border border-slate-300 px-3 py-2 text-xs font-bold hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800"
+        >
+          <RefreshCw className="h-4 w-4" /> Refresh
+        </button>
+      </header>
+
+      {isAllProperties && (
+        <section className="grid gap-3 sm:grid-cols-3" aria-label="All-property active guest summary">
+          <article className="border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+            <p className="text-xs font-semibold text-slate-500">Current active guests</p>
+            <p className="mt-2 text-2xl font-bold">{activeStayCounts?.activeGuests ?? '—'}</p>
+          </article>
+          <article className="border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+            <p className="text-xs font-semibold text-slate-500">Current active hostelers</p>
+            <p className="mt-2 text-2xl font-bold">{activeStayCounts?.activeHostelers ?? '—'}</p>
+          </article>
+          <article className="border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+            <p className="text-xs font-semibold text-slate-500">Total active guests and hostelers</p>
+            <p className="mt-2 text-2xl font-bold">{totalActiveOccupants}</p>
+          </article>
+        </section>
+      )}
+
       {showTabs && (
+        <div role="tablist" aria-label="Stays and billing sections" className="flex flex-wrap items-center gap-1.5">
+          <button
+            type="button"
+            role="tab"
+            id="billing-counter-tab"
+            aria-selected={activeTab === 'stays'}
+            aria-controls="billing-counter-panel"
+            onClick={() => setActiveTab('stays')}
+            className={`border px-2.5 py-1 text-xs font-mono ${
+              activeTab === 'stays'
+                ? 'border-slate-900 bg-slate-900 text-white dark:border-blue-600 dark:bg-blue-600'
+                : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300'
+            }`}
+          >
+            Billing Counter
+          </button>
+          <button
+            type="button"
+            role="tab"
+            id="billing-tab"
+            aria-selected={activeTab === 'billing'}
+            aria-controls="billing-panel"
+            onClick={() => setActiveTab('billing')}
+            className={`border px-2.5 py-1 text-xs font-mono ${
+              activeTab === 'billing'
+                ? 'border-slate-900 bg-slate-900 text-white dark:border-blue-600 dark:bg-blue-600'
+                : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300'
+            }`}
+          >
+            Fee Ledger
+          </button>
+        </div>
+      )}
+
+      {showTabs ? (
         <>
-          <header className="border-b border-slate-200 pb-4 dark:border-slate-800">
-            <h1 className="text-xl font-bold uppercase tracking-wide">Stays &amp; Billing</h1>
-          </header>
-          <div role="tablist" aria-label="Stays and billing sections" className="flex border-b border-slate-200 dark:border-slate-800">
-            <button
-              type="button"
-              role="tab"
-              id="active-stays-tab"
-              aria-selected={activeTab === 'stays'}
-              aria-controls="active-stays-panel"
-              onClick={() => setActiveTab('stays')}
-              className={`border-b-2 px-4 py-2 text-sm font-bold ${
-                activeTab === 'stays'
-                  ? 'border-blue-600 text-blue-700 dark:text-blue-300'
-                  : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
-              }`}
-            >
-              Active Stays
-            </button>
-              <button
-                type="button"
-                role="tab"
-                id="billing-tab"
-                aria-selected={activeTab === 'billing'}
-                aria-controls="billing-panel"
-                onClick={() => setActiveTab('billing')}
-                className={`border-b-2 px-4 py-2 text-sm font-bold ${
-                  activeTab === 'billing'
-                    ? 'border-blue-600 text-blue-700 dark:text-blue-300'
-                    : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
-                }`}
-              >
-                Fee Ledger
-              </button>
-            </div>
+          <section
+            role="tabpanel"
+            id="billing-counter-panel"
+            aria-labelledby="billing-counter-tab"
+            hidden={activeTab !== 'stays'}
+          >
+            <ActiveStaysBoard
+              refreshSignal={refreshSignal}
+              showSummaryCards={false}
+              onActiveStayCountsChange={setActiveStayCounts}
+            />
+          </section>
+          <section
+            role="tabpanel"
+            id="billing-panel"
+            aria-labelledby="billing-tab"
+            hidden={activeTab !== 'billing'}
+          >
+            <PropertyLedgerPage refreshSignal={refreshSignal} showSummaryCards={false} />
+          </section>
+        </>
+      ) : (
+        <>
+          {visibleTab === 'stays' && showStays && (
+            <ActiveStaysBoard
+              refreshSignal={refreshSignal}
+              onActiveStayCountsChange={setActiveStayCounts}
+            />
+          )}
+          {visibleTab === 'billing' && showLedger && (
+            <PropertyLedgerPage refreshSignal={refreshSignal} />
+          )}
         </>
       )}
-      {visibleTab === 'stays' && showStays && (
-        showTabs ? (
-            <section role="tabpanel" id="active-stays-panel" aria-labelledby="active-stays-tab">
-              <ActiveStaysBoard
-                onDeskCheckIn={() => openDeskCheckIn('stays')}
-                refreshSignal={staysRefreshSignal}
-              />
-            </section>
-        ) : (
-            <ActiveStaysBoard
-              onDeskCheckIn={() => openDeskCheckIn('stays')}
-              refreshSignal={staysRefreshSignal}
-            />
-        )
-      )}
-      {visibleTab === 'billing' && showLedger && (
-        showTabs ? (
-            <section role="tabpanel" id="billing-panel" aria-labelledby="billing-tab">
-              <PropertyLedgerPage
-                onDeskCheckIn={() => openDeskCheckIn('billing')}
-                refreshSignal={ledgerRefreshSignal}
-              />
-            </section>
-        ) : (
-            <PropertyLedgerPage
-              onDeskCheckIn={() => openDeskCheckIn('billing')}
-              refreshSignal={ledgerRefreshSignal}
-            />
-        )
-      )}
-      <DeskCheckIn
-        open={deskCheckInOpen}
-        propertyId={selectedPropertyId && selectedPropertyId !== 'ALL' ? selectedPropertyId : undefined}
-        propertyTypes={deskCheckInSource === 'billing' ? hostelPropertyTypes : undefined}
-        onClose={() => setDeskCheckInOpen(false)}
-        onAssigned={completeDeskCheckIn}
-      />
     </div>
   );
 };

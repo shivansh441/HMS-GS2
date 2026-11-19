@@ -9,6 +9,7 @@ import { PropertyInventory } from '../features/properties/PropertyInventory';
 import { AdminSecurity } from '../features/security/AdminSecurity';
 import { AuditLogs } from '../features/security/AuditLogs';
 import { ReservationsBoard } from '../features/reservations/ReservationsBoard';
+import { ReservationHistoryPage } from '../features/reservations/ReservationHistoryPage';
 import { StaysAndBillingPage } from '../features/stays/StaysAndBillingPage';
 import { StaffPayrollBoard } from '../features/staff/StaffPayrollBoard';
 import { AdminMessPage } from '../features/mess/AdminMessPage';
@@ -429,6 +430,14 @@ export const App: React.FC = () => {
                 element={
                   <RequirePermission permission="VIEW_RESERVATIONS">
                     <ReservationsBoard />
+                  </RequirePermission>
+                }
+              />
+              <Route
+                path="/admin/reservations/history"
+                element={
+                  <RequirePermission permission="VIEW_RESERVATIONS">
+                    <ReservationHistoryPage />
                   </RequirePermission>
                 }
               />

@@ -81,8 +81,16 @@ export const PropertyLedger: React.FC<{
   propertyName: string;
   currency: string;
   canRecordUtilities: boolean;
+  showSummaryCards?: boolean;
   onRegisterRefresh: (propertyId: string, refresh: () => Promise<void>) => () => void;
-}> = ({ propertyId, propertyName, currency, canRecordUtilities, onRegisterRefresh }) => {
+}> = ({
+  propertyId,
+  propertyName,
+  currency,
+  canRecordUtilities,
+  showSummaryCards = true,
+  onRegisterRefresh,
+}) => {
   const [utilityMonth, setUtilityMonth] = useState(previousMonthString(new Date()));
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [utilityFees, setUtilityFees] = useState<ConfiguredUtilityFee[]>([]);
@@ -228,7 +236,7 @@ export const PropertyLedger: React.FC<{
       {errorMessage && <div role="alert" className="border border-red-300 bg-red-50 p-3 text-sm text-red-800">{errorMessage}</div>}
       {successMessage && <div role="status" className="border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-800">{successMessage}</div>}
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      {showSummaryCards && <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <article className="border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
           <div className="flex items-center justify-between text-xs font-semibold text-slate-500"><span>Active hostelers</span><BedDouble className="h-4 w-4" /></div>
           <p className="mt-2 text-2xl font-bold">{assignments.length}</p>
@@ -245,7 +253,7 @@ export const PropertyLedger: React.FC<{
           <div className="flex items-center justify-between text-xs font-semibold text-slate-500"><span>Outstanding balance</span><Wallet className="h-4 w-4" /></div>
           <p className="mt-2 text-xl font-bold">{formatCurrency(totalBalance, currency)}</p>
         </article>
-      </div>
+      </div>}
 
       <div className="overflow-x-auto border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
         <table className="w-full min-w-[1250px] text-left text-xs">

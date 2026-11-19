@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AxiosError } from 'axios';
 import { useParams } from 'react-router-dom';
-import { RefreshCw, UserRoundPlus } from 'lucide-react';
 import { useAuth } from '../../lib/auth-context';
 import { apiClient } from '../../lib/api';
 import { LoadingIndicator } from '../../components/ui/LoadingIndicator';
@@ -24,18 +23,17 @@ function getErrorMessage(error: unknown) {
 const hostelTypes = ['HOSTEL_BOYS', 'HOSTEL_GIRLS', 'HOSTEL_COED', 'CO_LIVING'];
 
 interface PropertyLedgerPageProps {
-  onDeskCheckIn?: () => void;
   refreshSignal?: number;
+  showSummaryCards?: boolean;
 }
 
 export const PropertyLedgerPage: React.FC<PropertyLedgerPageProps> = ({
-  onDeskCheckIn,
   refreshSignal = 0,
+  showSummaryCards = true,
 }) => {
   const { propertyId } = useParams<{ propertyId: string }>();
   const { properties, selectedPropertyId, user } = useAuth();
   const refreshers = useRef(new Map<string, () => Promise<void>>());
-  const [refreshing, setRefreshing] = useState(false);
   const canViewLedger = user?.role === 'ADMIN'
     || (user?.role === 'STAFF' && user.staffRole === 'FRONT_DESK');
   const activePropertyId = propertyId
@@ -55,12 +53,7 @@ export const PropertyLedgerPage: React.FC<PropertyLedgerPageProps> = ({
   );
 
   const refreshLedgers = useCallback(async () => {
-    setRefreshing(true);
-    try {
-      await Promise.all([...refreshers.current.values()].map((refresh) => refresh()));
-    } finally {
-      setRefreshing(false);
-    }
+    await Promise.all([...refreshers.current.values()].map((refresh) => refresh()));
   }, []);
 
   useEffect(() => {
@@ -107,34 +100,6 @@ export const PropertyLedgerPage: React.FC<PropertyLedgerPageProps> = ({
 
   return (
     <div className="space-y-5">
-      <header className="flex flex-wrap items-end justify-between gap-3 border-b border-slate-200 pb-4 dark:border-slate-800">
-        <div>
-          <h1 className="text-xl font-bold uppercase tracking-wide">
-            Fee ledger
-          </h1>
-          <p className="mt-1 text-xs text-slate-500">Manage hostel bills, payments, and utility readings.</p>
-        </div>
-        <div className="flex gap-2">
-          {onDeskCheckIn && (
-            <button
-              type="button"
-              onClick={onDeskCheckIn}
-              className="inline-flex items-center gap-2 bg-blue-700 px-3 py-2 text-xs font-bold text-white hover:bg-blue-800"
-            >
-              <UserRoundPlus className="h-4 w-4" /> Desk walk-in
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={() => void refreshLedgers()}
-            disabled={refreshing || loading || ledgerProperties.length === 0}
-            className="inline-flex items-center gap-2 border border-slate-300 px-3 py-2 text-xs font-bold dark:border-slate-700 disabled:opacity-60"
-          >
-            <RefreshCw className="h-3.5 w-3.5" /> Refresh
-          </button>
-        </div>
-      </header>
-
       {errorMessage && (
         <div role="alert" className="border border-red-300 bg-red-50 p-3 text-sm text-red-800">
           {errorMessage}
@@ -161,6 +126,7 @@ export const PropertyLedgerPage: React.FC<PropertyLedgerPageProps> = ({
             propertyName={item.name}
             currency={item.currency}
             canRecordUtilities={user?.role === 'ADMIN' || (user?.role === 'STAFF' && user.staffRole === 'FRONT_DESK')}
+            showSummaryCards={showSummaryCards}
             onRegisterRefresh={registerRefresh}
           />
         </section>

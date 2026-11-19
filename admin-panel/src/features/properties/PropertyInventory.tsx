@@ -5,7 +5,7 @@ import { useAuth } from '../../lib/auth-context';
 import { apiClient } from '../../lib/api';
 import { LoadingIndicator } from '../../components/ui/LoadingIndicator';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
-import { DeskCheckIn } from '../stays/DeskCheckIn';
+import { GuestStayEntryForm } from '../stays/GuestStayEntryForm';
 import { Property } from '../../types';
 
 interface InventoryBed {
@@ -214,7 +214,7 @@ export const PropertyInventory: React.FC = () => {
   const [isCreating, setIsCreating] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
-  const [deskOpen, setDeskOpen] = useState(false);
+  const [deskWalkInOpen, setDeskWalkInOpen] = useState(false);
   const [activeAssignments, setActiveAssignments] = useState<StayAssignment[]>([]);
   const [scheduledAssignments, setScheduledAssignments] = useState<StayAssignment[]>([]);
   const [deskDepositAmount, setDeskDepositAmount] = useState('0');
@@ -516,6 +516,20 @@ export const PropertyInventory: React.FC = () => {
     );
   }
 
+  if (deskWalkInOpen) {
+    return (
+      <GuestStayEntryForm
+        mode="checkin"
+        propertyId={activePropertyId || undefined}
+        onCancel={() => setDeskWalkInOpen(false)}
+        onComplete={async () => {
+          setSuccessMessage('Walk-in stay assigned with the standard rate or agreed desk rate.');
+          await loadInventory();
+        }}
+      />
+    );
+  }
+
   if (loading) {
     return <LoadingIndicator label="Loading property inventory" className="p-8" />;
   }
@@ -570,11 +584,26 @@ export const PropertyInventory: React.FC = () => {
 
     return (
       <div className="space-y-5">
-        <header className="border-b border-slate-200 pb-4 dark:border-slate-800">
-          <h1 className="text-xl font-bold uppercase tracking-wide">All properties unit inventory</h1>
-          <p className="mt-1 text-xs text-slate-500">
-            Inventory across {allPropertyInventories.length} accessible properties.
-          </p>
+        <header className="flex flex-wrap items-end justify-between gap-3 border-b border-slate-200 pb-4 dark:border-slate-800">
+          <div>
+            <h1 className="text-xl font-bold uppercase tracking-wide">All properties unit inventory</h1>
+            <p className="mt-1 text-xs text-slate-500">
+              Inventory across {allPropertyInventories.length} accessible properties.
+            </p>
+          </div>
+          {canDeskCheckIn && (
+            <button
+              type="button"
+              onClick={() => {
+                setErrorMessage('');
+                setSuccessMessage('');
+                setDeskWalkInOpen(true);
+              }}
+              className="inline-flex items-center gap-2 border border-blue-700 px-3 py-2 text-xs font-bold uppercase text-blue-700 hover:bg-blue-50 dark:text-blue-300"
+            >
+              <UserRoundPlus className="h-4 w-4" /> Desk walk-in
+            </button>
+          )}
         </header>
 
         <section className="grid gap-3 sm:grid-cols-3" aria-label="All property inventory summary">
@@ -778,7 +807,7 @@ export const PropertyInventory: React.FC = () => {
               <button type="button" onClick={() => {
                 setErrorMessage('');
                 setSuccessMessage('');
-                setDeskOpen(true);
+                setDeskWalkInOpen(true);
               }} className="inline-flex items-center gap-2 border border-blue-700 px-3 py-2 text-xs font-bold uppercase text-blue-700 hover:bg-blue-50 dark:text-blue-300">
                 <UserRoundPlus className="h-4 w-4" /> Desk walk-in
               </button>
@@ -1191,15 +1220,6 @@ export const PropertyInventory: React.FC = () => {
         ))}
       </section>}
 
-      <DeskCheckIn
-        open={deskOpen}
-        propertyId={property?.id}
-        onClose={() => setDeskOpen(false)}
-        onAssigned={async () => {
-          setSuccessMessage('Walk-in stay assigned with the standard rate or agreed desk rate.');
-          await loadInventory();
-        }}
-      />
       {roomChangeAssignment && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <form onSubmit={scheduleRoomChange} className="w-full max-w-lg space-y-4 bg-white p-5 dark:bg-slate-800">

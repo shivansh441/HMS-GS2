@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { AxiosError } from 'axios';
-import { BedDouble, CircleDollarSign, DoorOpen, LogIn, LogOut, RefreshCw } from 'lucide-react';
+import { BedDouble, CircleDollarSign, LogIn, LogOut } from 'lucide-react';
 import { useAuth } from '../../lib/auth-context';
 import { apiClient } from '../../lib/api';
 import { LoadingIndicator } from '../../components/ui/LoadingIndicator';
@@ -31,6 +31,8 @@ interface StayAssignment {
   unitCategory: string;
   currency: string;
   persona: string | null;
+  guestCount?: number;
+  additionalGuestNames?: string[];
   stayRecordId: string | null;
 }
 
@@ -39,6 +41,17 @@ interface StaySummary {
   amountCollectedToday: Array<{ currency: string; amount: number | string }>;
   checkInsToday: number;
   checkOutsToday: number;
+}
+
+interface ActiveStayCounts {
+  activeGuests: number;
+  activeHostelers: number;
+}
+
+interface ActiveStaysBoardProps {
+  refreshSignal?: number;
+  showSummaryCards?: boolean;
+  onActiveStayCountsChange?: (counts: ActiveStayCounts) => void;
 }
 
 function getErrorMessage(error: unknown) {
@@ -54,16 +67,14 @@ function formatCurrency(value: number | string, currency: string) {
   return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(Number(value));
 }
 
-interface ActiveStaysBoardProps {
-  onDeskCheckIn?: () => void;
-  refreshSignal?: number;
-}
+const hostelPropertyTypes = new Set(['HOSTEL_BOYS', 'HOSTEL_GIRLS', 'HOSTEL_COED', 'CO_LIVING']);
 
 export const ActiveStaysBoard: React.FC<ActiveStaysBoardProps> = ({
-  onDeskCheckIn,
   refreshSignal = 0,
+  showSummaryCards = true,
+  onActiveStayCountsChange,
 }) => {
-  const { selectedPropertyId } = useAuth();
+  const { properties, selectedPropertyId } = useAuth();
   const [stays, setStays] = useState<StayAssignment[]>([]);
   const [summary, setSummary] = useState<StaySummary>({
     totalActiveStays: 0,
@@ -80,21 +91,38 @@ export const ActiveStaysBoard: React.FC<ActiveStaysBoardProps> = ({
     setLoading(true);
     setErrorMessage('');
     try {
-      const params = selectedPropertyId && selectedPropertyId !== 'ALL'
+      const propertyParams = selectedPropertyId && selectedPropertyId !== 'ALL'
         ? { propertyId: selectedPropertyId }
         : {};
+      const activeStayParams = selectedPropertyId === 'ALL'
+        ? { includeHostelers: true }
+        : propertyParams;
       const [staysResponse, summaryResponse] = await Promise.all([
-        apiClient.get<StayAssignment[]>('/stay/assignments/active', { params }),
-        apiClient.get<StaySummary>('/stay/assignments/summary', { params }),
+        apiClient.get<StayAssignment[]>('/stay/assignments/active', { params: activeStayParams }),
+        apiClient.get<StaySummary>('/stay/assignments/summary', { params: propertyParams }),
       ]);
-      setStays(staysResponse.data);
+      const propertyById = new Map(properties.map((property) => [property.id, property]));
+      const activeGuests = staysResponse.data.reduce((total, stay) => {
+        return propertyById.get(stay.propertyId)?.type === 'HOTEL'
+          ? total + Math.max(stay.guestCount || 1, (stay.additionalGuestNames?.length || 0) + 1)
+          : total;
+      }, 0);
+      const activeHostelers = staysResponse.data.filter((stay) =>
+        hostelPropertyTypes.has(propertyById.get(stay.propertyId)?.type || ''),
+      ).length;
+      onActiveStayCountsChange?.({ activeGuests, activeHostelers });
+      setStays(selectedPropertyId === 'ALL'
+        ? staysResponse.data.filter((stay) =>
+          propertyById.get(stay.propertyId)?.type === 'HOTEL',
+        )
+        : staysResponse.data);
       setSummary(summaryResponse.data);
     } catch (error: unknown) {
       setErrorMessage(getErrorMessage(error));
     } finally {
       setLoading(false);
     }
-  }, [selectedPropertyId]);
+  }, [onActiveStayCountsChange, properties, selectedPropertyId]);
 
   useEffect(() => {
     void loadStays();
@@ -129,24 +157,10 @@ export const ActiveStaysBoard: React.FC<ActiveStaysBoardProps> = ({
 
   return (
     <section className="space-y-5">
-      <header className="flex flex-wrap items-end justify-between gap-3 border-b border-slate-200 pb-4 dark:border-slate-800">
-        <div>
-          <h1 className="text-xl font-bold uppercase tracking-wide">Active stays</h1>
-          <p className="mt-1 text-xs text-slate-500">Manage checked-in guests and front-desk walk-ins.</p>
-        </div>
-        <div className="flex gap-2">
-          <button type="button" onClick={onDeskCheckIn} className="inline-flex items-center gap-2 bg-blue-700 px-3 py-2 text-xs font-bold text-white hover:bg-blue-800">
-            <DoorOpen className="h-4 w-4" /> Walk-in check-in
-          </button>
-          <button type="button" onClick={() => void loadStays()} disabled={loading} className="inline-flex items-center gap-2 border border-slate-300 px-3 py-2 text-xs font-bold dark:border-slate-700">
-            <RefreshCw className="h-4 w-4" /> Refresh
-          </button>
-        </div>
-      </header>
       {errorMessage && <div role="alert" className="border border-red-300 bg-red-50 p-3 text-sm text-red-800">{errorMessage}</div>}
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      {showSummaryCards && <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <article className="border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
-          <div className="flex items-center justify-between text-xs font-semibold text-slate-500"><span>Total active stays</span><BedDouble className="h-4 w-4" /></div>
+          <div className="flex items-center justify-between text-xs font-semibold text-slate-500"><span>Active room assignments</span><BedDouble className="h-4 w-4" /></div>
           <p className="mt-2 text-2xl font-bold">{summary.totalActiveStays}</p>
         </article>
         <article className="border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
@@ -165,7 +179,7 @@ export const ActiveStaysBoard: React.FC<ActiveStaysBoardProps> = ({
           <div className="flex items-center justify-between text-xs font-semibold text-slate-500"><span>Check-outs today</span><LogOut className="h-4 w-4" /></div>
           <p className="mt-2 text-2xl font-bold">{summary.checkOutsToday}</p>
         </article>
-      </div>
+      </div>}
       <div className="overflow-x-auto border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
         <table className="w-full min-w-[1000px] text-left text-xs">
           <thead className="bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500 dark:bg-slate-800">
@@ -190,8 +204,8 @@ export const ActiveStaysBoard: React.FC<ActiveStaysBoardProps> = ({
                 </td>
               </tr>
             ))}
-            {!loading && stays.length === 0 && <tr><td className="p-8 text-center text-slate-500" colSpan={7}>No active stays in this property scope.</td></tr>}
-            {loading && <tr><td className="p-8 text-center text-slate-500" colSpan={7}><LoadingIndicator label="Loading active stays" /></td></tr>}
+            {!loading && stays.length === 0 && <tr><td className="p-8 text-center text-slate-500" colSpan={7}>No active guests in this property scope.</td></tr>}
+            {loading && <tr><td className="p-8 text-center text-slate-500" colSpan={7}><LoadingIndicator label="Loading Billing Counter" /></td></tr>}
           </tbody>
         </table>
       </div>
