@@ -16,6 +16,7 @@ from app.core.scoping import ScopedQuery
 from app.core.security import generate_one_time_token, hash_password
 from app.db.models import (
     CustomerPersona,
+    CustomerOccupantProfile,
     CustomerPropertyLink,
     MfaRecoveryCode,
     Property,
@@ -30,6 +31,13 @@ from app.modules.audit.service import write_audit_log
 from app.modules.auth.deps import get_current_admin_user, get_property_scope
 from app.modules.auth.schemas import GovernmentIdType, UserResponse
 from app.modules.auth.service import revoke_all_user_sessions
+from app.modules.customer.occupant_service import (
+    create_or_update_occupant_profile,
+    get_or_create_guest_account,
+    stay_occupant_from_profile,
+    sync_profile_from_stay_occupant,
+    sync_profile_from_stay_occupant,
+)
 from app.modules.notifier.service import notifier
 
 users_router = APIRouter(prefix="/admin/users", tags=["Admin Users"])
@@ -56,8 +64,8 @@ class AdditionalGuestPayload(BaseModel):
     full_name: str = Field(alias="fullName", min_length=1, max_length=128)
     date_of_birth: date = Field(alias="dateOfBirth")
     gender: str | None = Field(default=None, max_length=16)
-    email: EmailStr | None = None
-    phone: str | None = Field(default=None, max_length=32)
+    email: EmailStr
+    phone: str = Field(min_length=5, max_length=32)
     permanent_address: str | None = Field(
         default=None, alias="permanentAddress", max_length=512
     )
@@ -70,6 +78,12 @@ class AdditionalGuestPayload(BaseModel):
     def validate_date_of_birth(self):
         if self.date_of_birth > date.today():
             raise ValueError("Date of birth cannot be in the future")
+        return self
+
+    @model_validator(mode="after")
+    def validate_contacts(self):
+        if not self.email or not self.phone.strip():
+            raise ValueError("Each guest must provide an email and phone number")
         return self
 
 
@@ -127,14 +141,13 @@ class UserCreateRequest(BaseModel):
         if self.date_of_birth > date.today():
             raise ValueError("Date of birth cannot be in the future")
         is_hotel_guest = self.customer_persona == CustomerPersona.HOTEL_GUEST
-        is_hostel_guest = self.customer_persona in (
-            CustomerPersona.HOSTEL_GUEST,
-            CustomerPersona.HOSTELER,
-        )
+        is_hosteler = self.customer_persona == CustomerPersona.HOSTELER
         if self.role == Role.CUSTOMER and is_hotel_guest:
             if self.guest_count < len(self.additional_guests) + 1:
                 raise ValueError("Guest count cannot be less than the listed occupants")
-        if self.role == Role.CUSTOMER and is_hostel_guest:
+        if self.role == Role.CUSTOMER and (
+            is_hosteler or self.customer_persona == CustomerPersona.TEMP_CUSTOMER
+        ):
             if self.guest_count != 1 or self.additional_guests:
                 raise ValueError("Additional occupants are only supported for hotel guests")
         elif self.role != Role.CUSTOMER or not is_hotel_guest:
@@ -176,8 +189,30 @@ class UserUpdateRequest(BaseModel):
         return self
 
 
+class RepeatStayRegistrationRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, str_strip_whitespace=True)
+
+    property_id: str = Field(alias="propertyId", min_length=1, max_length=36)
+    start_date: date = Field(alias="startDate")
+    end_date: date | None = Field(default=None, alias="endDate")
+    guest_count: int = Field(alias="guestCount", ge=1, le=100)
+    additional_guests: list[AdditionalGuestPayload] = Field(
+        default_factory=list, alias="additionalGuests", max_length=99
+    )
+
+    @model_validator(mode="after")
+    def validate_stay(self):
+        if self.end_date and self.end_date <= self.start_date:
+            raise ValueError("Stay end date must be after the start date")
+        if self.guest_count < len(self.additional_guests) + 1:
+            raise ValueError("Guest count cannot be less than the listed occupants")
+        return self
+
+
 class ManagedStayOccupantResponse(BaseModel):
     id: str
+    guest_user_id: str | None = Field(default=None, alias="guestUserId")
+    profile_id: str | None = Field(default=None, alias="profileId")
     full_name: str = Field(alias="fullName")
     date_of_birth: date | None = Field(alias="dateOfBirth")
     gender: str | None
@@ -187,7 +222,7 @@ class ManagedStayOccupantResponse(BaseModel):
     id_document_type: str = Field(alias="idDocumentType")
     id_document_last4: str = Field(alias="idDocumentLast4")
 
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
 
 class ManagedStayResponse(BaseModel):
@@ -213,8 +248,23 @@ class ManagedUserResponse(UserResponse):
     initial_stay: ManagedStayResponse | None = Field(default=None, alias="initialStay")
 
 
+class ManagedOccupantProfileResponse(BaseModel):
+    id: str
+    full_name: str = Field(alias="fullName")
+    date_of_birth: date | None = Field(alias="dateOfBirth")
+    age: int | None
+    gender: str | None
+    email: str | None
+    phone: str | None
+    permanent_address: str | None = Field(alias="permanentAddress")
+    id_document_type: str = Field(alias="idDocumentType")
+    id_document_last4: str = Field(alias="idDocumentLast4")
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+
 class UserCreatedResponse(ManagedUserResponse):
-    activation_url: str = Field(alias="activationUrl")
+    initial_password: str | None = Field(default=None, alias="initialPassword")
 
 
 def _require_admin(admin_user: User) -> None:
@@ -296,6 +346,8 @@ def _managed_user_response(
                 additionalGuests=[
                     ManagedStayOccupantResponse(
                         id=occupant.id,
+                        profileId=occupant.profile_id,
+                        guestUserId=occupant.guest_user_id,
                         fullName=occupant.full_name,
                         dateOfBirth=occupant.date_of_birth,
                         gender=occupant.gender,
@@ -338,11 +390,23 @@ def _validate_customer_fields(
     )
     if role == Role.CUSTOMER:
         if persona is None:
-            raise BadRequestError("Customer accounts require a guest subtype")
+            raise BadRequestError("Customer accounts require a customer type")
+        if persona == CustomerPersona.TEMP_CUSTOMER:
+            if initial_stay_property_id or stay_start_date or stay_end_date:
+                raise BadRequestError(
+                    "Temporary customers cannot have initial stay details"
+                )
+            return
         if not initial_stay_property_id or not stay_start_date:
-            raise BadRequestError("Guest accounts require an initial stay property and start date")
+            raise BadRequestError("Customer accounts require an initial stay property and start date")
         if stay_end_date and stay_end_date < stay_start_date:
             raise BadRequestError("Stay end date cannot be before its start date")
+        if (
+            persona == CustomerPersona.HOSTELER
+            and stay_end_date
+            and (stay_end_date - stay_start_date).days == 1
+        ):
+            raise BadRequestError("Hostel stays cannot be booked for exactly one night")
     elif any(value is not None for value in customer_fields):
         raise BadRequestError("Guest subtype and stay details are only valid for customer accounts")
 
@@ -481,7 +545,7 @@ def list_users(
     "",
     response_model=UserCreatedResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Create an invited admin, staff, or customer account",
+    summary="Create an admin, staff, or customer account",
 )
 def create_user(
     payload: UserCreateRequest,
@@ -512,12 +576,21 @@ def create_user(
     property_ids = list(payload.property_ids)
     if (
         payload.role == Role.CUSTOMER
+        and payload.customer_persona == CustomerPersona.TEMP_CUSTOMER
+        and property_ids
+    ):
+        raise BadRequestError("Temporary customer accounts cannot be assigned to properties")
+    if (
+        payload.role == Role.CUSTOMER
         and payload.initial_stay_property_id
         and payload.initial_stay_property_id not in property_ids
     ):
         property_ids.append(payload.initial_stay_property_id)
     properties = _validate_property_assignments(db, payload.role, property_ids)
-    if payload.role == Role.CUSTOMER:
+    if (
+        payload.role == Role.CUSTOMER
+        and payload.customer_persona != CustomerPersona.TEMP_CUSTOMER
+    ):
         _validate_guest_property_type(
             db,
             payload.customer_persona,
@@ -525,6 +598,9 @@ def create_user(
         )
 
     encrypted_id = process_id_document(payload.id_document_number) if payload.id_document_number else None
+    initial_password = (
+        secrets.token_urlsafe(24) if payload.role == Role.CUSTOMER else None
+    )
     user = User(
         email=email,
         full_name=payload.full_name,
@@ -535,7 +611,9 @@ def create_user(
         id_document_number_encrypted=encrypted_id[0] if encrypted_id else None,
         id_document_last4=encrypted_id[1] if encrypted_id else None,
         id_document_lookup_hash=encrypted_id[2] if encrypted_id else None,
-        password_hash=hash_password(secrets.token_urlsafe(48)),
+        password_hash=hash_password(
+            initial_password or secrets.token_urlsafe(48)
+        ),
         role=payload.role,
         staff_role=payload.staff_role.value if payload.staff_role else None,
         customer_persona=payload.customer_persona.value if payload.customer_persona else None,
@@ -543,7 +621,11 @@ def create_user(
         permanent_address=payload.permanent_address,
         occupation=payload.occupation,
         created_by_id=admin_user.id,
-        status=UserStatus.PENDING_ACTIVATION,
+        status=(
+            UserStatus.ACTIVE
+            if payload.role == Role.CUSTOMER
+            else UserStatus.PENDING_ACTIVATION
+        ),
     )
     db.add(user)
     db.flush()
@@ -560,7 +642,10 @@ def create_user(
                 )
             )
 
-    if payload.role == Role.CUSTOMER:
+    if (
+        payload.role == Role.CUSTOMER
+        and payload.customer_persona != CustomerPersona.TEMP_CUSTOMER
+    ):
         stay = StayRecord(
             user_id=user.id,
             property_id=payload.initial_stay_property_id,
@@ -572,23 +657,38 @@ def create_user(
         db.add(stay)
         db.flush()
         for guest in payload.additional_guests:
-            encrypted_guest_id = process_id_document(guest.id_document_number)
-            db.add(
-                StayOccupant(
-                    stay_record_id=stay.id,
-                    full_name=guest.full_name,
-                    date_of_birth=guest.date_of_birth,
-                    gender=guest.gender,
-                    email=str(guest.email) if guest.email else None,
-                    phone=guest.phone,
-                    permanent_address=guest.permanent_address,
-                    id_document_type=guest.id_document_type,
-                    id_document_number_encrypted=encrypted_guest_id[0],
-                    id_document_last4=encrypted_guest_id[1],
-                )
+            profile = create_or_update_occupant_profile(
+                db,
+                user.id,
+                full_name=guest.full_name,
+                date_of_birth=guest.date_of_birth,
+                age=None,
+                gender=guest.gender,
+                email=str(guest.email) if guest.email else None,
+                phone=guest.phone,
+                permanent_address=guest.permanent_address,
+                id_document_type=guest.id_document_type,
+                id_document_number=guest.id_document_number,
             )
+            guest_user = get_or_create_guest_account(
+                db,
+                full_name=guest.full_name,
+                email=str(guest.email),
+                phone=guest.phone,
+                date_of_birth=guest.date_of_birth,
+                gender=guest.gender,
+                permanent_address=guest.permanent_address,
+                id_document_type=guest.id_document_type,
+                id_document_number=guest.id_document_number,
+                property_id=payload.initial_stay_property_id,
+            )
+            db.add(stay_occupant_from_profile(profile, stay, guest_user.id))
 
-    activation_url = _create_activation_invite(db, user)
+    activation_url = (
+        _create_activation_invite(db, user)
+        if payload.role != Role.CUSTOMER
+        else None
+    )
     write_audit_log(
         db,
         action="USER_CREATED",
@@ -606,6 +706,7 @@ def create_user(
     db.refresh(user)
     return UserCreatedResponse(
         **_managed_user_response(db, user, activation_url).model_dump(by_alias=True),
+        initialPassword=initial_password,
     )
 
 
@@ -621,6 +722,29 @@ def get_user_detail(
 ):
     user = ScopedQuery.get_scoped_user(db, admin_user, user_id)
     return _managed_user_response(db, user)
+
+
+@users_router.get(
+    "/{user_id}/occupants",
+    response_model=list[ManagedOccupantProfileResponse],
+)
+def list_user_occupant_profiles(
+    user_id: str,
+    admin_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db),
+):
+    user = ScopedQuery.get_scoped_user(db, admin_user, user_id)
+    if user.role != Role.CUSTOMER:
+        raise NotFoundError("Customer account not found")
+    profiles = db.scalars(
+        select(CustomerOccupantProfile)
+        .where(CustomerOccupantProfile.owner_user_id == user.id)
+        .order_by(CustomerOccupantProfile.full_name, CustomerOccupantProfile.id)
+    ).all()
+    return [
+        ManagedOccupantProfileResponse.model_validate(profile)
+        for profile in profiles
+    ]
 
 
 @users_router.patch(
@@ -656,11 +780,7 @@ def update_user(
 
     latest_stay = _latest_stay_record(db, target.id) if target.role == Role.CUSTOMER else None
     if "guest_count" in fields:
-        effective_persona = (
-            payload.customer_persona.value
-            if "customer_persona" in fields and payload.customer_persona
-            else latest_stay.persona if latest_stay else None
-        )
+        effective_persona = latest_stay.persona if latest_stay else None
         if (
             target.role != Role.CUSTOMER
             or latest_stay is None
@@ -677,11 +797,7 @@ def update_user(
             raise BadRequestError("Guest count cannot be less than the listed occupants")
         latest_stay.guest_count = payload.guest_count
     if "additional_guests" in fields:
-        effective_persona = (
-            payload.customer_persona.value
-            if "customer_persona" in fields and payload.customer_persona
-            else latest_stay.persona if latest_stay else None
-        )
+        effective_persona = latest_stay.persona if latest_stay else None
         if (
             target.role != Role.CUSTOMER
             or latest_stay is None
@@ -710,6 +826,11 @@ def update_user(
             document_type = guest.id_document_type or (
                 occupant.id_document_type if occupant else None
             )
+            if occupant is None and (not guest.email or not guest.phone):
+                raise BadRequestError(
+                    "Each new guest must provide an email and phone number",
+                    code="GUEST_CONTACT_REQUIRED",
+                )
             if occupant is None:
                 if (
                     guest.date_of_birth is None
@@ -749,18 +870,37 @@ def update_user(
             occupant.email = str(guest.email) if guest.email else None
             occupant.phone = guest.phone
             occupant.permanent_address = guest.permanent_address
+            sync_profile_from_stay_occupant(
+                db,
+                target.id,
+                occupant,
+                guest.id_document_number,
+                latest_stay.property_id,
+            )
             updated_occupants.append(occupant)
 
         latest_stay.additional_guests = updated_occupants
+    update_customer_persona = target.role == Role.CUSTOMER and "customer_persona" in fields
     update_stay = target.role == Role.CUSTOMER and bool(
-        fields
-        & {
-            "customer_persona",
-            "initial_stay_property_id",
-            "stay_start_date",
-            "stay_end_date",
-        }
+        fields & {"initial_stay_property_id", "stay_start_date", "stay_end_date"}
     )
+    if update_customer_persona and payload.customer_persona is None:
+        raise BadRequestError("Customer accounts require a customer type")
+    current_persona = (
+        CustomerPersona(target.customer_persona)
+        if target.customer_persona
+        else None
+    )
+    persona = (
+        payload.customer_persona
+        if update_customer_persona
+        else current_persona
+    )
+    is_temporary_customer = persona == CustomerPersona.TEMP_CUSTOMER
+    if is_temporary_customer and "property_ids" in fields:
+        raise BadRequestError(
+            "Temporary customer accounts cannot be assigned to properties"
+        )
     property_ids = (
         list(payload.property_ids or [])
         if "property_ids" in fields
@@ -774,16 +914,21 @@ def update_user(
     if target.role == Role.CUSTOMER and stay_property_id and stay_property_id not in property_ids:
         property_ids.append(stay_property_id)
 
-    if update_stay:
-        try:
-            current_persona = CustomerPersona(target.customer_persona) if target.customer_persona else None
-        except ValueError:
-            current_persona = None
-        persona = (
-            payload.customer_persona
-            if "customer_persona" in fields
-            else current_persona
+    if target.role == Role.CUSTOMER and is_temporary_customer:
+        _validate_customer_fields(
+            Role.CUSTOMER,
+            persona,
+            payload.emergency_contact_phone
+            if "emergency_contact_phone" in fields
+            else target.emergency_contact_phone,
+            payload.occupation if "occupation" in fields else target.occupation,
+            payload.initial_stay_property_id
+            if "initial_stay_property_id" in fields
+            else None,
+            payload.stay_start_date if "stay_start_date" in fields else None,
+            payload.stay_end_date if "stay_end_date" in fields else None,
         )
+    elif update_stay or update_customer_persona:
         stay_start_date = (
             payload.stay_start_date
             if "stay_start_date" in fields
@@ -906,11 +1051,17 @@ def update_user(
         if field in fields:
             setattr(target, field, getattr(payload, field))
 
-    if update_stay:
+    if update_customer_persona:
         target.customer_persona = persona.value
+    if update_stay and not is_temporary_customer:
         if latest_stay:
             latest_stay.property_id = stay_property_id
-            latest_stay.persona = persona.value
+            stay_property = db.get(Property, stay_property_id)
+            latest_stay.persona = (
+                CustomerPersona.HOTEL_GUEST.value
+                if stay_property and stay_property.type == "HOTEL"
+                else CustomerPersona.HOSTELER.value
+            )
             latest_stay.start_date = stay_start_date
             latest_stay.end_date = stay_end_date
         else:
@@ -939,6 +1090,127 @@ def update_user(
     db.commit()
     db.refresh(target)
     return _managed_user_response(db, target, activation_url)
+
+
+@users_router.post(
+    "/{user_id}/stays",
+    response_model=ManagedStayResponse,
+    status_code=201,
+)
+def register_customer_stay(
+    user_id: str,
+    payload: RepeatStayRegistrationRequest,
+    request: Request,
+    admin_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db),
+):
+    _require_admin(admin_user)
+    target = _get_target_user_for_mutation(db, admin_user, user_id)
+    if (
+        target.role != Role.CUSTOMER
+        or target.customer_persona != CustomerPersona.HOTEL_GUEST.value
+    ):
+        raise BadRequestError(
+            "Repeat stays can only be registered for hotel guest accounts",
+            code="INVALID_GUEST_TYPE",
+        )
+    property_record = db.get(Property, payload.property_id)
+    if (
+        not property_record
+        or property_record.is_deleted
+        or property_record.status != "ACTIVE"
+        or property_record.type != "HOTEL"
+    ):
+        raise BadRequestError(
+            "Repeat guest stays must be registered at an active hotel",
+            code="INVALID_GUEST_PROPERTY",
+        )
+
+    stay = StayRecord(
+        user_id=target.id,
+        property_id=property_record.id,
+        persona=CustomerPersona.HOTEL_GUEST.value,
+        start_date=payload.start_date,
+        end_date=payload.end_date,
+        guest_count=payload.guest_count,
+    )
+    db.add(stay)
+    if not db.scalar(
+        select(CustomerPropertyLink.id).where(
+            CustomerPropertyLink.user_id == target.id,
+            CustomerPropertyLink.property_id == property_record.id,
+        )
+    ):
+        db.add(
+            CustomerPropertyLink(
+                user_id=target.id,
+                property_id=property_record.id,
+                source="MANUAL",
+            )
+        )
+    db.flush()
+    occupants: list[StayOccupant] = []
+    for guest in payload.additional_guests:
+        profile = create_or_update_occupant_profile(
+            db,
+            target.id,
+            full_name=guest.full_name,
+            date_of_birth=guest.date_of_birth,
+            age=None,
+            gender=guest.gender,
+            email=str(guest.email),
+            phone=guest.phone,
+            permanent_address=guest.permanent_address,
+            id_document_type=guest.id_document_type,
+            id_document_number=guest.id_document_number,
+        )
+        guest_user = get_or_create_guest_account(
+            db,
+            full_name=guest.full_name,
+            email=str(guest.email),
+            phone=guest.phone,
+            date_of_birth=guest.date_of_birth,
+            gender=guest.gender,
+            permanent_address=guest.permanent_address,
+            id_document_type=guest.id_document_type,
+            id_document_number=guest.id_document_number,
+            property_id=property_record.id,
+        )
+        if guest_user.id == target.id:
+            raise BadRequestError(
+                "The main guest cannot also be listed as an additional guest",
+                code="DUPLICATE_STAY_OCCUPANT",
+            )
+        occupant = stay_occupant_from_profile(profile, stay, guest_user.id)
+        db.add(occupant)
+        occupants.append(occupant)
+
+    write_audit_log(
+        db,
+        action="CUSTOMER_REPEAT_STAY_REGISTERED",
+        actor_user_id=admin_user.id,
+        target_user_id=target.id,
+        property_id=property_record.id,
+        details={
+            "stayStartDate": payload.start_date.isoformat(),
+            "guestCount": payload.guest_count,
+            "additionalOccupantCount": len(occupants),
+        },
+        ip=get_client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+    )
+    db.commit()
+    db.refresh(stay)
+    return ManagedStayResponse(
+        propertyId=stay.property_id,
+        startDate=stay.start_date,
+        endDate=stay.end_date,
+        guestCount=stay.guest_count,
+        additionalGuests=[
+            ManagedStayOccupantResponse.model_validate(occupant)
+            for occupant in occupants
+        ],
+    )
 
 
 @users_router.post(

@@ -165,6 +165,12 @@ class StayRoomChangeRequest(InventoryRequest):
 class StayAssignmentCreateRequest(InventoryRequest):
     unit_id: str = Field(alias="unitId", min_length=1, max_length=36)
     user_id: str = Field(alias="userId", min_length=1, max_length=36)
+    occupant_profile_ids: list[str] = Field(
+        default_factory=list, alias="occupantProfileIds", max_length=99
+    )
+    guest_user_ids: list[str] = Field(
+        default_factory=list, alias="guestUserIds", max_length=99
+    )
     reservation_id: str | None = Field(default=None, alias="reservationId", max_length=36)
     expected_check_in: datetime = Field(alias="expectedCheckIn")
     expected_check_out: datetime | None = Field(default=None, alias="expectedCheckOut")
@@ -201,6 +207,12 @@ class StayAssignmentCreateRequest(InventoryRequest):
 
 
 class StayCheckInRequest(InventoryRequest):
+    occupant_profile_ids: list[str] = Field(
+        default_factory=list, alias="occupantProfileIds", max_length=99
+    )
+    guest_user_ids: list[str] = Field(
+        default_factory=list, alias="guestUserIds", max_length=99
+    )
     deposit_payment_amount: Decimal = Field(
         default=Decimal("0"),
         alias="depositPaymentAmount",
@@ -321,14 +333,42 @@ class StayAssignmentResponse(BaseModel):
     unit_number: str | None = Field(default=None, alias="unitNumber")
     unit_type: str | None = Field(default=None, alias="unitType")
     unit_category: str | None = Field(default=None, alias="unitCategory")
+    currency: str
+    bill_to_collect: Decimal = Field(
+        default=Decimal("0.00"), alias="billToCollect"
+    )
+    guest_count: int = Field(default=1, alias="guestCount")
+    additional_guest_names: list[str] = Field(
+        default_factory=list, alias="additionalGuestNames"
+    )
+    occupant_user_ids: list[str] = Field(
+        default_factory=list, alias="occupantUserIds"
+    )
     persona: str | None = None
     stay_record_id: str | None = Field(default=None, alias="stayRecordId")
 
 
+class StayCollectedAmountResponse(BaseModel):
+    currency: str
+    amount: Decimal
+
+
+class StayAssignmentSummaryResponse(BaseModel):
+    total_active_stays: int = Field(alias="totalActiveStays")
+    amount_collected_today: list[StayCollectedAmountResponse] = Field(
+        alias="amountCollectedToday"
+    )
+    check_ins_today: int = Field(alias="checkInsToday")
+    check_outs_today: int = Field(alias="checkOutsToday")
+
+
 class StayOccupantUpdate(InventoryRequest):
     id: str | None = None
+    profile_id: str | None = Field(default=None, alias="profileId")
+    guest_user_id: str | None = Field(default=None, alias="guestUserId")
     full_name: str = Field(alias="fullName", min_length=1, max_length=128)
     date_of_birth: date | None = Field(default=None, alias="dateOfBirth")
+    age: int | None = Field(default=None, ge=0, le=130)
     gender: str | None = Field(default=None, max_length=16)
     email: str | None = Field(default=None, max_length=255)
     phone: str | None = Field(default=None, max_length=32)
@@ -341,6 +381,8 @@ class StayOccupantResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     id: str
+    guest_user_id: str | None = Field(default=None, alias="guestUserId")
+    profile_id: str | None = Field(default=None, alias="profileId")
     full_name: str = Field(alias="fullName")
     date_of_birth: date | None = Field(alias="dateOfBirth")
     gender: str | None

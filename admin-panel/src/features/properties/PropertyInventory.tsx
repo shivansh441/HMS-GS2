@@ -5,7 +5,8 @@ import { useAuth } from '../../lib/auth-context';
 import { apiClient } from '../../lib/api';
 import { LoadingIndicator } from '../../components/ui/LoadingIndicator';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
-import { Property, User, UserListResponse } from '../../types';
+import { DeskCheckIn } from '../stays/DeskCheckIn';
+import { Property } from '../../types';
 
 interface InventoryBed {
   id: string;
@@ -67,6 +68,8 @@ interface StayAssignment {
   guestName: string | null;
   guestEmail: string | null;
   unitNumber: string | null;
+  guestCount: number;
+  additionalGuestNames: string[];
 }
 
 type RoomCapacityType = 'SINGLE' | 'DOUBLE' | 'TRIPLE' | 'QUAD' | 'DORM';
@@ -126,7 +129,7 @@ function getRoomStatusClass(status: string): string {
   if (status === 'PARTIAL') {
     return 'bg-amber-50 text-amber-700 ring-amber-600/20 dark:bg-amber-900/30 dark:text-amber-300';
   }
-  if (status === 'OCCUPIED') {
+  if (status === 'UNAVAILABLE') {
     return 'bg-rose-50 text-rose-700 ring-rose-600/20 dark:bg-rose-900/30 dark:text-rose-300';
   }
   return 'bg-slate-100 text-slate-700 ring-slate-500/20 dark:bg-slate-700 dark:text-slate-300';
@@ -171,6 +174,14 @@ function getAssignmentRateLabel(assignment: StayAssignment, room: InventoryRoom,
   );
 }
 
+function getAssignmentPeopleCount(assignment: StayAssignment): number {
+  return Math.max(assignment.guestCount || 1, assignment.additionalGuestNames.length + 1);
+}
+
+function getRoomPeopleCount(assignments: StayAssignment[]): number {
+  return assignments.reduce((total, assignment) => total + getAssignmentPeopleCount(assignment), 0);
+}
+
 function getErrorMessage(error: unknown) {
   const axiosError = error as AxiosError<{ error?: { message?: string } }>;
   return axiosError.response?.data?.error?.message || axiosError.message || 'Unable to load inventory.';
@@ -191,7 +202,7 @@ export const PropertyInventory: React.FC = () => {
     }>
   >([]);
   const [inventoryPropertyFilter, setInventoryPropertyFilter] = useState('ALL');
-  const [occupancyFilter, setOccupancyFilter] = useState<'ALL' | 'VACANT' | 'PARTIAL' | 'FULL'>('ALL');
+  const [occupancyFilter, setOccupancyFilter] = useState<'ALL' | 'VACANT' | 'PARTIAL' | 'UNAVAILABLE'>('ALL');
   const [floorFilter, setFloorFilter] = useState<number | 'ALL'>('ALL');
   const [roomCapacityFilter, setRoomCapacityFilter] = useState<RoomCapacityFilter>('ALL');
   const [form, setForm] = useState<InventoryForm>(emptyForm);
@@ -204,19 +215,10 @@ export const PropertyInventory: React.FC = () => {
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
   const [deskOpen, setDeskOpen] = useState(false);
-  const [deskUserId, setDeskUserId] = useState('');
-  const [deskCustomers, setDeskCustomers] = useState<User[]>([]);
-  const [deskOptionsLoading, setDeskOptionsLoading] = useState(false);
-  const [deskOptionsError, setDeskOptionsError] = useState('');
   const [activeAssignments, setActiveAssignments] = useState<StayAssignment[]>([]);
   const [scheduledAssignments, setScheduledAssignments] = useState<StayAssignment[]>([]);
-  const [deskUnitId, setDeskUnitId] = useState('');
-  const [deskCheckIn, setDeskCheckIn] = useState(new Date().toISOString().slice(0, 10));
-  const [deskRate, setDeskRate] = useState('');
-  const [deskRateOverrideReason, setDeskRateOverrideReason] = useState('');
   const [deskDepositAmount, setDeskDepositAmount] = useState('0');
   const [deskDepositMethod, setDeskDepositMethod] = useState('CASH');
-  const [deskSaving, setDeskSaving] = useState(false);
   const [roomChangeAssignment, setRoomChangeAssignment] = useState<StayAssignment | null>(null);
   const [roomChangeUnitId, setRoomChangeUnitId] = useState('');
   const [roomChangeSaving, setRoomChangeSaving] = useState(false);
@@ -238,10 +240,10 @@ export const PropertyInventory: React.FC = () => {
     (counts, room) => {
       if (room.status === 'AVAILABLE') counts.vacant += 1;
       else if (room.status === 'PARTIAL') counts.partial += 1;
-      else if (room.status === 'OCCUPIED') counts.full += 1;
+      else if (room.status === 'UNAVAILABLE') counts.unavailable += 1;
       return counts;
     },
-    { vacant: 0, partial: 0, full: 0 },
+    { vacant: 0, partial: 0, unavailable: 0 },
   ), [rooms]);
   const filteredFloors = useMemo(
     () => floors
@@ -252,7 +254,7 @@ export const PropertyInventory: React.FC = () => {
           const matchesOccupancy = occupancyFilter === 'ALL'
             || (occupancyFilter === 'VACANT' && room.status === 'AVAILABLE')
             || (occupancyFilter === 'PARTIAL' && room.status === 'PARTIAL')
-            || (occupancyFilter === 'FULL' && room.status === 'OCCUPIED');
+            || (occupancyFilter === 'UNAVAILABLE' && room.status === 'UNAVAILABLE');
           const matchesCapacity = roomCapacityFilter === 'ALL'
             || getRoomCapacityType(room.capacity) === roomCapacityFilter;
           return matchesOccupancy && matchesCapacity;
@@ -284,7 +286,7 @@ export const PropertyInventory: React.FC = () => {
         apiClient.get<{ floors: InventoryFloor[] }>(`/properties/${encodeURIComponent(activePropertyId)}/units/matrix`),
         apiClient.get<PropertyFeeConfig[]>(`/properties/${encodeURIComponent(activePropertyId)}/fees`),
         canDeskCheckIn
-          ? apiClient.get<StayAssignment[]>(`/stay/assignments/active?propertyId=${encodeURIComponent(activePropertyId)}`)
+          ? apiClient.get<StayAssignment[]>(`/stay/assignments/active?propertyId=${encodeURIComponent(activePropertyId)}&includeHostelers=true`)
           : Promise.resolve({ data: [] as StayAssignment[] }),
         canDeskCheckIn
           ? apiClient.get<StayAssignment[]>(`/stay/assignments/scheduled?propertyId=${encodeURIComponent(activePropertyId)}`)
@@ -318,7 +320,7 @@ export const PropertyInventory: React.FC = () => {
                 `/properties/${encodeURIComponent(availableProperty.id)}/units/matrix`,
               ),
               canDeskCheckIn
-                ? apiClient.get<StayAssignment[]>(`/stay/assignments/active?propertyId=${encodeURIComponent(availableProperty.id)}`)
+                ? apiClient.get<StayAssignment[]>(`/stay/assignments/active?propertyId=${encodeURIComponent(availableProperty.id)}&includeHostelers=true`)
                 : Promise.resolve({ data: [] as StayAssignment[] }),
               canDeskCheckIn
                 ? apiClient.get<StayAssignment[]>(`/stay/assignments/scheduled?propertyId=${encodeURIComponent(availableProperty.id)}`)
@@ -350,45 +352,6 @@ export const PropertyInventory: React.FC = () => {
       setLoading(false);
     }
   }, [activePropertyId, allPropertiesSelected, properties]);
-
-  useEffect(() => {
-    if (!deskOpen) return;
-    let active = true;
-    const loadDeskOptions = async () => {
-      setDeskOptionsLoading(true);
-      setDeskOptionsError('');
-      try {
-        const [firstPage, assignmentsResponse] = await Promise.all([
-          apiClient.get<UserListResponse>('/admin/users?role=CUSTOMER&limit=100&offset=0'),
-          apiClient.get<StayAssignment[]>(`/stay/assignments/active?propertyId=${encodeURIComponent(activePropertyId)}`),
-        ]);
-        const customers = [...firstPage.data.items];
-        for (let offset = customers.length; offset < firstPage.data.total; offset += 100) {
-          const response = await apiClient.get<UserListResponse>(
-            `/admin/users?role=CUSTOMER&limit=100&offset=${offset}`,
-          );
-          customers.push(...response.data.items);
-        }
-        if (active) {
-          const assignedUserIds = new Set(assignmentsResponse.data.map((assignment) => assignment.userId));
-          setDeskCustomers(customers.filter(
-            (customer) => customer.role === 'CUSTOMER'
-              && customer.status === 'ACTIVE'
-              && !assignedUserIds.has(customer.id),
-          ));
-          setActiveAssignments(assignmentsResponse.data);
-        }
-      } catch (error: unknown) {
-        if (active) setDeskOptionsError(getErrorMessage(error));
-      } finally {
-        if (active) setDeskOptionsLoading(false);
-      }
-    };
-    void loadDeskOptions();
-    return () => {
-      active = false;
-    };
-  }, [deskOpen, activePropertyId]);
 
   const createUnit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -489,8 +452,12 @@ export const PropertyInventory: React.FC = () => {
       setRoomChangeUnitId('');
       setSuccessMessage(
         roomChangeUnitId
-          ? 'Room change scheduled for the next calendar month. The new room is reserved.'
-          : 'Deassignment scheduled for the end of this month.',
+          ? isHotel
+            ? 'Room change scheduled for one day from now. The whole party will move together.'
+            : 'Room change scheduled for the next calendar month. The new room is reserved.'
+          : isHotel
+            ? 'Checkout scheduled for one day from now.'
+            : 'Deassignment scheduled for the end of this month.',
       );
       await loadInventory();
     } catch (error: unknown) {
@@ -529,54 +496,9 @@ export const PropertyInventory: React.FC = () => {
     }
   };
 
-  const createDeskAssignment = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!property) return;
-    setDeskSaving(true);
-    setErrorMessage('');
-    setSuccessMessage('');
-    try {
-      const depositConfig = property.feeConfigs.find(
-        (fee) => fee.feeType === 'SECURITY_DEPOSIT' && fee.isActive,
-      );
-      await apiClient.post('/stay/assignments', {
-        unitId: deskUnitId,
-        userId: deskUserId.trim(),
-        expectedCheckIn: `${deskCheckIn}T12:00:00Z`,
-        billingStrategy: isHostel ? 'RECURRING_MONTHLY' : 'PER_NIGHT_STAY',
-        ...(deskRate ? { agreedRate: deskRate } : {}),
-        ...(deskRateOverrideReason.trim()
-          ? { rateOverrideReason: deskRateOverrideReason.trim() }
-          : {}),
-        ...(depositConfig ? {
-          depositPaymentAmount: deskDepositAmount,
-          depositPaymentMethod: deskDepositMethod,
-        } : {}),
-      });
-      setDeskOpen(false);
-      setDeskUserId('');
-      setDeskUnitId('');
-      setDeskRate('');
-      setDeskRateOverrideReason('');
-      setSuccessMessage('Walk-in stay assigned with the standard rate or agreed desk rate.');
-      await loadInventory();
-    } catch (error: unknown) {
-      setErrorMessage(getErrorMessage(error));
-    } finally {
-      setDeskSaving(false);
-    }
-  };
-
   const availableDeskUnits = rooms.flatMap((room) => (
     isHostel ? room.beds.filter((bed) => bed.status === 'AVAILABLE') : [room]
   )).filter((unit) => unit.status === 'AVAILABLE');
-  const selectedDeskUnit = availableDeskUnits.find((unit) => unit.id === deskUnitId);
-  const deskHasRateOverride = Boolean(
-    selectedDeskUnit &&
-    deskRate !== '' &&
-    (isHostel ? selectedDeskUnit.baseRateMonthly : selectedDeskUnit.defaultPricePerNight) != null &&
-    Number(deskRate) !== Number(isHostel ? selectedDeskUnit.baseRateMonthly : selectedDeskUnit.defaultPricePerNight),
-  );
 
   if (!activePropertyId && !allPropertiesSelected) {
     return (
@@ -630,6 +552,14 @@ export const PropertyInventory: React.FC = () => {
       (inventoryPropertyFilter === 'ALL' || inventoryProperty.id === inventoryPropertyFilter)
       && !inventoryRooms.some(({ property: roomProperty }) => roomProperty.id === inventoryProperty.id),
     );
+    const selectedInventoryProperty = allPropertyInventories.find(
+      ({ property: inventoryProperty }) => inventoryProperty.id === inventoryPropertyFilter,
+    )?.property;
+    const occupancyHeader = inventoryPropertyFilter === 'ALL'
+      ? 'People / beds / capacity'
+      : selectedInventoryProperty?.type === 'HOTEL'
+        ? 'Person / capacity'
+        : 'Bed / capacity';
     if (errorMessage) {
       return (
         <div role="alert" className="border border-red-300 bg-red-50 p-4 text-sm text-red-800">
@@ -705,7 +635,7 @@ export const PropertyInventory: React.FC = () => {
             No rooms match the selected property.
           </p>
         ) : (
-          <div className="overflow-x-auto border border-slate-300 bg-white dark:border-slate-700 dark:bg-slate-800">
+          <div className="overflow-visible border border-slate-300 bg-white dark:border-slate-700 dark:bg-slate-800">
             <table className="w-full border-collapse text-left text-xs">
               <thead>
                 <tr className="border-b border-slate-300 bg-slate-100 font-mono text-[11px] uppercase tracking-wider text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
@@ -716,7 +646,7 @@ export const PropertyInventory: React.FC = () => {
                   <th className="px-3 py-2.5 font-semibold">Room type</th>
                   <th className="px-3 py-2.5 font-semibold">Actual rate of room</th>
                   <th className="px-3 py-2.5 font-semibold">Assigned to</th>
-                  <th className="px-3 py-2.5 font-semibold">Bed / capacity</th>
+                  <th className="px-3 py-2.5 font-semibold">{occupancyHeader}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200 font-mono dark:divide-slate-700">
@@ -726,6 +656,7 @@ export const PropertyInventory: React.FC = () => {
                 ? room.beds.filter((bed) => bed.status === 'OCCUPIED').length
                 : Math.min(assignments.filter((assignment) => assignment.status === 'CHECKED_IN').length, room.capacity);
               const totalBeds = room.beds.length || room.capacity;
+              const peopleStaying = getRoomPeopleCount(assignments);
               return (
               <tr key={`${inventoryProperty.id}-${room.id}`} className="bg-white hover:bg-slate-50 dark:bg-slate-800 dark:hover:bg-slate-750">
                 {inventoryPropertyFilter === 'ALL' && (
@@ -760,7 +691,9 @@ export const PropertyInventory: React.FC = () => {
                     <details className="group relative">
                       <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 text-blue-700 hover:text-blue-900 dark:text-blue-300">
                         <span>
-                          {assignments.length} assigned
+                          {isPropertyHotel
+                            ? `${peopleStaying} ${peopleStaying === 1 ? 'person' : 'people'} staying`
+                            : `${assignments.length} assigned`}
                           {roomScheduledAssignments.length > 0 && ` · ${roomScheduledAssignments.length} scheduled`}
                         </span>
                         <ChevronDown className="h-3.5 w-3.5 transition-transform group-open:rotate-180" />
@@ -771,6 +704,11 @@ export const PropertyInventory: React.FC = () => {
                             <span className="block font-sans font-medium text-slate-900 dark:text-white">
                               {assignment.guestName || assignment.guestEmail || 'Guest'}
                             </span>
+                            {assignment.additionalGuestNames.map((name, index) => (
+                              <span key={`${assignment.id}-occupant-${index}`} className="block font-sans text-[11px] text-slate-600 dark:text-slate-300">
+                                {name}
+                              </span>
+                            ))}
                             {assignment.unitNumber && <span className="text-[10px] text-slate-500">{assignment.unitNumber}</span>}
                             <span className="mt-1 block text-[10px] text-slate-600 dark:text-slate-300">
                               Actual rate: {getAssignmentRateLabel(assignment, room, inventoryProperty.currency)}
@@ -794,7 +732,9 @@ export const PropertyInventory: React.FC = () => {
                     </details>
                   )}
                 </td>
-                <td className="px-3 py-2.5 text-slate-700 dark:text-slate-300">{filledBeds}/{totalBeds}</td>
+                <td className="px-3 py-2.5 text-slate-700 dark:text-slate-300">
+                  {isPropertyHotel ? peopleStaying : filledBeds}/{isPropertyHotel ? room.capacity : totalBeds}
+                </td>
               </tr>
             );})}
             {propertiesWithoutRooms.map(({ property: inventoryProperty }) => (
@@ -836,15 +776,8 @@ export const PropertyInventory: React.FC = () => {
           <div className="flex flex-wrap gap-2">
             {canDeskCheckIn && (
               <button type="button" onClick={() => {
-                const deposit = property.feeConfigs.find(
-                  (fee) => fee.feeType === 'SECURITY_DEPOSIT' && fee.isActive,
-                );
-                setDeskUserId('');
-                setDeskUnitId('');
-                setDeskOptionsError('');
-                setDeskDepositAmount(String(deposit?.amount ?? '0'));
-                setDeskRate('');
-                setDeskRateOverrideReason('');
+                setErrorMessage('');
+                setSuccessMessage('');
                 setDeskOpen(true);
               }} className="inline-flex items-center gap-2 border border-blue-700 px-3 py-2 text-xs font-bold uppercase text-blue-700 hover:bg-blue-50 dark:text-blue-300">
                 <UserRoundPlus className="h-4 w-4" /> Desk walk-in
@@ -1049,7 +982,7 @@ export const PropertyInventory: React.FC = () => {
               <option value="ALL">Occupancy</option>
               <option value="VACANT">Vacant ({occupancyCounts.vacant})</option>
               <option value="PARTIAL">Partially filled ({occupancyCounts.partial})</option>
-              <option value="FULL">Fully filled ({occupancyCounts.full})</option>
+              <option value="UNAVAILABLE">Unavailable ({occupancyCounts.unavailable})</option>
             </select>
             <label className="sr-only" htmlFor="inventory-floor-filter">Filter rooms by floor</label>
             <select
@@ -1091,7 +1024,7 @@ export const PropertyInventory: React.FC = () => {
           </p>
         ) : visibleFloors.map((floor) => (
           <div key={floor.floorNumber} className="space-y-3">
-            <div className="overflow-x-auto border border-slate-300 bg-white dark:border-slate-700 dark:bg-slate-800">
+            <div className="overflow-visible border border-slate-300 bg-white dark:border-slate-700 dark:bg-slate-800">
               <table className="w-full border-collapse text-left text-xs">
                 <thead>
                   <tr className="border-b border-slate-300 bg-slate-100 font-mono text-[11px] uppercase tracking-wider text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
@@ -1101,7 +1034,7 @@ export const PropertyInventory: React.FC = () => {
                     <th className="px-3 py-2.5 font-semibold">Room type</th>
                     <th className="px-3 py-2.5 font-semibold">Actual rate of room</th>
                     <th className="px-3 py-2.5 font-semibold">Assigned to</th>
-                    <th className="px-3 py-2.5 font-semibold">Bed / capacity</th>
+                    <th className="px-3 py-2.5 font-semibold">{isHotel ? 'Person / capacity' : 'Bed / capacity'}</th>
                     {user?.role === 'ADMIN' && <th className="px-3 py-2.5 text-right font-semibold">Actions</th>}
                   </tr>
                 </thead>
@@ -1117,6 +1050,7 @@ export const PropertyInventory: React.FC = () => {
                 ? room.beds.filter((bed) => bed.status === 'OCCUPIED').length
                 : Math.min(roomAssignments.filter((assignment) => assignment.status === 'CHECKED_IN').length, room.capacity);
               const totalBeds = room.beds.length || room.capacity;
+              const peopleStaying = getRoomPeopleCount(roomAssignments);
               return (
                 <tr key={room.id} className="bg-white hover:bg-slate-50 dark:bg-slate-800 dark:hover:bg-slate-750">
                     <td className="whitespace-nowrap px-3 py-2.5 font-sans font-medium text-slate-900 dark:text-white">{room.unitNumber}</td>
@@ -1141,7 +1075,9 @@ export const PropertyInventory: React.FC = () => {
                         <details className="group relative">
                           <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 text-blue-700 hover:text-blue-900 dark:text-blue-300 dark:hover:text-blue-200">
                             <span>
-                              {roomAssignments.length} assigned
+                              {isHotel
+                                ? `${peopleStaying} ${peopleStaying === 1 ? 'person' : 'people'} staying`
+                                : `${roomAssignments.length} assigned`}
                               {roomScheduledAssignments.length > 0 && ` · ${roomScheduledAssignments.length} scheduled`}
                             </span>
                             <ChevronDown className="h-3.5 w-3.5 transition-transform group-open:rotate-180" />
@@ -1153,6 +1089,11 @@ export const PropertyInventory: React.FC = () => {
                                   <span className="block truncate font-sans font-medium text-slate-900 dark:text-white">
                                     {assignment.guestName || assignment.guestEmail || 'Guest'}
                                   </span>
+                                  {assignment.additionalGuestNames.map((name, index) => (
+                                    <span key={`${assignment.id}-occupant-${index}`} className="block truncate font-sans text-[11px] text-slate-600 dark:text-slate-300">
+                                      {name}
+                                    </span>
+                                  ))}
                                   {assignment.unitNumber && <span className="text-[10px] text-slate-500">{assignment.unitNumber}</span>}
                                   <span className="mt-1 block text-[10px] text-slate-600 dark:text-slate-300">
                                     Actual rate: {getAssignmentRateLabel(assignment, room, property.currency)}
@@ -1192,7 +1133,7 @@ export const PropertyInventory: React.FC = () => {
                                     <button
                                       type="button"
                                       disabled={!isEffective}
-                                      title={isEffective ? 'Complete room change' : 'Effective next month'}
+                                      title={isEffective ? 'Complete room change' : isHotel ? 'Effective after one day' : 'Effective next month'}
                                       aria-label={isEffective ? 'Complete room change' : 'Room change pending'}
                                       onClick={() => {
                                         const deposit = property.feeConfigs.find(
@@ -1214,7 +1155,7 @@ export const PropertyInventory: React.FC = () => {
                       )}
                     </td>
                     <td className="whitespace-nowrap px-3 py-2.5 text-slate-700 dark:text-slate-300">
-                      {filledBeds}/{totalBeds}
+                      {isHotel ? peopleStaying : filledBeds}/{isHotel ? room.capacity : totalBeds}
                     </td>
                     {user?.role === 'ADMIN' && (
                       <td className="whitespace-nowrap px-3 py-2.5">
@@ -1250,73 +1191,15 @@ export const PropertyInventory: React.FC = () => {
         ))}
       </section>}
 
-      {deskOpen && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4">
-          <form onSubmit={createDeskAssignment} className="w-full max-w-lg space-y-4 bg-white p-5 dark:bg-slate-800">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="font-bold">Desk walk-in check-in</h2>
-                <p className="text-xs text-slate-500">The agreed rate is stored only on this assignment.</p>
-              </div>
-              <button type="button" onClick={() => setDeskOpen(false)} aria-label="Close walk-in dialog"><X className="h-5 w-5" /></button>
-            </div>
-            <label className="block space-y-1 text-xs font-semibold">
-              Active customer
-              <select required value={deskUserId} onChange={(event) => setDeskUserId(event.target.value)} className={inputClass} disabled={deskOptionsLoading}>
-                <option value="">{deskOptionsLoading ? 'Loading active customers…' : 'Select active customer'}</option>
-                {deskCustomers.map((customer) => (
-                  <option key={customer.id} value={customer.id}>
-                    {customer.full_name || customer.email || customer.id}{customer.email && customer.full_name ? ` · ${customer.email}` : ''}
-                  </option>
-                ))}
-              </select>
-              {deskOptionsError && <span role="alert" className="block text-rose-700">{deskOptionsError}</span>}
-              {!deskOptionsLoading && !deskOptionsError && deskCustomers.length === 0 && (
-                <span className="block text-slate-500">No unassigned active customers are available.</span>
-              )}
-            </label>
-            <label className="block space-y-1 text-xs font-semibold">
-              Available {isHostel ? 'bed' : 'room'}
-              <select required value={deskUnitId} onChange={(event) => {
-                setDeskUnitId(event.target.value);
-                setDeskRateOverrideReason('');
-              }} className={inputClass}>
-                <option value="">Select unit</option>
-                {availableDeskUnits.map((unit) => <option key={unit.id} value={unit.id}>{unit.unitNumber} · {unit.sharingType || unit.category} · {unit.status}</option>)}
-              </select>
-            </label>
-            <label className="block space-y-1 text-xs font-semibold">
-              Check-in date
-              <input required type="date" value={deskCheckIn} onChange={(event) => setDeskCheckIn(event.target.value)} className={inputClass} />
-            </label>
-            <label className="block space-y-1 text-xs font-semibold">
-              Agreed rate override ({property.currency}/{isHostel ? 'month' : 'night'}, optional)
-              <input type="number" min="0.01" step="0.01" value={deskRate} onChange={(event) => setDeskRate(event.target.value)} className={inputClass} />
-            </label>
-            <label className="block space-y-1 text-xs font-semibold">
-              Rate override reason {deskHasRateOverride ? '*' : '(required if different from standard)'}
-              <input required={deskHasRateOverride} maxLength={2000} value={deskRateOverrideReason} onChange={(event) => setDeskRateOverrideReason(event.target.value)} className={inputClass} />
-            </label>
-            {property.feeConfigs.some((fee) => fee.feeType === 'SECURITY_DEPOSIT' && fee.isActive) ? (
-              <>
-                <label className="block space-y-1 text-xs font-semibold">
-                  Security deposit collected upfront ({property.currency})
-                  <input required type="number" min="0.01" step="0.01" value={deskDepositAmount} onChange={(event) => setDeskDepositAmount(event.target.value)} className={inputClass} />
-                </label>
-                <label className="block space-y-1 text-xs font-semibold">
-                  Deposit payment method
-                  <select value={deskDepositMethod} onChange={(event) => setDeskDepositMethod(event.target.value)} className={inputClass}>
-                    <option value="CASH">Cash</option><option value="UPI">UPI</option><option value="CARD">Card</option><option value="BANK_TRANSFER">Bank transfer</option>
-                  </select>
-                </label>
-              </>
-            ) : <p className="text-xs text-slate-500">No security deposit is configured for this property.</p>}
-            <button type="submit" disabled={deskSaving || deskOptionsLoading || deskOptionsError !== '' || deskCustomers.length === 0 || availableDeskUnits.length === 0 || (deskHasRateOverride && !deskRateOverrideReason.trim())} className="w-full bg-blue-700 px-3 py-2 text-sm font-bold text-white disabled:opacity-60">
-              Assign walk-in
-            </button>
-          </form>
-        </div>
-      )}
+      <DeskCheckIn
+        open={deskOpen}
+        propertyId={property?.id}
+        onClose={() => setDeskOpen(false)}
+        onAssigned={async () => {
+          setSuccessMessage('Walk-in stay assigned with the standard rate or agreed desk rate.');
+          await loadInventory();
+        }}
+      />
       {roomChangeAssignment && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <form onSubmit={scheduleRoomChange} className="w-full max-w-lg space-y-4 bg-white p-5 dark:bg-slate-800">
@@ -1324,7 +1207,11 @@ export const PropertyInventory: React.FC = () => {
               <div>
                 <h2 className="font-bold">Change or deassign room</h2>
                 <p className="mt-1 text-xs text-slate-500">
-                  This takes effect next month. The current month&apos;s fees remain unchanged.
+                  {isHotel
+                    ? roomChangeUnitId
+                      ? 'The whole party moves after one day. The current room is charged at its rate for that day; the new room rate applies after the move.'
+                      : 'Checkout is scheduled for one day from now. The current room rate applies through checkout.'
+                    : 'This takes effect next month. The current month’s fees remain unchanged.'}
                 </p>
               </div>
               <button type="button" onClick={() => setRoomChangeAssignment(null)} aria-label="Close room change dialog">
@@ -1335,27 +1222,45 @@ export const PropertyInventory: React.FC = () => {
               {roomChangeAssignment.guestName || roomChangeAssignment.guestEmail || 'Customer'} · {roomChangeAssignment.unitNumber}
             </p>
             <label className="block space-y-1 text-xs font-semibold">
-              New available {isHostel ? 'bed' : 'room'} (leave empty to deassign)
+              New available {isHostel ? 'bed' : 'room'} (leave empty to {isHotel ? 'check out' : 'deassign'})
               <select value={roomChangeUnitId} onChange={(event) => setRoomChangeUnitId(event.target.value)} className={inputClass}>
-                <option value="">Deassign at month end</option>
-                {availableDeskUnits
-                  .filter((unit) => unit.id !== roomChangeAssignment.unitId)
-                  .map((unit) => (
-                    <option key={unit.id} value={unit.id}>
-                      {unit.unitNumber} · {unit.sharingType || unit.category} · {unit.status}
-                    </option>
-                  ))}
+                <option value="">{isHotel ? 'Check out after one day' : 'Deassign at month end'}</option>
+                {isHostel
+                  ? availableDeskUnits
+                    .filter((unit) => unit.id !== roomChangeAssignment.unitId)
+                    .map((unit) => (
+                      <option key={unit.id} value={unit.id}>
+                        {unit.unitNumber} · {unit.sharingType || unit.category} · {unit.status}
+                      </option>
+                    ))
+                  : rooms
+                    .filter((room) => (
+                      room.id !== roomChangeAssignment.unitId
+                      && room.status === 'AVAILABLE'
+                      && (room.type === 'ROOM' || room.type === 'SUITE')
+                      && room.capacity >= getAssignmentPeopleCount(roomChangeAssignment)
+                    ))
+                    .map((room) => (
+                      <option key={room.id} value={room.id}>
+                        {room.unitNumber} · {room.type === 'SUITE' ? 'Suite' : 'Room'}
+                        {' · '}{room.category} · capacity {room.capacity}
+                      </option>
+                    ))}
               </select>
             </label>
             <p className="text-xs text-slate-500">
-              A selected room is reserved now. Its {isHostel ? 'monthly' : 'nightly'} rate begins next month; complete the move/check-in then.
+              {isHotel
+                ? roomChangeUnitId
+                  ? `The selected room is reserved now and must fit all ${getAssignmentPeopleCount(roomChangeAssignment)} occupants. Complete the move after one day; the main guest remains responsible for the bill.`
+                  : 'No replacement room will be reserved. The main guest remains responsible for the bill through checkout.'
+                : `A selected room is reserved now. Its monthly rate begins next month; complete the move/check-in then.`}
             </p>
             <div className="flex justify-end gap-2">
               <button type="button" disabled={roomChangeSaving} onClick={() => setRoomChangeAssignment(null)} className="border border-slate-300 px-3 py-2 text-xs font-bold uppercase dark:border-slate-600">
                 Cancel
               </button>
               <button type="submit" disabled={roomChangeSaving} className="bg-blue-700 px-3 py-2 text-xs font-bold uppercase text-white disabled:opacity-60">
-                {roomChangeSaving ? 'Scheduling…' : roomChangeUnitId ? 'Schedule room change' : 'Schedule deassignment'}
+                {roomChangeSaving ? 'Scheduling…' : roomChangeUnitId ? 'Schedule room change' : isHotel ? 'Schedule checkout' : 'Schedule deassignment'}
               </button>
             </div>
           </form>

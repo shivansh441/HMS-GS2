@@ -4,6 +4,12 @@ import { ManagedUser, UserForm } from './userTypes';
 export const localDateToday = () =>
   new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 
+export const addCalendarDays = (value: string, days: number) => {
+  const date = new Date(`${value}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+};
+
 export const emptyAdditionalGuestForm = () => ({
   fullName: '',
   dateOfBirth: '',
@@ -135,17 +141,6 @@ export const formFromUser = (user: ManagedUser): UserForm => ({
     idDocumentNumber: '',
   })) || [],
 });
-
-export const isPropertyCompatibleWithGuest = (
-  propertyType: string,
-  persona: CustomerPersona | '',
-) => {
-  if (persona === 'HOTEL_GUEST') return propertyType === 'HOTEL';
-  if (persona === 'HOSTEL_GUEST' || persona === 'HOSTELER') {
-    return ['HOSTEL_BOYS', 'HOSTEL_GIRLS', 'HOSTEL_COED', 'CO_LIVING'].includes(propertyType);
-  }
-  return true;
-};
 
 export const guestPersonaForProperty = (propertyType: string): CustomerPersona =>
   propertyType === 'HOTEL' ? 'HOTEL_GUEST' : 'HOSTELER';

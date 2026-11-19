@@ -3,15 +3,17 @@ from uuid import uuid4
 
 from sqlalchemy import select
 
-from app.core.crypto import decrypt_data
+from app.core.crypto import decrypt_data, process_id_document
 from app.core.permissions import Role
 from app.core.security import create_access_token
 from app.db.models import (
+    CustomerOccupantProfile,
     Floor,
     Property,
     ReservationOccupant,
     ReservationRequest,
     StayRecord,
+    StayOccupant,
     Unit,
     UnitAssignment,
     User,
@@ -51,6 +53,8 @@ def _reservation_payload(property_id: str) -> dict:
             {
                 "firstName": "Second",
                 "lastName": "Guest",
+                "email": f"{uuid4().hex}@example.com",
+                "phone": f"+1555{uuid4().int % 10000000:07d}",
                 "idType": "AADHAAR",
                 "idNumber": "123456789012",
             },
@@ -77,6 +81,67 @@ def test_public_reservation_intake_returns_tracking_code(client, db_session):
     assert occupant.id_type == "PASSPORT"
     assert occupant.id_number_encrypted != "A123456"
     assert decrypt_data(occupant.id_number_encrypted) == "A123456"
+
+
+def test_hostel_reservations_cannot_assign_multiple_beds_to_one_customer(
+    client, db_session
+):
+    headers = _admin_headers(db_session)
+    suffix = uuid4().hex[:8]
+    property_response = client.post(
+        "/api/v1/properties",
+        headers=headers,
+        json={
+            "name": f"Hostel Reservation {suffix}",
+            "type": "HOSTEL_COED",
+            "floors": 1,
+            "address": "1 Hostel Lane",
+            "city": f"Hostel{suffix}",
+            "state": "Test State",
+            "pincode": "10000",
+            "contactPhone": "1234567890",
+            "timezone": "Asia/Kolkata",
+        },
+    )
+    assert property_response.status_code == 201, property_response.text
+    property_id = property_response.json()["id"]
+
+    multiple_beds = _reservation_payload(property_id)
+    multiple_beds.update(
+        {
+            "requestedType": "BED",
+            "requestedQuantity": 3,
+            "requestedSharingType": "SINGLE",
+        }
+    )
+    rejected = client.post("/api/v1/reservations", json=multiple_beds)
+    assert rejected.status_code == 400, rejected.text
+    assert rejected.json()["error"]["code"] == "HOSTEL_SINGLE_BED_PER_CUSTOMER"
+
+    legacy_payload = _reservation_payload(property_id)
+    legacy_payload.update(
+        {"requestedType": "BED", "requestedSharingType": "SINGLE"}
+    )
+    legacy_response = client.post("/api/v1/reservations", json=legacy_payload)
+    assert legacy_response.status_code == 201, legacy_response.text
+    reservation = db_session.get(ReservationRequest, legacy_response.json()["id"])
+    assert reservation is not None
+    reservation.requested_quantity = 3
+    db_session.commit()
+    approved = client.patch(
+        f"/api/v1/reservations/{reservation.id}/status",
+        headers=headers,
+        json={"status": "APPROVED"},
+    )
+    assert approved.status_code == 200, approved.text
+
+    conversion = client.post(
+        f"/api/v1/reservations/{reservation.id}/convert",
+        headers=headers,
+        json={"unitId": "legacy-unit"},
+    )
+    assert conversion.status_code == 400, conversion.text
+    assert conversion.json()["error"]["code"] == "HOSTEL_SINGLE_BED_PER_CUSTOMER"
 
 
 def test_customer_can_create_multiple_bookings_for_same_date(client, db_session):
@@ -109,6 +174,267 @@ def test_customer_can_create_multiple_bookings_for_same_date(client, db_session)
     assert first.json()["id"] != second.json()["id"]
     assert first.json()["primaryUserId"] == customer.id
     assert second.json()["primaryUserId"] == customer.id
+
+
+def test_saved_occupant_profiles_are_owner_scoped_and_snapshotted_on_conversion(
+    client, db_session
+):
+    suffix = uuid4().hex[:8]
+    prop = Property(
+        code=f"GROUP-{suffix.upper()}",
+        name="Group Booking Hotel",
+        type="HOTEL",
+        status="ACTIVE",
+    )
+    db_session.add(prop)
+    db_session.flush()
+    floor = Floor(property_id=prop.id, number=1, name="Ground Floor")
+    db_session.add(floor)
+    db_session.flush()
+    unit = Unit(
+        property_id=prop.id,
+        floor_id=floor.id,
+        unit_number=f"ROOM-{suffix}",
+        floor=1,
+        type="ROOM",
+        category="CLASSIC",
+        capacity=2,
+        default_price_per_night=100,
+        status="AVAILABLE",
+    )
+    db_session.add(unit)
+
+    customer = User(
+        email=f"group-booker-{suffix}@example.com",
+        phone=f"+1555{uuid4().int % 10000000:07d}",
+        full_name="Group Booker",
+        password_hash="unused",
+        role=Role.CUSTOMER,
+        status="ACTIVE",
+    )
+    main_id = process_id_document("PRIMARY-1122")
+    customer.id_document_type = "PASSPORT"
+    customer.id_document_number_encrypted = main_id[0]
+    customer.id_document_lookup_hash = main_id[2]
+    db_session.add(customer)
+    db_session.commit()
+    customer_headers = {
+        "Authorization": f"Bearer {create_access_token(subject=customer.id, audience='customer', role=Role.CUSTOMER.value)}"
+    }
+
+    profile_response = client.post(
+        "/api/v1/customer/occupants",
+        headers=customer_headers,
+        json={
+            "fullName": "Saved Occupant",
+            "dateOfBirth": "2012-06-15",
+            "age": 14,
+            "email": f"saved-{uuid4().hex[:8]}@example.com",
+            "phone": f"+1555{uuid4().int % 10000000:07d}",
+            "idDocumentType": "PASSPORT",
+            "idDocumentNumber": "OCCUPANT-3344",
+        },
+    )
+    assert profile_response.status_code == 201, profile_response.text
+    profile = profile_response.json()
+    assert profile["idDocumentLast4"] == "3344"
+    assert "idDocumentNumber" not in profile
+    assert "idDocumentNumberEncrypted" not in profile
+    assert profile["id"] in {
+        item["id"]
+        for item in client.get(
+            "/api/v1/customer/occupants",
+            headers=customer_headers,
+        ).json()
+    }
+    updated_profile = client.patch(
+        f"/api/v1/customer/occupants/{profile['id']}",
+        headers=customer_headers,
+        json={"idDocumentType": "PASSPORT"},
+    )
+    assert updated_profile.status_code == 200, updated_profile.text
+    assert updated_profile.json()["idDocumentType"] == "PASSPORT"
+
+    other_customer = User(
+        email=f"other-group-booker-{suffix}@example.com",
+        phone=f"+1666{uuid4().int % 10000000:07d}",
+        full_name="Other Booker",
+        password_hash="unused",
+        role=Role.CUSTOMER,
+        status="ACTIVE",
+    )
+    other_id = process_id_document("OTHER-5566")
+    other_customer.id_document_type = "PASSPORT"
+    other_customer.id_document_number_encrypted = other_id[0]
+    other_customer.id_document_lookup_hash = other_id[2]
+    db_session.add(other_customer)
+    db_session.commit()
+    other_headers = {
+        "Authorization": f"Bearer {create_access_token(subject=other_customer.id, audience='customer', role=Role.CUSTOMER.value)}"
+    }
+    unauthorized_profile_booking = _reservation_payload(prop.id)
+    unauthorized_profile_booking.update(
+        {
+            "email": other_customer.email,
+            "mobile": other_customer.phone,
+            "numberOfAdults": 2,
+            "occupants": [],
+            "occupantProfileIds": [profile["id"]],
+        }
+    )
+    rejected = client.post(
+        "/api/v1/reservations",
+        headers=other_headers,
+        json=unauthorized_profile_booking,
+    )
+    assert rejected.status_code == 400
+    assert rejected.json()["error"]["code"] == "OCCUPANT_PROFILE_NOT_OWNED"
+
+    reservation_payload = _reservation_payload(prop.id)
+    reservation_payload.update(
+        {
+            "email": customer.email,
+            "mobile": customer.phone,
+            "numberOfAdults": 2,
+            "occupants": [],
+            "occupantProfileIds": [profile["id"]],
+        }
+    )
+    created = client.post(
+        "/api/v1/reservations",
+        headers=customer_headers,
+        json=reservation_payload,
+    )
+    assert created.status_code == 201, created.text
+    reservation_id = created.json()["id"]
+    admin_headers = _admin_headers(db_session)
+    approved = client.patch(
+        f"/api/v1/reservations/{reservation_id}/status",
+        headers=admin_headers,
+        json={"status": "APPROVED"},
+    )
+    assert approved.status_code == 200, approved.text
+    conversion = client.post(
+        f"/api/v1/reservations/{reservation_id}/convert",
+        headers=admin_headers,
+        json={"unitId": unit.id},
+    )
+    assert conversion.status_code == 200, conversion.text
+
+    stay = db_session.get(StayRecord, conversion.json()["stayRecordId"])
+    assert stay is not None
+    assert stay.user_id == customer.id
+    assert stay.guest_count == 2
+    occupant = db_session.scalar(
+        select(StayOccupant).where(StayOccupant.stay_record_id == stay.id)
+    )
+    assert occupant is not None
+    assert occupant.profile_id == profile["id"]
+    assert occupant.guest_user_id is not None
+    guest_account = db_session.get(User, occupant.guest_user_id)
+    assert guest_account is not None
+    assert guest_account.customer_persona == "HOTEL_GUEST"
+    assert occupant.full_name == "Saved Occupant"
+    assert decrypt_data(occupant.id_document_number_encrypted) == "OCCUPANT-3344"
+    assert db_session.scalar(
+        select(CustomerOccupantProfile).where(
+            CustomerOccupantProfile.owner_user_id == customer.id,
+            CustomerOccupantProfile.id == profile["id"],
+        )
+    ) is not None
+
+
+def test_saved_occupant_group_cannot_exceed_room_capacity(client, db_session):
+    suffix = uuid4().hex[:8]
+    prop = Property(
+        code=f"CAP-{suffix.upper()}",
+        name="Capacity Hotel",
+        type="HOTEL",
+        status="ACTIVE",
+    )
+    db_session.add(prop)
+    db_session.flush()
+    floor = Floor(property_id=prop.id, number=1, name="Ground Floor")
+    db_session.add(floor)
+    db_session.flush()
+    unit = Unit(
+        property_id=prop.id,
+        floor_id=floor.id,
+        unit_number=f"ROOM-{suffix}",
+        floor=1,
+        type="ROOM",
+        category="CLASSIC",
+        capacity=2,
+        default_price_per_night=100,
+        status="AVAILABLE",
+    )
+    db_session.add(unit)
+    customer = User(
+        email=f"capacity-booker-{suffix}@example.com",
+        phone=f"+1777{uuid4().int % 10000000:07d}",
+        full_name="Capacity Booker",
+        password_hash="unused",
+        role=Role.CUSTOMER,
+        status="ACTIVE",
+    )
+    main_id = process_id_document("CAP-PRIMARY-1")
+    customer.id_document_type = "PASSPORT"
+    customer.id_document_number_encrypted = main_id[0]
+    customer.id_document_lookup_hash = main_id[2]
+    db_session.add(customer)
+    db_session.commit()
+    customer_headers = {
+        "Authorization": f"Bearer {create_access_token(subject=customer.id, audience='customer', role=Role.CUSTOMER.value)}"
+    }
+
+    profile_ids = []
+    for index in range(2):
+        response = client.post(
+            "/api/v1/customer/occupants",
+            headers=customer_headers,
+            json={
+                "fullName": f"Saved Occupant {index + 1}",
+                "age": 30 + index,
+                "email": f"capacity-occupant-{suffix}-{index}@example.com",
+                "phone": f"+1888{uuid4().int % 10000000:07d}",
+                "idDocumentType": "PASSPORT",
+                "idDocumentNumber": f"CAP-OCCUPANT-{suffix}-{index}",
+            },
+        )
+        assert response.status_code == 201, response.text
+        profile_ids.append(response.json()["id"])
+
+    payload = _reservation_payload(prop.id)
+    payload.update(
+        {
+            "email": customer.email,
+            "mobile": customer.phone,
+            "numberOfAdults": 3,
+            "occupants": [],
+            "occupantProfileIds": profile_ids,
+        }
+    )
+    created = client.post(
+        "/api/v1/reservations",
+        headers=customer_headers,
+        json=payload,
+    )
+    assert created.status_code == 201, created.text
+    reservation_id = created.json()["id"]
+    admin_headers = _admin_headers(db_session)
+    approved = client.patch(
+        f"/api/v1/reservations/{reservation_id}/status",
+        headers=admin_headers,
+        json={"status": "APPROVED"},
+    )
+    assert approved.status_code == 200, approved.text
+    conversion = client.post(
+        f"/api/v1/reservations/{reservation_id}/convert",
+        headers=admin_headers,
+        json={"unitId": unit.id},
+    )
+    assert conversion.status_code == 400
+    assert conversion.json()["error"]["code"] == "OCCUPANT_CAPACITY_EXCEEDED"
 
 
 def test_reservation_can_defer_actual_occupant_details(client, db_session):
@@ -257,6 +583,15 @@ def test_hostel_reservation_sharing_type_limits_available_beds(client, db_sessio
     payload = _reservation_payload(prop.id)
     payload["requestedType"] = "BED"
     payload["requestedSharingType"] = "DOUBLE"
+    one_night_payload = {
+        **payload,
+        "expectedCheckOut": (
+            date.fromisoformat(payload["expectedCheckIn"]) + timedelta(days=1)
+        ).isoformat(),
+    }
+    one_night = client.post("/api/v1/reservations", json=one_night_payload)
+    assert one_night.status_code == 422
+
     created = client.post("/api/v1/reservations", json=payload)
     assert created.status_code == 201, created.text
     assert created.json()["requestedSharingType"] == "DOUBLE"
@@ -343,7 +678,7 @@ def test_conversion_claims_unit_and_creates_assignment_and_stay(client, db_sessi
     assert result["unitIds"] == [units[0].id, units[1].id]
     customer = db_session.get(User, result["userId"])
     assert customer is not None
-    assert customer.customer_persona is None
+    assert customer.customer_persona == "TEMP_CUSTOMER"
     for unit in units:
         db_session.refresh(unit)
         assert unit.status == "OCCUPIED"

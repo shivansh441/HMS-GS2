@@ -27,6 +27,7 @@ from app.db.models import (
     BillingStrategy,
     ChannelOrigin,
     CustomerPersona,
+    CustomerOccupantProfile,
     CustomerPropertyLink,
     PaymentReceipt,
     Property,
@@ -34,6 +35,7 @@ from app.db.models import (
     ReservationRequest,
     ReservationStatus,
     StayRecord,
+    StayOccupant,
     Unit,
     UnitAssignment,
     User,
@@ -41,7 +43,15 @@ from app.db.models import (
 from app.db.session import get_db
 from app.modules.auth.deps import get_current_admin_user, get_property_scope
 from app.modules.billing.service import ensure_deposit_escrow
-from app.modules.inventory.service import BED_LEVEL_TYPES
+from app.modules.customer.occupant_service import (
+    get_owned_occupant_profiles,
+    stay_occupant_from_reservation_occupant,
+)
+from app.modules.inventory.service import (
+    BED_LEVEL_TYPES,
+    has_active_user_assignment,
+    has_open_unit_assignment,
+)
 from app.modules.reservations.schemas import (
     AvailableReservationUnit,
     ReservationConversionResponse,
@@ -124,9 +134,11 @@ def _make_request_code(db: Session) -> str:
 def _add_occupant(
     reservation: ReservationRequest,
     occupant: ReservationOccupantPayload,
+    profile_id: str | None = None,
 ) -> None:
     reservation.occupants.append(
         ReservationOccupant(
+            profile_id=profile_id,
             is_primary=occupant.is_primary,
             first_name=occupant.first_name,
             last_name=occupant.last_name,
@@ -136,6 +148,27 @@ def _add_occupant(
             phone=occupant.phone,
             id_type=occupant.id_type,
             id_number_encrypted=process_id_document(occupant.id_number)[0],
+        )
+    )
+
+
+def _add_profile_occupant(
+    reservation: ReservationRequest,
+    profile: CustomerOccupantProfile,
+) -> None:
+    first_name, _, last_name = profile.full_name.partition(" ")
+    reservation.occupants.append(
+        ReservationOccupant(
+            profile_id=profile.id,
+            is_primary=False,
+            first_name=first_name,
+            last_name=last_name or None,
+            age=profile.age,
+            gender=profile.gender,
+            email=profile.email,
+            phone=profile.phone,
+            id_type=profile.id_document_type,
+            id_number_encrypted=profile.id_document_number_encrypted,
         )
     )
 
@@ -163,6 +196,16 @@ def create_reservation(
     )
     if not prop:
         raise NotFoundError("Active property not found")
+    if prop.type in BED_LEVEL_TYPES and payload.requested_quantity > 1:
+        raise BadRequestError(
+            "A hostel reservation can assign only one bed to each customer account",
+            code="HOSTEL_SINGLE_BED_PER_CUSTOMER",
+        )
+    if prop.type in BED_LEVEL_TYPES and payload.occupant_profile_ids:
+        raise BadRequestError(
+            "Saved group occupants are only supported for hotel room bookings",
+            code="HOSTEL_SINGLE_OCCUPANT_PER_BED",
+        )
     if actor and actor.role in (Role.ADMIN, Role.STAFF):
         if actor.role == Role.STAFF and actor.staff_role != "FRONT_DESK":
             raise ForbiddenError("Only front-desk staff can enter reservations")
@@ -171,6 +214,27 @@ def create_reservation(
         ):
             raise NotFoundError("Property not found")
     primary_user_id = actor.id if actor and actor.role == Role.CUSTOMER else None
+    if payload.occupant_profile_ids:
+        if payload.requested_quantity != 1:
+            raise BadRequestError(
+                "A saved occupant group must be assigned to one room",
+                code="GROUP_BOOKING_SINGLE_ROOM",
+            )
+        if primary_user_id is None:
+            raise BadRequestError(
+                "Only the signed-in customer can select saved occupant profiles",
+                code="OCCUPANT_PROFILE_OWNER_REQUIRED",
+            )
+        profiles = get_owned_occupant_profiles(
+            db, primary_user_id, payload.occupant_profile_ids
+        )
+        if any(not profile.email or not profile.phone for profile in profiles):
+            raise BadRequestError(
+                "Saved guests must have an email address and phone number before booking",
+                code="GUEST_CONTACT_REQUIRED",
+            )
+    else:
+        profiles = []
     reservation = ReservationRequest(
         request_code=_make_request_code(db),
         property_id=prop.id,
@@ -197,6 +261,8 @@ def create_reservation(
         ),
         status=ReservationStatus.PENDING.value,
     )
+    for profile in profiles:
+        _add_profile_occupant(reservation, profile)
     for occupant in payload.occupants:
         _add_occupant(reservation, occupant)
     db.add(reservation)
@@ -415,6 +481,7 @@ def _get_or_create_guest(
             full_name=reservation.guest_name,
             password_hash=hash_password(secrets.token_urlsafe(48)),
             role=Role.CUSTOMER.value,
+            customer_persona=CustomerPersona.TEMP_CUSTOMER.value,
             status="ACTIVE",
         )
         db.add(customer)
@@ -449,6 +516,12 @@ def convert_reservation(
     prop = db.get(Property, reservation.property_id)
     if not prop:
         raise NotFoundError("Property not found")
+    hostel = prop.type in BED_LEVEL_TYPES
+    if hostel and reservation.requested_quantity > 1:
+        raise BadRequestError(
+            "A hostel reservation can assign only one bed to each customer account",
+            code="HOSTEL_SINGLE_BED_PER_CUSTOMER",
+        )
 
     selected_unit_ids = [payload.unit_id, *payload.additional_unit_ids]
     if len(set(selected_unit_ids)) != len(selected_unit_ids):
@@ -490,8 +563,24 @@ def convert_reservation(
     available_unit_ids = {unit.id for unit in units}
     if any(unit_id not in available_unit_ids for unit_id in selected_unit_ids):
         raise ConflictError("One or more selected units are unavailable for this reservation")
+    party_size = reservation.number_of_adults + reservation.number_of_children
+    if not hostel and len(units) == 1 and party_size > units[0].capacity:
+        raise BadRequestError(
+            f"The selected room can have at most {units[0].capacity} occupant(s)",
+            code="OCCUPANT_CAPACITY_EXCEEDED",
+        )
+    if has_open_unit_assignment(db, set(selected_unit_ids)):
+        raise ConflictError(
+            "One or more selected units already have an active or reserved assignment",
+            code="UNIT_ALREADY_ASSIGNED",
+        )
 
-    hostel = prop.type in BED_LEVEL_TYPES
+    if (
+        hostel
+        and reservation.expected_check_out
+        and (reservation.expected_check_out - reservation.expected_check_in).days == 1
+    ):
+        raise BadRequestError("Hostel stays cannot be booked for exactly one night")
     billing_strategy = (
         BillingStrategy.RECURRING_MONTHLY.value
         if hostel
@@ -529,6 +618,12 @@ def convert_reservation(
             code="RATE_OVERRIDE_REASON_REQUIRED",
         )
     customer = _get_or_create_guest(db, reservation)
+    db.scalar(select(User.id).where(User.id == customer.id).with_for_update())
+    if has_active_user_assignment(db, customer.id):
+        raise ConflictError(
+            "This customer already occupies an assigned unit and cannot be assigned another",
+            code="CUSTOMER_ALREADY_ASSIGNED",
+        )
     existing_link = db.scalar(
         select(CustomerPropertyLink.id).where(
             CustomerPropertyLink.user_id == customer.id,
@@ -607,12 +702,11 @@ def convert_reservation(
     ]
     db.add_all(assignments)
 
-    if prop.type == "HOTEL":
-        persona = CustomerPersona.HOTEL_GUEST.value
-    elif billing_strategy == BillingStrategy.RECURRING_MONTHLY.value:
-        persona = CustomerPersona.HOSTELER.value
-    else:
-        persona = CustomerPersona.HOSTEL_GUEST.value
+    persona = (
+        CustomerPersona.HOTEL_GUEST.value
+        if not hostel
+        else CustomerPersona.HOSTELER.value
+    )
     db.flush()
     escrows = [
         escrow
@@ -656,11 +750,22 @@ def convert_reservation(
             persona=persona,
             start_date=reservation.expected_check_in,
             end_date=reservation.expected_check_out,
+            guest_count=party_size if len(assignments) == 1 and not hostel else 1,
             is_active=True,
         )
         for assignment in assignments
     ]
     db.add_all(stays)
+    db.flush()
+    stay_occupants = reservation.occupants if not hostel and len(stays) == 1 else []
+    for occupant in stay_occupants:
+        if occupant.is_primary:
+            continue
+        db.add(
+            stay_occupant_from_reservation_occupant(
+                db, customer.id, stays[0], occupant, prop.id
+            )
+        )
     reservation.primary_user_id = customer.id
     reservation.status = ReservationStatus.CONVERTED.value
     reservation.converted_at = datetime.now(timezone.utc)

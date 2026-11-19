@@ -83,8 +83,9 @@ export const AdditionalOccupants: React.FC<AdditionalOccupantsProps> = ({
                                 </select>
                               </label>
                               <label className={`${userLabelClass} lg:col-span-3`}>
-                                Email
+                                <span>Email <span className="text-red-600" aria-hidden="true">*</span></span>
                                 <input
+                                  required
                                   type="email"
                                   disabled={editorSaving}
                                   className={userInputClass}
@@ -98,9 +99,11 @@ export const AdditionalOccupants: React.FC<AdditionalOccupantsProps> = ({
                                 />
                               </label>
                               <label className={`${userLabelClass} lg:col-span-3`}>
-                                Phone
+                                <span>Phone <span className="text-red-600" aria-hidden="true">*</span></span>
                                 <input
+                                  required
                                   type="tel"
+                                  minLength={5}
                                   maxLength={32}
                                   disabled={editorSaving}
                                   className={userInputClass}

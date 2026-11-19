@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.core.config import settings
 from app.core.errors import BadRequestError
+from app.core.permissions import PropertyType
 from app.db.models import (
     DepositEscrow,
     MonthlyInvoice,
@@ -26,6 +27,20 @@ from app.db.models import (
 )
 
 RAZORPAY_API_BASE = "https://api.razorpay.com/v1"
+HOSTEL_PROPERTY_TYPES = {
+    PropertyType.HOSTEL_BOYS.value,
+    PropertyType.HOSTEL_GIRLS.value,
+    PropertyType.HOSTEL_COED.value,
+    PropertyType.CO_LIVING.value,
+}
+
+
+def require_hostel_property(prop: Property) -> None:
+    if prop.type not in HOSTEL_PROPERTY_TYPES:
+        raise BadRequestError(
+            "Fee Ledger is only available for hostel and co-living properties",
+            code="HOSTEL_PROPERTY_REQUIRED",
+        )
 
 
 def month_bounds(month: date) -> tuple[date, date, date, date]:
@@ -72,6 +87,7 @@ def ensure_deposit_escrow(
 def generate_monthly_invoices(
     db: Session, prop: Property, billing_month: date
 ) -> tuple[list[MonthlyInvoice], int]:
+    require_hostel_property(prop)
     if billing_month.day != 1:
         raise BadRequestError("billingMonth must be the first day of a month")
     current_month_start, current_month_end, previous_month_start, previous_month_end = (
@@ -96,6 +112,7 @@ def generate_monthly_invoices(
         assignment
         for assignment in assignments
         if assignment.stay_record is not None
+        and assignment.stay_record.property_id == prop.id
         and assignment.stay_record.persona == "HOSTELER"
         and assignment.expected_check_in.date() < next_month_start
         and (

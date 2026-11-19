@@ -17,6 +17,7 @@ export interface ManagedUser extends User {
     guestCount: number;
     additionalGuests: Array<{
       id: string;
+      guestUserId: string | null;
       fullName: string;
       dateOfBirth: string | null;
       gender: string | null;

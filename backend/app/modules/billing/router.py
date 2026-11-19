@@ -39,8 +39,10 @@ from app.modules.billing.schemas import (
     UtilityReadingCreateRequest,
 )
 from app.modules.billing.service import (
+    HOSTEL_PROPERTY_TYPES,
     create_razorpay_order,
     generate_monthly_invoices,
+    require_hostel_property,
     verify_razorpay_payment,
 )
 from app.modules.inventory.schemas import UtilityMeterReadingResponse
@@ -70,6 +72,27 @@ def _scoped_property(
     if not prop:
         raise NotFoundError("Property not found")
     return prop
+
+
+def _is_hosteler_invoice(db: Session, invoice_id: str) -> bool:
+    return (
+        db.scalar(
+            select(MonthlyInvoice.id)
+            .join(UnitAssignment, UnitAssignment.id == MonthlyInvoice.unit_assignment_id)
+            .join(Unit, Unit.id == UnitAssignment.unit_id)
+            .join(StayRecord, StayRecord.assignment_id == UnitAssignment.id)
+            .join(Property, Property.id == MonthlyInvoice.property_id)
+            .where(
+                MonthlyInvoice.id == invoice_id,
+                Unit.property_id == MonthlyInvoice.property_id,
+                StayRecord.property_id == MonthlyInvoice.property_id,
+                StayRecord.persona == "HOSTELER",
+                Property.type.in_(HOSTEL_PROPERTY_TYPES),
+            )
+            .limit(1)
+        )
+        is not None
+    )
 
 
 def _invoice_response(db: Session, invoice: MonthlyInvoice) -> InvoiceResponse:
@@ -146,6 +169,7 @@ def generate_invoices_endpoint(
     if actor.role != Role.ADMIN:
         raise ForbiddenError("Only admins can generate monthly invoices")
     prop = _scoped_property(db, actor, property_id, property_scope)
+    require_hostel_property(prop)
     month_value = billing_month or datetime.now(ZoneInfo(prop.timezone)).strftime("%Y-%m")
     if not MONTH_PATTERN.fullmatch(month_value):
         raise BadRequestError("billingMonth must use YYYY-MM format")
@@ -195,6 +219,7 @@ def list_property_invoices_endpoint(
 ):
     _require_front_desk(actor)
     prop = _scoped_property(db, actor, property_id, property_scope)
+    require_hostel_property(prop)
     billing_month = datetime.now(ZoneInfo(prop.timezone)).date().replace(day=1)
     generated, skipped = generate_monthly_invoices(db, prop, billing_month)
     if generated:
@@ -216,9 +241,14 @@ def list_property_invoices_endpoint(
     invoices = db.scalars(
         select(MonthlyInvoice)
         .join(UnitAssignment, UnitAssignment.id == MonthlyInvoice.unit_assignment_id)
+        .join(Unit, Unit.id == UnitAssignment.unit_id)
         .join(StayRecord, StayRecord.assignment_id == UnitAssignment.id)
+        .join(Property, Property.id == MonthlyInvoice.property_id)
         .where(MonthlyInvoice.property_id == prop.id)
+        .where(Unit.property_id == prop.id)
+        .where(StayRecord.property_id == prop.id)
         .where(StayRecord.persona == "HOSTELER")
+        .where(Property.type.in_(HOSTEL_PROPERTY_TYPES))
         .order_by(MonthlyInvoice.billing_month.desc(), MonthlyInvoice.invoice_number)
         .limit(500)
     ).all()
@@ -232,7 +262,15 @@ def list_customer_invoices_endpoint(
 ):
     invoices = db.scalars(
         select(MonthlyInvoice)
+        .join(UnitAssignment, UnitAssignment.id == MonthlyInvoice.unit_assignment_id)
+        .join(Unit, Unit.id == UnitAssignment.unit_id)
+        .join(StayRecord, StayRecord.assignment_id == UnitAssignment.id)
+        .join(Property, Property.id == MonthlyInvoice.property_id)
         .where(MonthlyInvoice.user_id == customer.id)
+        .where(Unit.property_id == MonthlyInvoice.property_id)
+        .where(StayRecord.property_id == MonthlyInvoice.property_id)
+        .where(StayRecord.persona == "HOSTELER")
+        .where(Property.type.in_(HOSTEL_PROPERTY_TYPES))
         .order_by(MonthlyInvoice.billing_month.desc())
         .limit(100)
     ).all()
@@ -272,6 +310,8 @@ def create_invoice_checkout_endpoint(
     )
     if not invoice:
         raise NotFoundError("Invoice not found")
+    if not _is_hosteler_invoice(db, invoice.id):
+        raise NotFoundError("Invoice not found")
     if invoice.status == "CANCELLED" or invoice.paid_amount >= invoice.total_amount:
         raise BadRequestError("This invoice has no outstanding balance", code="INVOICE_NOT_PAYABLE")
     prop = db.get(Property, invoice.property_id)
@@ -301,6 +341,8 @@ def verify_customer_invoice_payment_endpoint(
         .with_for_update()
     )
     if not invoice:
+        raise NotFoundError("Invoice not found")
+    if not _is_hosteler_invoice(db, invoice.id):
         raise NotFoundError("Invoice not found")
     existing_receipt = db.scalar(
         select(PaymentReceipt).where(
@@ -381,6 +423,8 @@ def record_invoice_payment_endpoint(
     )
     if not invoice or (actor.role != Role.ADMIN and invoice.property_id not in property_scope):
         raise NotFoundError("Invoice not found")
+    if not _is_hosteler_invoice(db, invoice.id):
+        raise NotFoundError("Invoice not found")
     balance = invoice.total_amount - invoice.paid_amount
     if payload.amount > balance:
         raise BadRequestError("Payment exceeds the invoice balance", code="PAYMENT_EXCEEDS_BALANCE")
@@ -439,9 +483,13 @@ def generate_monthly_invoices_endpoint(
         Property.status == "ACTIVE",
     )
     if property_id:
-        if actor.role != Role.ADMIN and property_id not in property_scope:
-            raise NotFoundError("Property not found")
-        properties_query = properties_query.where(Property.id == property_id)
+        prop = _scoped_property(db, actor, property_id, property_scope)
+        require_hostel_property(prop)
+        properties_query = properties_query.where(Property.id == prop.id)
+    else:
+        properties_query = properties_query.where(
+            Property.type.in_(HOSTEL_PROPERTY_TYPES)
+        )
     properties = db.scalars(properties_query.order_by(Property.code)).all()
     if property_id and not properties:
         raise NotFoundError("Property not found")
@@ -501,6 +549,7 @@ def create_utility_reading_endpoint(
 ):
     _require_front_desk(actor)
     prop = _scoped_property(db, actor, payload.property_id, property_scope)
+    require_hostel_property(prop)
     today = datetime.now(ZoneInfo(prop.timezone)).date()
     if (
         payload.period_start.day != 1
@@ -524,6 +573,7 @@ def create_utility_reading_endpoint(
             UnitAssignment.id == payload.unit_assignment_id,
             UnitAssignment.is_active.is_(True),
             UnitAssignment.billing_strategy == "RECURRING_MONTHLY",
+            StayRecord.property_id == prop.id,
             StayRecord.persona == "HOSTELER",
         )
     )
@@ -616,6 +666,7 @@ def list_property_assignments_endpoint(
 ):
     _require_front_desk(actor)
     prop = _scoped_property(db, actor, property_id, property_scope)
+    require_hostel_property(prop)
     assignments = db.scalars(
         select(UnitAssignment)
         .join(Unit, Unit.id == UnitAssignment.unit_id)
@@ -625,6 +676,7 @@ def list_property_assignments_endpoint(
             Unit.property_id == prop.id,
             UnitAssignment.is_active.is_(True),
             UnitAssignment.billing_strategy == "RECURRING_MONTHLY",
+            StayRecord.property_id == prop.id,
             StayRecord.persona == "HOSTELER",
         )
         .order_by(Unit.unit_number)

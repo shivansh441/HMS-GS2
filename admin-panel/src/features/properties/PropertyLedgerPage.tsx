@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AxiosError } from 'axios';
-import { Link, useParams } from 'react-router-dom';
-import { ArrowLeft } from 'lucide-react';
+import { useParams } from 'react-router-dom';
+import { RefreshCw, UserRoundPlus } from 'lucide-react';
 import { useAuth } from '../../lib/auth-context';
 import { apiClient } from '../../lib/api';
 import { LoadingIndicator } from '../../components/ui/LoadingIndicator';
@@ -23,9 +23,19 @@ function getErrorMessage(error: unknown) {
 
 const hostelTypes = ['HOSTEL_BOYS', 'HOSTEL_GIRLS', 'HOSTEL_COED', 'CO_LIVING'];
 
-export const PropertyLedgerPage: React.FC = () => {
+interface PropertyLedgerPageProps {
+  onDeskCheckIn?: () => void;
+  refreshSignal?: number;
+}
+
+export const PropertyLedgerPage: React.FC<PropertyLedgerPageProps> = ({
+  onDeskCheckIn,
+  refreshSignal = 0,
+}) => {
   const { propertyId } = useParams<{ propertyId: string }>();
-  const { properties, selectedPropertyId, setSelectedPropertyId, user } = useAuth();
+  const { properties, selectedPropertyId, user } = useAuth();
+  const refreshers = useRef(new Map<string, () => Promise<void>>());
+  const [refreshing, setRefreshing] = useState(false);
   const canViewLedger = user?.role === 'ADMIN'
     || (user?.role === 'STAFF' && user.staffRole === 'FRONT_DESK');
   const activePropertyId = propertyId
@@ -33,6 +43,29 @@ export const PropertyLedgerPage: React.FC = () => {
   const [property, setProperty] = useState<LedgerProperty | null>(null);
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
+
+  const registerRefresh = useCallback(
+    (id: string, refresh: () => Promise<void>) => {
+      refreshers.current.set(id, refresh);
+      return () => {
+        if (refreshers.current.get(id) === refresh) refreshers.current.delete(id);
+      };
+    },
+    [],
+  );
+
+  const refreshLedgers = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await Promise.all([...refreshers.current.values()].map((refresh) => refresh()));
+    } finally {
+      setRefreshing(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (refreshSignal > 0) void refreshLedgers();
+  }, [refreshLedgers, refreshSignal]);
 
   useEffect(() => {
     if (!activePropertyId || !canViewLedger) {
@@ -74,20 +107,32 @@ export const PropertyLedgerPage: React.FC = () => {
 
   return (
     <div className="space-y-5">
-      {property && (
-        <Link
-          to="/inventory"
-          onClick={() => setSelectedPropertyId(property.id)}
-          className="inline-flex items-center gap-2 text-xs font-bold uppercase text-blue-700 hover:text-blue-900 dark:text-blue-300"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          Back to inventory
-        </Link>
-      )}
-      <header className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-200 pb-4 dark:border-slate-800">
-        <h1 className="text-xl font-bold tracking-tight">
-          {property ? `${property.name} fees` : 'Fee ledger'}
-        </h1>
+      <header className="flex flex-wrap items-end justify-between gap-3 border-b border-slate-200 pb-4 dark:border-slate-800">
+        <div>
+          <h1 className="text-xl font-bold uppercase tracking-wide">
+            Fee ledger
+          </h1>
+          <p className="mt-1 text-xs text-slate-500">Manage hostel bills, payments, and utility readings.</p>
+        </div>
+        <div className="flex gap-2">
+          {onDeskCheckIn && (
+            <button
+              type="button"
+              onClick={onDeskCheckIn}
+              className="inline-flex items-center gap-2 bg-blue-700 px-3 py-2 text-xs font-bold text-white hover:bg-blue-800"
+            >
+              <UserRoundPlus className="h-4 w-4" /> Desk walk-in
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => void refreshLedgers()}
+            disabled={refreshing || loading || ledgerProperties.length === 0}
+            className="inline-flex items-center gap-2 border border-slate-300 px-3 py-2 text-xs font-bold dark:border-slate-700 disabled:opacity-60"
+          >
+            <RefreshCw className="h-3.5 w-3.5" /> Refresh
+          </button>
+        </div>
       </header>
 
       {errorMessage && (
@@ -110,17 +155,13 @@ export const PropertyLedgerPage: React.FC = () => {
 
       {loading && <LoadingIndicator label="Loading property ledger" className="p-6" />}
       {canViewLedger && !loading && ledgerProperties.map((item) => (
-        <section key={item.id} className="space-y-3">
-          {showingAllProperties && (
-            <h2 className="border-b border-slate-200 pb-2 text-sm font-bold uppercase dark:border-slate-800">
-              {item.name}
-            </h2>
-          )}
+        <section key={item.id}>
           <PropertyLedger
             propertyId={item.id}
             propertyName={item.name}
             currency={item.currency}
             canRecordUtilities={user?.role === 'ADMIN' || (user?.role === 'STAFF' && user.staffRole === 'FRONT_DESK')}
+            onRegisterRefresh={registerRefresh}
           />
         </section>
       ))}

@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { AxiosError } from 'axios';
 import { ArrowLeft, ArrowRight, CheckCircle2 } from 'lucide-react';
 import { customerApiClient } from '../../lib/api';
+import { useCustomerAuth } from '../../lib/auth-context';
 
 interface PublicProperty {
   id: string;
@@ -26,6 +27,15 @@ interface AdditionalOccupant {
 
 interface CreatedReservation {
   requestCode: string;
+}
+
+interface SavedOccupantProfile {
+  id: string;
+  fullName: string;
+  age: number | null;
+  email: string | null;
+  phone: string | null;
+  idDocumentLast4: string;
 }
 
 const emptyOccupant: AdditionalOccupant = {
@@ -57,6 +67,8 @@ function getErrorMessage(error: unknown) {
 }
 
 export default function BookingPage() {
+  const { user, isLoading: authLoading } = useCustomerAuth();
+  const currentUserId = user?.id;
   const [properties, setProperties] = useState<PublicProperty[]>([]);
   const [propertyId, setPropertyId] = useState('');
   const [checkIn, setCheckIn] = useState('');
@@ -71,6 +83,10 @@ export default function BookingPage() {
   const [idType, setIdType] = useState('');
   const [idNumber, setIdNumber] = useState('');
   const [occupants, setOccupants] = useState<AdditionalOccupant[]>([]);
+  const [savedOccupants, setSavedOccupants] = useState<SavedOccupantProfile[]>([]);
+  const [selectedOccupantProfileIds, setSelectedOccupantProfileIds] = useState<string[]>([]);
+  const [occupantProfilesLoading, setOccupantProfilesLoading] = useState(false);
+  const [occupantProfileError, setOccupantProfileError] = useState('');
   const [step, setStep] = useState(1);
   const [reservation, setReservation] = useState<CreatedReservation | null>(null);
   const [loadingProperties, setLoadingProperties] = useState(true);
@@ -108,6 +124,36 @@ export default function BookingPage() {
     };
   }, []);
 
+  useEffect(() => {
+    if (authLoading) return;
+    if (!currentUserId) {
+      setSavedOccupants([]);
+      setSelectedOccupantProfileIds([]);
+      return;
+    }
+    let active = true;
+    setSelectedOccupantProfileIds([]);
+    setOccupantProfilesLoading(true);
+    setOccupantProfileError('');
+    customerApiClient
+      .get<SavedOccupantProfile[]>('/customer/occupants')
+      .then(({ data }) => {
+        if (active) setSavedOccupants(data);
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          setOccupantProfileError(getErrorMessage(error));
+          setSavedOccupants([]);
+        }
+      })
+      .finally(() => {
+        if (active) setOccupantProfilesLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [authLoading, currentUserId]);
+
   const selectedProperty = properties.find((property) => property.id === propertyId);
   const minimumDate = new Date().toISOString().slice(0, 10);
   const stayType = category === 'DORMITORY' ||
@@ -117,20 +163,33 @@ export default function BookingPage() {
   const requiredAdditionalOccupants = Math.max(0, adults + children - 1);
 
   useEffect(() => {
+    if (stayType === 'BED') setSelectedOccupantProfileIds([]);
+  }, [stayType]);
+
+  useEffect(() => {
+    const nextSelectedProfiles = selectedOccupantProfileIds.slice(
+      0,
+      requiredAdditionalOccupants,
+    );
+    if (nextSelectedProfiles.length !== selectedOccupantProfileIds.length) {
+      setSelectedOccupantProfileIds(nextSelectedProfiles);
+    }
+    const requiredNewOccupants =
+      requiredAdditionalOccupants - nextSelectedProfiles.length;
     setOccupants((current) => {
-      if (current.length === requiredAdditionalOccupants) return current;
-      if (current.length > requiredAdditionalOccupants) {
-        return current.slice(0, requiredAdditionalOccupants);
+      if (current.length === requiredNewOccupants) return current;
+      if (current.length > requiredNewOccupants) {
+        return current.slice(0, requiredNewOccupants);
       }
       return [
         ...current,
         ...Array.from(
-          { length: requiredAdditionalOccupants - current.length },
+          { length: requiredNewOccupants - current.length },
           () => ({ ...emptyOccupant }),
         ),
       ];
     });
-  }, [requiredAdditionalOccupants]);
+  }, [requiredAdditionalOccupants, selectedOccupantProfileIds]);
 
   const updateOccupant = (index: number, field: keyof AdditionalOccupant, value: string) => {
     setOccupants((current) => current.map((occupant, itemIndex) =>
@@ -148,7 +207,7 @@ export default function BookingPage() {
       !lastName.trim() ||
       !idType ||
       !idNumber.trim() ||
-      occupants.length !== requiredAdditionalOccupants
+      occupants.length + selectedOccupantProfileIds.length !== requiredAdditionalOccupants
     ) return;
     setSubmitting(true);
     setErrorMessage('');
@@ -164,6 +223,7 @@ export default function BookingPage() {
         requestedQuantity: stayType === 'BED' ? adults + children : 1,
         numberOfAdults: adults,
         numberOfChildren: children,
+        occupantProfileIds: selectedOccupantProfileIds,
         expectedCheckIn: checkIn,
         expectedCheckOut: checkOut,
         channelOrigin: 'PUBLIC_WEB',
@@ -343,12 +403,70 @@ export default function BookingPage() {
               <div>
                 <h2 className="text-lg font-semibold text-slate-900">Additional occupants</h2>
                 <p className="mt-1 text-xs text-slate-500">
-                  The primary booker is included. Provide details and a government ID for each of the {requiredAdditionalOccupants} additional occupant(s).
+                  The primary booker is included. Select saved occupants or enter details for the remaining {requiredAdditionalOccupants} additional occupant(s).
                 </p>
               </div>
+              {stayType === 'ROOM' && user && (
+                <fieldset className="space-y-2 rounded-xl border border-slate-200 p-4">
+                  <legend className="px-1 text-xs font-bold text-slate-600">
+                    Saved occupants
+                  </legend>
+                  {occupantProfilesLoading ? (
+                    <p className="text-xs text-slate-500">Loading saved occupants…</p>
+                  ) : occupantProfileError ? (
+                    <p role="alert" className="text-xs text-red-700">
+                      {occupantProfileError} You can still enter occupant details below.
+                    </p>
+                  ) : savedOccupants.length ? (
+                    savedOccupants.map((profile) => {
+                      const selected = selectedOccupantProfileIds.includes(profile.id);
+                      const selectionLimitReached =
+                        selectedOccupantProfileIds.length >= requiredAdditionalOccupants;
+                      return (
+                        <label key={profile.id} className="flex items-center gap-2 text-sm">
+                          <input
+                            type="checkbox"
+                            checked={selected}
+                            disabled={
+                              !selected &&
+                              (selectionLimitReached || !profile.email || !profile.phone)
+                            }
+                            onChange={(event) =>
+                              setSelectedOccupantProfileIds((current) =>
+                                event.target.checked
+                                  ? [...current, profile.id]
+                                  : current.filter((id) => id !== profile.id),
+                              )
+                            }
+                          />
+                          <span>
+                            {profile.fullName}
+                            {profile.age != null ? ` · age ${profile.age}` : ''}
+                            {!profile.email || !profile.phone
+                              ? ' · Add unique email and phone before selecting'
+                              : ''}
+                            {profile.idDocumentLast4
+                              ? ` · ID ending ${profile.idDocumentLast4}`
+                              : ''}
+                          </span>
+                        </label>
+                      );
+                    })
+                  ) : (
+                    <p className="text-xs text-slate-500">
+                      You have no saved occupants yet. New occupants entered below will be saved after the reservation is confirmed.
+                    </p>
+                  )}
+                  {selectedOccupantProfileIds.length > 0 && (
+                    <p className="text-xs text-slate-500">
+                      {selectedOccupantProfileIds.length} saved occupant(s) selected.
+                    </p>
+                  )}
+                </fieldset>
+              )}
               {occupants.map((occupant, index) => (
                 <fieldset key={index} className="grid gap-3 rounded-xl border border-slate-200 p-4 sm:grid-cols-2">
-                  <legend className="px-1 text-xs font-bold text-slate-600">Guest {index + 2}</legend>
+                  <legend className="px-1 text-xs font-bold text-slate-600">New guest {index + 2 + selectedOccupantProfileIds.length}</legend>
                   <label className="space-y-1 text-xs font-semibold text-slate-600">
                     First name
                     <input required maxLength={50} value={occupant.firstName} onChange={(event) => updateOccupant(index, 'firstName', event.target.value)} className={inputClass} />
@@ -372,12 +490,12 @@ export default function BookingPage() {
                     </select>
                   </label>
                   <label className="space-y-1 text-xs font-semibold text-slate-600">
-                    Phone
-                    <input type="tel" maxLength={20} value={occupant.phone} onChange={(event) => updateOccupant(index, 'phone', event.target.value)} className={inputClass} />
+                    Phone <span className="text-red-600" aria-hidden="true">*</span>
+                    <input required type="tel" minLength={5} maxLength={20} value={occupant.phone} onChange={(event) => updateOccupant(index, 'phone', event.target.value)} className={inputClass} />
                   </label>
                   <label className="space-y-1 text-xs font-semibold text-slate-600">
-                    Email
-                    <input type="email" value={occupant.email} onChange={(event) => updateOccupant(index, 'email', event.target.value)} className={inputClass} />
+                    Email <span className="text-red-600" aria-hidden="true">*</span>
+                    <input required type="email" value={occupant.email} onChange={(event) => updateOccupant(index, 'email', event.target.value)} className={inputClass} />
                   </label>
                   <div className="grid grid-cols-2 gap-2">
                     <label className="space-y-1 text-xs font-semibold text-slate-600">

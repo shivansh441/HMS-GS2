@@ -24,6 +24,12 @@ class ReservationOccupantPayload(ReservationPayload):
     id_type: GovernmentIdType = Field(alias="idType")
     id_number: str = Field(alias="idNumber", min_length=2, max_length=128)
 
+    @model_validator(mode="after")
+    def validate_guest_contacts(self):
+        if not self.is_primary and (not self.email or not self.phone or len(self.phone) < 5):
+            raise ValueError("Additional guests must provide a unique email and phone number")
+        return self
+
 
 class ReservationCreateRequest(ReservationPayload):
     property_id: str = Field(alias="propertyId", min_length=1, max_length=36)
@@ -45,17 +51,36 @@ class ReservationCreateRequest(ReservationPayload):
     channel_origin: ChannelOrigin = Field(
         default=ChannelOrigin.PUBLIC_WEB, alias="channelOrigin"
     )
+    occupant_profile_ids: list[str] = Field(
+        default_factory=list, alias="occupantProfileIds", max_length=99
+    )
     occupants: list[ReservationOccupantPayload] = Field(default_factory=list, max_length=100)
 
     @model_validator(mode="after")
     def validate_stay_dates(self):
         if self.expected_check_out and self.expected_check_out <= self.expected_check_in:
             raise ValueError("Expected check-out must be after check-in")
+        if (
+            self.requested_type == UnitType.BED
+            and self.expected_check_out
+            and (self.expected_check_out - self.expected_check_in).days == 1
+        ):
+            raise ValueError("Hostel bed reservations cannot be booked for exactly one night")
         if self.requested_sharing_type and self.requested_type != UnitType.BED:
             raise ValueError("Sharing type can only be specified for a bed reservation")
         expected_occupants = self.number_of_adults + self.number_of_children
-        if len(self.occupants) > expected_occupants:
+        if len(self.occupants) + len(self.occupant_profile_ids) > expected_occupants:
             raise ValueError("Reservation occupant details exceed the guest count")
+        if len(self.occupant_profile_ids) != len(set(self.occupant_profile_ids)):
+            raise ValueError("An occupant profile cannot be selected more than once")
+        if self.occupant_profile_ids and (
+            len(self.occupant_profile_ids)
+            + sum(not occupant.is_primary for occupant in self.occupants)
+            != expected_occupants - 1
+        ):
+            raise ValueError(
+                "Selected and entered occupants must match the reservation guest count"
+            )
         if sum(occupant.is_primary for occupant in self.occupants) > 1:
             raise ValueError("Only one reservation occupant can be marked as primary")
         return self

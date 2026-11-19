@@ -1,16 +1,15 @@
 import React, { useState } from 'react';
-import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Link, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from '../lib/auth-context';
 import { AdminLogin } from '../features/auth/AdminLogin';
 import { Dashboard } from '../features/dashboard/Dashboard';
 import { UserList } from '../features/users/UserList';
 import { PropertyList } from '../features/properties/PropertyList';
 import { PropertyInventory } from '../features/properties/PropertyInventory';
-import { PropertyLedgerPage } from '../features/properties/PropertyLedgerPage';
 import { AdminSecurity } from '../features/security/AdminSecurity';
 import { AuditLogs } from '../features/security/AuditLogs';
 import { ReservationsBoard } from '../features/reservations/ReservationsBoard';
-import { ActiveStaysBoard } from '../features/stays/ActiveStaysBoard';
+import { StaysAndBillingPage } from '../features/stays/StaysAndBillingPage';
 import { StaffPayrollBoard } from '../features/staff/StaffPayrollBoard';
 import { AdminMessPage } from '../features/mess/AdminMessPage';
 import { canAccess, PermissionKey } from '../lib/permissions';
@@ -29,12 +28,9 @@ import {
   Shield,
   AlertOctagon,
   Clock,
-  DoorOpen,
   WalletCards,
   Utensils,
 } from 'lucide-react';
-
-const hostelPropertyTypes = ['HOSTEL_BOYS', 'HOSTEL_GIRLS', 'HOSTEL_COED', 'CO_LIVING'];
 
 // Route Guards
 const RequireAuth: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -94,9 +90,6 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const location = useLocation();
   const activeProperty = properties.find((property) => property.id === selectedPropertyId);
   const showMessManagement = selectedPropertyId === 'ALL' || activeProperty?.hasMessFacility === true;
-  const showFeeLedger = selectedPropertyId === 'ALL'
-    || hostelPropertyTypes.includes(activeProperty?.type || '');
-
   if (!user) return null;
 
   return (
@@ -294,22 +287,8 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                     : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
                 }`}
               >
-                <DoorOpen className="w-4 h-4" />
-                <span>Active Stays</span>
-              </Link>
-            )}
-
-            {(user.role === 'ADMIN' || user.staffRole === 'FRONT_DESK') && showFeeLedger && (
-              <Link
-                to="/admin/billing"
-                className={`flex items-center space-x-2.5 px-3 py-2 rounded-none ${
-                  location.pathname === '/admin/billing' || location.pathname === '/fee-ledger' || location.pathname.endsWith('/fee-ledger')
-                    ? 'bg-slate-900 text-white dark:bg-blue-600'
-                    : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
-                }`}
-              >
                 <Receipt className="w-4 h-4" />
-                <span>Fee Ledger</span>
+                <span>Stays &amp; Billing</span>
               </Link>
             )}
 
@@ -419,19 +398,11 @@ export const App: React.FC = () => {
               />
               <Route
                 path="/fee-ledger"
-                element={
-                  <RequirePermission permission="VIEW_PROPERTIES">
-                    <PropertyLedgerPage />
-                  </RequirePermission>
-                }
+                element={<Navigate to="/admin/stays" replace />}
               />
               <Route
                 path="/admin/billing"
-                element={
-                  <RequirePermission permission="VIEW_PROPERTIES">
-                    <PropertyLedgerPage />
-                  </RequirePermission>
-                }
+                element={<Navigate to="/admin/stays" replace />}
               />
               <Route
                 path="/admin/mess"
@@ -443,11 +414,7 @@ export const App: React.FC = () => {
               />
               <Route
                 path="/properties/:propertyId/fee-ledger"
-                element={
-                  <RequirePermission permission="VIEW_PROPERTIES">
-                    <PropertyLedgerPage />
-                  </RequirePermission>
-                }
+                element={<Navigate to="/admin/stays" replace />}
               />
               <Route
                 path="/reservations"
@@ -469,7 +436,7 @@ export const App: React.FC = () => {
                 path="/admin/stays"
                 element={
                   <RequirePermission permission="VIEW_RESERVATIONS">
-                    <ActiveStaysBoard />
+                    <StaysAndBillingPage />
                   </RequirePermission>
                 }
               />

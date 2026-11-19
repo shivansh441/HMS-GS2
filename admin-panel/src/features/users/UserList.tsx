@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { AxiosError } from 'axios';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../lib/auth-context';
 import { apiClient } from '../../lib/api';
@@ -13,7 +14,6 @@ import {
   emptyUserForm,
   formFromUser,
   guestPersonaForProperty,
-  isPropertyCompatibleWithGuest,
 } from './userForm';
 import { userInputClass } from './userStyles';
 import { ManagedUser, UserEditorMode, UserForm } from './userTypes';
@@ -21,6 +21,7 @@ import { ManagedUser, UserEditorMode, UserForm } from './userTypes';
 interface DeskBed {
   id: string;
   unitNumber: string;
+  capacity: number;
   status: string;
   category: string;
   sharingType: string | null;
@@ -31,6 +32,7 @@ interface DeskRoom {
   id: string;
   unitNumber: string;
   type: string;
+  capacity: number;
   category: string;
   sharingType: string | null;
   status: string;
@@ -41,6 +43,11 @@ interface DeskRoom {
 
 interface DeskInventory {
   floors: Array<{ floorNumber: number; rooms: DeskRoom[] }>;
+}
+
+interface ActiveAssignment {
+  userId: string;
+  occupantUserIds?: string[];
 }
 
 type UserAction = 'deactivate' | 'force-logout' | 'reset-mfa' | 'reactivate' | 'resend-invite' | 'issue-reset-link' | 'archive';
@@ -69,6 +76,16 @@ const userActionLabels: Record<UserAction, string> = {
   archive: 'delete this account',
 };
 
+function getOccupiedUserIds(assignments: ActiveAssignment[]): Set<string> {
+  return new Set(
+    assignments.flatMap((assignment) =>
+      assignment.occupantUserIds?.length
+        ? assignment.occupantUserIds
+        : [assignment.userId],
+    ),
+  );
+}
+
 export const UserList: React.FC = () => {
   const { user: currentAdmin, selectedPropertyId, properties } = useAuth();
   const location = useLocation();
@@ -93,14 +110,23 @@ export const UserList: React.FC = () => {
   const [editorSaving, setEditorSaving] = useState(false);
   const [editorError, setEditorError] = useState<string | null>(null);
   const [activationUrl, setActivationUrl] = useState<string | null>(null);
+  const [initialPassword, setInitialPassword] = useState<string | null>(null);
   const [deskUser, setDeskUser] = useState<User | null>(null);
   const [deskPropertyId, setDeskPropertyId] = useState('');
   const [deskUnitId, setDeskUnitId] = useState('');
+  const [deskGuestAccounts, setDeskGuestAccounts] = useState<User[]>([]);
+  const [deskSelectedOccupantUserIds, setDeskSelectedOccupantUserIds] = useState<string[]>([]);
+  const [deskGuestAccountsLoading, setDeskGuestAccountsLoading] = useState(false);
+  const [deskGuestAccountsError, setDeskGuestAccountsError] = useState('');
   const [deskCheckIn, setDeskCheckIn] = useState('');
   const [deskCheckOut, setDeskCheckOut] = useState('');
   const [deskAgreedRate, setDeskAgreedRate] = useState('');
   const [deskRateOverrideReason, setDeskRateOverrideReason] = useState('');
   const [deskInventory, setDeskInventory] = useState<DeskInventory | null>(null);
+  const [deskUserAlreadyAssigned, setDeskUserAlreadyAssigned] = useState(false);
+  const [checkedInCustomerIds, setCheckedInCustomerIds] = useState<Set<string>>(new Set());
+  const [checkInStatusLoading, setCheckInStatusLoading] = useState(true);
+  const [checkInStatusError, setCheckInStatusError] = useState('');
   const [deskLoading, setDeskLoading] = useState(false);
   const [deskSaving, setDeskSaving] = useState(false);
   const [deskError, setDeskError] = useState('');
@@ -113,23 +139,18 @@ export const UserList: React.FC = () => {
     roleFilter === 'ADMIN' || roleFilter === 'STAFF' || roleFilter === 'CUSTOMER'
       ? roleFilter
       : null;
-  const guestProperties = properties.filter((property) =>
-    isPropertyCompatibleWithGuest(property.type, userForm.customerPersona),
-  );
-
   useEffect(() => {
     if (editorMode !== 'create' || !selectedPropertyId || selectedPropertyId === 'ALL') return;
     const selectedProperty = properties.find((property) => property.id === selectedPropertyId);
     if (!selectedProperty) return;
     setUserForm((form) => {
       if (form.role === 'ADMIN') return form;
-      if (
-        form.role === 'CUSTOMER' &&
-        !isPropertyCompatibleWithGuest(selectedProperty.type, form.customerPersona)
-      ) return form;
       const propertyIds = Array.from(new Set([...form.propertyIds, selectedPropertyId]));
       return {
         ...form,
+        ...(form.role === 'CUSTOMER'
+          ? { customerPersona: guestPersonaForProperty(selectedProperty.type) }
+          : {}),
         propertyIds: form.role === 'CUSTOMER' ? [selectedPropertyId] : propertyIds,
         ...(form.role === 'CUSTOMER' ? { initialStayPropertyId: selectedPropertyId } : {}),
       };
@@ -139,16 +160,23 @@ export const UserList: React.FC = () => {
   useEffect(() => {
     if (!deskUser || !deskPropertyId) {
       setDeskInventory(null);
+      setDeskUserAlreadyAssigned(false);
       setDeskUnitId('');
       return;
     }
     let active = true;
     setDeskLoading(true);
     setDeskError('');
-    apiClient.get<DeskInventory>(`/properties/${encodeURIComponent(deskPropertyId)}/units/matrix`)
-      .then(({ data }) => {
+    Promise.all([
+      apiClient.get<DeskInventory>(`/properties/${encodeURIComponent(deskPropertyId)}/units/matrix`),
+      apiClient.get<ActiveAssignment[]>('/stay/assignments/active?includeHostelers=true'),
+    ])
+      .then(([{ data }, assignmentsResponse]) => {
         if (active) {
           setDeskInventory(data);
+          setDeskUserAlreadyAssigned(
+            getOccupiedUserIds(assignmentsResponse.data).has(deskUser.id),
+          );
           setDeskUnitId('');
         }
       })
@@ -165,6 +193,8 @@ export const UserList: React.FC = () => {
 
   const fetchUsers = useCallback(async () => {
     setLoading(true);
+    setCheckInStatusLoading(true);
+    setCheckInStatusError('');
     try {
       const params = new URLSearchParams();
       params.set('limit', String(limit));
@@ -182,13 +212,27 @@ export const UserList: React.FC = () => {
       setUsers(res.data.items);
       setPrimaryAdminId(res.data.primaryAdminId);
       setTotal(res.data.total);
+      try {
+        const assignmentsResponse = await apiClient.get<ActiveAssignment[]>(
+          '/stay/assignments/active?includeHostelers=true',
+        );
+        setCheckedInCustomerIds(getOccupiedUserIds(assignmentsResponse.data));
+      } catch (error: any) {
+        setCheckedInCustomerIds(new Set());
+        setCheckInStatusError(
+          error.response?.data?.error?.message
+            || 'Unable to verify check-in status. Walk-in check-in is unavailable.',
+        );
+      }
     } catch (err: any) {
       console.error('Failed to fetch users', err);
       setUsers([]);
+      setCheckedInCustomerIds(new Set());
       setPrimaryAdminId(null);
       setTotal(0);
     } finally {
       setLoading(false);
+      setCheckInStatusLoading(false);
     }
   }, [page, roleFilter, search, selectedPropertyId, sortBy]);
 
@@ -235,11 +279,8 @@ export const UserList: React.FC = () => {
     const selectedProperty = properties.find((property) => property.id === scopedPropertyId);
     const guestPersona = selectedProperty
       ? guestPersonaForProperty(selectedProperty.type)
-      : emptyUserForm.customerPersona;
-    const guestPropertyId = selectedProperty
-      && isPropertyCompatibleWithGuest(selectedProperty.type, guestPersona)
-      ? scopedPropertyId
       : '';
+    const guestPropertyId = selectedProperty ? scopedPropertyId : '';
     setSelectedUserId(null);
     setSelectedUser(null);
     setUserForm({
@@ -256,6 +297,7 @@ export const UserList: React.FC = () => {
       additionalGuests: [],
     });
     setActivationUrl(null);
+    setInitialPassword(null);
     setEditorError(null);
     setCreateMenuOpen(false);
     setEditorMode('create');
@@ -272,6 +314,7 @@ export const UserList: React.FC = () => {
     setSelectedUserId(target.id);
     setSelectedUser(null);
     setActivationUrl(null);
+    setInitialPassword(null);
     setEditorError(null);
     setEditorMode('view');
   };
@@ -282,6 +325,7 @@ export const UserList: React.FC = () => {
     setSelectedUser(null);
     setEditorError(null);
     setActivationUrl(null);
+    setInitialPassword(null);
   };
 
   const toggleProperty = (propertyId: string) => {
@@ -298,6 +342,7 @@ export const UserList: React.FC = () => {
     setEditorSaving(true);
     setEditorError(null);
     setActivationUrl(null);
+    setInitialPassword(null);
     const payload = {
       email: userForm.email.trim(),
       fullName: userForm.fullName.trim(),
@@ -355,7 +400,9 @@ export const UserList: React.FC = () => {
       ...(editorMode === 'create' ? { role: userForm.role } : {}),
       ...(userForm.role === 'STAFF' ? { staffRole: userForm.staffRole } : {}),
       ...(userForm.role === 'STAFF' ? { propertyIds: userForm.propertyIds } : {}),
-      ...(userForm.role === 'CUSTOMER' && editorMode === 'create'
+      ...(userForm.role === 'CUSTOMER' &&
+      editorMode === 'create' &&
+      userForm.customerPersona !== 'TEMP_CUSTOMER'
         ? { propertyIds: userForm.initialStayPropertyId ? [userForm.initialStayPropertyId] : [] }
         : {}),
       ...(userForm.role === 'CUSTOMER'
@@ -363,21 +410,34 @@ export const UserList: React.FC = () => {
             customerPersona: userForm.customerPersona || undefined,
             emergencyContactPhone: userForm.emergencyContactPhone.trim() || null,
             occupation: userForm.occupation.trim() || null,
-            initialStayPropertyId: userForm.initialStayPropertyId || null,
-            stayStartDate: userForm.stayStartDate || null,
-            stayEndDate: userForm.stayEndDate || null,
+            ...(userForm.customerPersona !== 'TEMP_CUSTOMER'
+              ? {
+                  initialStayPropertyId: userForm.initialStayPropertyId || null,
+                  stayStartDate: userForm.stayStartDate || null,
+                  stayEndDate: userForm.stayEndDate || null,
+                }
+              : {}),
           }
         : {}),
     };
     try {
       if (editorMode === 'create') {
-        const { data } = await apiClient.post<ManagedUser>('/admin/users', payload);
-        setSelectedUser(data);
-        setActivationUrl(data.activationUrl || null);
-        setSelectedUserId(data.id);
-        setUserForm(formFromUser(data));
+        const { data } = await apiClient.post<ManagedUser & { initialPassword?: string | null }>(
+          '/admin/users',
+          payload,
+        );
+        const { initialPassword: createdPassword, ...managedUser } = data;
+        setSelectedUser(managedUser);
+        setActivationUrl(managedUser.activationUrl || null);
+        setInitialPassword(createdPassword || null);
+        setSelectedUserId(managedUser.id);
+        setUserForm(formFromUser(managedUser));
         setEditorMode('view');
-        setActionNotice('User created. Share the one-time setup link with them securely.');
+        setActionNotice(
+          createdPassword
+            ? 'Customer created and activated. Share the initial password securely; it will not be shown again.'
+            : 'User created. Share the one-time setup link with them securely.',
+        );
       } else if (selectedUserId) {
         const { data } = await apiClient.patch<ManagedUser>(
           `/admin/users/${encodeURIComponent(selectedUserId)}`,
@@ -386,6 +446,7 @@ export const UserList: React.FC = () => {
         setSelectedUser(data);
         setUserForm(formFromUser(data));
         setActivationUrl(data.activationUrl || null);
+        setInitialPassword(null);
         setEditorMode('view');
         setActionNotice(
           data.activationUrl
@@ -452,14 +513,18 @@ export const UserList: React.FC = () => {
     );
     setDeskCheckIn(localDateTime(now));
     setDeskCheckOut('');
+    setDeskSelectedOccupantUserIds([]);
     setDeskAgreedRate('');
     setDeskRateOverrideReason('');
+    setDeskUserAlreadyAssigned(false);
     setDeskError('');
   };
 
   const closeDeskCheckIn = () => {
     setDeskUser(null);
     setDeskInventory(null);
+    setDeskGuestAccounts([]);
+    setDeskSelectedOccupantUserIds([]);
     setDeskError('');
   };
 
@@ -474,6 +539,7 @@ export const UserList: React.FC = () => {
             id: bed.id,
             label: `Room ${room.unitNumber} · Bed ${bed.unitNumber} · ${bed.sharingType || room.sharingType || 'sharing unspecified'}`,
             standardRate: bed.baseRateMonthly,
+            capacity: bed.capacity,
           }));
       }
       return room.status === 'AVAILABLE' && ['ROOM', 'SUITE'].includes(room.type)
@@ -481,11 +547,86 @@ export const UserList: React.FC = () => {
             id: room.id,
             label: `${room.type} ${room.unitNumber} · ${room.category}`,
             standardRate: room.defaultPricePerNight,
+            capacity: room.capacity,
           }]
         : [];
     }),
   ) || [];
   const selectedDeskUnit = deskAvailableUnits.find((unit) => unit.id === deskUnitId);
+  const deskAdditionalGuestOptions = deskGuestAccounts.filter(
+    (guest) => guest.id !== deskUser?.id,
+  );
+  useEffect(() => {
+    if (
+      !deskUser ||
+      deskUser.customerPersona !== 'HOTEL_GUEST' ||
+      deskIsHostel ||
+      !deskPropertyId
+    ) {
+      setDeskGuestAccounts([]);
+      setDeskGuestAccountsLoading(false);
+      setDeskGuestAccountsError('');
+      return;
+    }
+
+    let active = true;
+    const loadGuestAccounts = async () => {
+      setDeskGuestAccounts([]);
+      setDeskGuestAccountsLoading(true);
+      setDeskGuestAccountsError('');
+      try {
+        const [firstPage, assignmentsResponse] = await Promise.all([
+          apiClient.get<UserListResponse>('/admin/users?role=CUSTOMER&limit=100&offset=0'),
+          apiClient.get<ActiveAssignment[]>(
+            '/stay/assignments/active?includeHostelers=true',
+          ),
+        ]);
+        const allCustomers = [...firstPage.data.items];
+        for (let offset = allCustomers.length; offset < firstPage.data.total; offset += 100) {
+          const response = await apiClient.get<UserListResponse>(
+            `/admin/users?role=CUSTOMER&limit=100&offset=${offset}`,
+          );
+          allCustomers.push(...response.data.items);
+        }
+        if (!active) return;
+
+        const assignedUserIds = getOccupiedUserIds(assignmentsResponse.data);
+        setDeskGuestAccounts(
+          allCustomers.filter(
+            (guest) =>
+              guest.role === 'CUSTOMER' &&
+              guest.status === 'ACTIVE' &&
+              guest.customerPersona === 'HOTEL_GUEST' &&
+              guest.id !== deskUser.id &&
+              !assignedUserIds.has(guest.id) &&
+              Boolean(guest.email && guest.phone),
+          ),
+        );
+      } catch (error: unknown) {
+        if (active) {
+          const axiosError = error as AxiosError<{ error?: { message?: string } }>;
+          setDeskGuestAccountsError(
+            axiosError.response?.data?.error?.message
+              || axiosError.message
+              || 'Unable to load additional guest accounts.',
+          );
+        }
+      } finally {
+        if (active) setDeskGuestAccountsLoading(false);
+      }
+    };
+    void loadGuestAccounts();
+    return () => {
+      active = false;
+    };
+  }, [deskUser, deskPropertyId, deskIsHostel]);
+
+  useEffect(() => {
+    const maxAdditionalGuests = Math.max(0, (selectedDeskUnit?.capacity ?? 1) - 1);
+    setDeskSelectedOccupantUserIds((current) =>
+      current.slice(0, maxAdditionalGuests),
+    );
+  }, [selectedDeskUnit?.capacity]);
   const deskHasRateOverride = Boolean(
     selectedDeskUnit &&
     deskAgreedRate !== '' &&
@@ -495,13 +636,16 @@ export const UserList: React.FC = () => {
 
   const submitDeskCheckIn = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!deskUser || !deskProperty || !deskUnitId) return;
+    if (!deskUser || !deskProperty || !deskUnitId || deskUserAlreadyAssigned) return;
     setDeskSaving(true);
     setDeskError('');
     try {
       await apiClient.post('/stay/assignments', {
         unitId: deskUnitId,
         userId: deskUser.id,
+        ...(deskSelectedOccupantUserIds.length
+          ? { guestUserIds: deskSelectedOccupantUserIds }
+          : {}),
         expectedCheckIn: new Date(deskCheckIn).toISOString(),
         ...(deskCheckOut ? { expectedCheckOut: new Date(deskCheckOut).toISOString() } : {}),
         billingStrategy: deskIsHostel ? 'RECURRING_MONTHLY' : 'PER_NIGHT_STAY',
@@ -530,6 +674,11 @@ export const UserList: React.FC = () => {
       {actionNotice && (
         <div role="status" className="border border-emerald-300 bg-emerald-50 dark:bg-emerald-950/30 dark:border-emerald-800 p-3 text-xs text-emerald-800 dark:text-emerald-200">
           {actionNotice}
+        </div>
+      )}
+      {checkInStatusError && (
+        <div role="alert" className="border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+          {checkInStatusError}
         </div>
       )}
       {!editorMode && (
@@ -726,14 +875,24 @@ export const UserList: React.FC = () => {
                   {canCheckIn && (
                     <td className="py-2 px-3">
                       {u.role === 'CUSTOMER' && u.status === 'ACTIVE' ? (
-                        <button
-                          type="button"
-                          onClick={() => openDeskCheckIn(u)}
-                          className="inline-flex items-center gap-1 border border-blue-700 px-2 py-1 text-[10px] font-sans font-bold uppercase text-blue-700 hover:bg-blue-50 dark:border-blue-400 dark:text-blue-300 dark:hover:bg-blue-950/30"
-                        >
-                          <DoorOpen className="h-3 w-3" />
-                          Walk-in
-                        </button>
+                        checkedInCustomerIds.has(u.id) ? (
+                          <span className="text-[10px] font-sans font-bold uppercase text-emerald-700 dark:text-emerald-300">
+                            Checked in
+                          </span>
+                        ) : checkInStatusLoading || checkInStatusError ? (
+                          <span className="text-[10px] font-sans text-slate-400">
+                            {checkInStatusLoading ? 'Checking…' : 'Unavailable'}
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => openDeskCheckIn(u)}
+                            className="inline-flex items-center gap-1 border border-blue-700 px-2 py-1 text-[10px] font-sans font-bold uppercase text-blue-700 hover:bg-blue-50 dark:border-blue-400 dark:text-blue-300 dark:hover:bg-blue-950/30"
+                          >
+                            <DoorOpen className="h-3 w-3" />
+                            Walk-in
+                          </button>
+                        )
                       ) : <span className="text-[10px] text-slate-400">—</span>}
                     </td>
                   )}
@@ -846,6 +1005,11 @@ export const UserList: React.FC = () => {
                 {deskError}
               </div>
             )}
+            {deskUserAlreadyAssigned && (
+              <div role="alert" className="border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+                This customer is already checked into a room or bed and cannot be assigned another.
+              </div>
+            )}
             <form onSubmit={submitDeskCheckIn} className="grid gap-4 md:grid-cols-2">
               <label className="space-y-1 text-xs font-semibold">
                 Property *
@@ -870,7 +1034,10 @@ export const UserList: React.FC = () => {
                 <select
                   required
                   value={deskUnitId}
-                  onChange={(event) => setDeskUnitId(event.target.value)}
+                  onChange={(event) => {
+                    setDeskUnitId(event.target.value);
+                    setDeskSelectedOccupantUserIds([]);
+                  }}
                   disabled={!deskPropertyId || deskLoading || deskAvailableUnits.length === 0}
                   className={userInputClass}
                 >
@@ -882,6 +1049,54 @@ export const UserList: React.FC = () => {
                   ))}
                 </select>
               </label>
+                {deskUser.customerPersona === 'HOTEL_GUEST' && deskProperty && !deskIsHostel && (
+                  <fieldset className="space-y-2 border-t border-slate-200 pt-3 dark:border-slate-700 md:col-span-2">
+                    <legend className="text-xs font-semibold">Additional occupants</legend>
+                    <p className="text-xs text-slate-500">
+                      The selected guest remains responsible for the room. Choose other active hotel guest accounts to share it.
+                    </p>
+                    {deskGuestAccountsError && (
+                      <p role="alert" className="text-xs text-rose-700">{deskGuestAccountsError}</p>
+                    )}
+                    {deskGuestAccountsLoading ? (
+                      <p className="text-xs text-slate-500">Loading available guest accounts…</p>
+                    ) : deskAdditionalGuestOptions.length ? (
+                      deskAdditionalGuestOptions.map((guest) => (
+                        <label key={guest.id} className="flex items-center gap-2 text-xs">
+                          <input
+                            type="checkbox"
+                            checked={deskSelectedOccupantUserIds.includes(guest.id)}
+                            disabled={
+                              deskSaving ||
+                              !selectedDeskUnit ||
+                              (!deskSelectedOccupantUserIds.includes(guest.id) &&
+                                deskSelectedOccupantUserIds.length >= selectedDeskUnit.capacity - 1)
+                            }
+                            onChange={(event) => {
+                              setDeskSelectedOccupantUserIds((current) =>
+                                event.target.checked
+                                  ? [...current, guest.id]
+                                  : current.filter((id) => id !== guest.id),
+                              );
+                            }}
+                          />
+                          <span>
+                            {guest.full_name || guest.email}
+                            {guest.email && guest.full_name ? ` · ${guest.email}` : ''}
+                          </span>
+                        </label>
+                      ))
+                    ) : (
+                      <p className="text-xs text-slate-500">No other available hotel guest accounts are registered.</p>
+                    )}
+                    {selectedDeskUnit &&
+                      deskSelectedOccupantUserIds.length + 1 > selectedDeskUnit.capacity && (
+                        <p role="alert" className="text-xs text-rose-700">
+                          This room can hold at most {selectedDeskUnit.capacity} people.
+                        </p>
+                      )}
+                  </fieldset>
+                )}
               <label className="space-y-1 text-xs font-semibold">
                 Check-in date and time *
                 <input
@@ -933,7 +1148,7 @@ export const UserList: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  disabled={deskSaving || deskLoading || !deskUnitId || (deskHasRateOverride && !deskRateOverrideReason.trim())}
+                  disabled={deskSaving || deskLoading || deskUserAlreadyAssigned || !deskUnitId || (deskHasRateOverride && !deskRateOverrideReason.trim())}
                   className="inline-flex items-center gap-2 bg-blue-700 px-4 py-2 text-xs font-bold uppercase text-white hover:bg-blue-800 disabled:opacity-60"
                 >
                   <DoorOpen className="h-3.5 w-3.5" />
@@ -955,14 +1170,32 @@ export const UserList: React.FC = () => {
           editorSaving={editorSaving}
           editorError={editorError}
           activationUrl={activationUrl}
+          initialPassword={initialPassword}
           isAdmin={isAdmin}
           selectedPropertyId={selectedPropertyId}
           properties={properties}
-          guestProperties={guestProperties}
           closeEditor={closeEditor}
           saveUser={saveUser}
           toggleProperty={toggleProperty}
           setEditorMode={setEditorMode}
+          onStayRegistered={async () => {
+            if (!selectedUserId) return;
+            try {
+              const { data } = await apiClient.get<ManagedUser>(
+                `/admin/users/${encodeURIComponent(selectedUserId)}`,
+              );
+              setSelectedUser(data);
+              setUserForm(formFromUser(data));
+              await fetchUsers();
+            } catch (error: unknown) {
+              const axiosError = error as AxiosError<{ error?: { message?: string } }>;
+              setEditorError(
+                axiosError.response?.data?.error?.message
+                  || axiosError.message
+                  || 'Stay registered, but user details could not be refreshed.',
+              );
+            }
+          }}
         />
       )}
       {pendingAction && (

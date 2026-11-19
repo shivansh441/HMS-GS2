@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { AxiosError } from 'axios';
-import { RefreshCw, Save } from 'lucide-react';
+import { BedDouble, CircleDollarSign, FileText, Save, Wallet } from 'lucide-react';
 import { apiClient } from '../../lib/api';
 import { LoadingIndicator } from '../../components/ui/LoadingIndicator';
+import { PaymentCollectionModal } from '../billing/PaymentCollectionModal';
 
 interface Invoice {
   id: string;
@@ -50,8 +51,7 @@ type ConfiguredUtilityFee = PropertyFee & { feeType: UtilityFeeType };
 
 const inputClass =
   'w-full border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-blue-600 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-white';
-const tableCellClass = 'whitespace-nowrap border-t border-slate-200 p-3 align-middle dark:border-slate-700';
-const paymentMethods = ['CASH', 'UPI', 'CARD', 'BANK_TRANSFER'] as const;
+const tableCellClass = 'whitespace-nowrap border-t border-slate-100 p-3 align-middle dark:border-slate-800';
 
 function getErrorMessage(error: unknown) {
   const axiosError = error as AxiosError<{ error?: { message?: string } }>;
@@ -72,20 +72,23 @@ function monthPeriod(month: string) {
   };
 }
 
+function formatCurrency(value: number, currency: string) {
+  return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(value);
+}
+
 export const PropertyLedger: React.FC<{
   propertyId: string;
   propertyName: string;
   currency: string;
   canRecordUtilities: boolean;
-}> = ({ propertyId, propertyName, currency, canRecordUtilities }) => {
+  onRegisterRefresh: (propertyId: string, refresh: () => Promise<void>) => () => void;
+}> = ({ propertyId, propertyName, currency, canRecordUtilities, onRegisterRefresh }) => {
   const [utilityMonth, setUtilityMonth] = useState(previousMonthString(new Date()));
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [utilityFees, setUtilityFees] = useState<ConfiguredUtilityFee[]>([]);
   const [utilityReadings, setUtilityReadings] = useState<Record<string, UtilityReadings>>({});
   const [invoices, setInvoices] = useState<Invoice[]>([]);
-  const [paymentAmounts, setPaymentAmounts] = useState<Record<string, string>>({});
-  const [paymentMethodsByTarget, setPaymentMethodsByTarget] = useState<Record<string, string>>({});
-  const [referenceByTarget, setReferenceByTarget] = useState<Record<string, string>>({});
+  const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
@@ -120,6 +123,11 @@ export const PropertyLedger: React.FC<{
     void loadLedger();
   }, [loadLedger]);
 
+  useEffect(
+    () => onRegisterRefresh(propertyId, loadLedger),
+    [loadLedger, onRegisterRefresh, propertyId],
+  );
+
   const recordUtilityReading = async (assignmentId: string, utilityFeeType: UtilityFeeType) => {
     const readingKey = `${assignmentId}:${utilityFeeType}`;
     const reading = utilityReadings[readingKey];
@@ -153,20 +161,25 @@ export const PropertyLedger: React.FC<{
     }
   };
 
-  const recordPayment = async (invoiceId: string) => {
-    const invoice = invoices.find((item) => item.id === invoiceId);
+  const recordPayment = async (data: {
+    amount: string;
+    paymentMethod: 'CASH' | 'UPI' | 'CARD' | 'BANK_TRANSFER';
+    reference: string;
+  }) => {
+    if (!selectedInvoice) return;
     setWorking(true);
     setErrorMessage('');
     setSuccessMessage('');
     try {
-      await apiClient.post(`/billing/invoices/${encodeURIComponent(invoiceId)}/payments`, {
-        amount: paymentAmounts[invoiceId] || String(invoice?.balance ?? 0),
-        paymentMethod: paymentMethodsByTarget[invoiceId] || 'CASH',
-        ...(referenceByTarget[invoiceId]?.trim()
-          ? { reference: referenceByTarget[invoiceId].trim() }
+      await apiClient.post(`/billing/invoices/${encodeURIComponent(selectedInvoice.id)}/payments`, {
+        amount: data.amount,
+        paymentMethod: data.paymentMethod,
+        ...(data.reference
+          ? { reference: data.reference }
           : {}),
       });
       setSuccessMessage('Invoice payment recorded.');
+      setSelectedInvoice(null);
       await loadLedger();
     } catch (error: unknown) {
       setErrorMessage(getErrorMessage(error));
@@ -199,29 +212,44 @@ export const PropertyLedger: React.FC<{
   }
   const activeAssignmentIds = new Set(assignments.map((assignment) => assignment.id));
   const columnCount = 8 + utilityFees.length;
+  const totalPaid = invoices.reduce((total, invoice) => total + Number(invoice.paidAmount), 0);
+  const totalBalance = invoices.reduce((total, invoice) => total + Number(invoice.balance), 0);
 
   return (
     <section className="space-y-5">
-      <header className="flex flex-wrap items-end justify-between gap-3">
-        <h2 className="text-sm font-bold uppercase">Monthly bills</h2>
-        <div className="flex items-center gap-2">
-          {canRecordUtilities && utilityFees.length > 0 && (
-            <label className="flex items-center gap-2 text-xs font-semibold">
-              Meter month
-              <input type="month" value={utilityMonth} onChange={(event) => setUtilityMonth(event.target.value)} className={`${inputClass} w-auto`} />
-            </label>
-          )}
-          <button type="button" onClick={() => void loadLedger()} disabled={loading} className="inline-flex items-center gap-2 border border-slate-300 px-3 py-2 text-xs font-bold dark:border-slate-700">
-            <RefreshCw className="h-3.5 w-3.5" /> Refresh
-          </button>
+      {canRecordUtilities && utilityFees.length > 0 && (
+        <div className="flex justify-end">
+          <label className="flex items-center gap-2 text-xs font-semibold">
+            Meter month
+            <input type="month" value={utilityMonth} onChange={(event) => setUtilityMonth(event.target.value)} className={`${inputClass} w-auto`} />
+          </label>
         </div>
-      </header>
+      )}
       {errorMessage && <div role="alert" className="border border-red-300 bg-red-50 p-3 text-sm text-red-800">{errorMessage}</div>}
       {successMessage && <div role="status" className="border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-800">{successMessage}</div>}
 
-      <div className="overflow-x-auto border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
-        <table className="w-full min-w-[1250px] border-collapse text-left text-xs">
-          <thead className="bg-slate-100 uppercase text-slate-500 dark:bg-slate-900 dark:text-slate-400">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <article className="border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+          <div className="flex items-center justify-between text-xs font-semibold text-slate-500"><span>Active hostelers</span><BedDouble className="h-4 w-4" /></div>
+          <p className="mt-2 text-2xl font-bold">{assignments.length}</p>
+        </article>
+        <article className="border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+          <div className="flex items-center justify-between text-xs font-semibold text-slate-500"><span>Total invoices</span><FileText className="h-4 w-4" /></div>
+          <p className="mt-2 text-2xl font-bold">{invoices.length}</p>
+        </article>
+        <article className="border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+          <div className="flex items-center justify-between text-xs font-semibold text-slate-500"><span>Amount collected</span><CircleDollarSign className="h-4 w-4" /></div>
+          <p className="mt-2 text-xl font-bold">{formatCurrency(totalPaid, currency)}</p>
+        </article>
+        <article className="border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+          <div className="flex items-center justify-between text-xs font-semibold text-slate-500"><span>Outstanding balance</span><Wallet className="h-4 w-4" /></div>
+          <p className="mt-2 text-xl font-bold">{formatCurrency(totalBalance, currency)}</p>
+        </article>
+      </div>
+
+      <div className="overflow-x-auto border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+        <table className="w-full min-w-[1250px] text-left text-xs">
+          <thead className="bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500 dark:bg-slate-800">
             <tr>
               <th className="p-3">Hosteler</th>
               <th className="p-3">Hostel / room no.</th>
@@ -258,7 +286,7 @@ export const PropertyLedger: React.FC<{
                 ...(invoice?.additionalFees || []),
               ];
               return (
-                <tr key={invoice?.id || assignment.id} className="border-t border-slate-200 align-top dark:border-slate-700">
+                <tr key={invoice?.id || assignment.id} className="border-t border-slate-100 align-top dark:border-slate-800">
                   <td className={tableCellClass}>
                     <div className="font-bold">{assignment.userName || 'Hosteler'}</div>
                     <div className="mt-1 font-mono text-[10px] text-slate-500">{assignment.userId}</div>
@@ -342,14 +370,14 @@ export const PropertyLedger: React.FC<{
                   </td>
                   <td className={tableCellClass}>
                     {invoice && Number(invoice.balance) > 0 ? (
-                      <div className="flex min-w-64 flex-col gap-2">
-                        <input aria-label={`Payment amount for ${invoice.hostelerName}`} type="number" min="0.01" max={Number(invoice.balance)} step="0.01" value={paymentAmounts[invoice.id] ?? String(invoice.balance)} onChange={(event) => setPaymentAmounts((current) => ({ ...current, [invoice.id]: event.target.value }))} className={inputClass} />
-                        <select aria-label={`Payment method for ${invoice.hostelerName}`} value={paymentMethodsByTarget[invoice.id] || 'CASH'} onChange={(event) => setPaymentMethodsByTarget((current) => ({ ...current, [invoice.id]: event.target.value }))} className={inputClass}>
-                          {paymentMethods.map((method) => <option key={method} value={method}>{method.replace('_', ' ')}</option>)}
-                        </select>
-                        <input aria-label={`Payment reference for ${invoice.hostelerName}`} maxLength={100} placeholder="Reference" value={referenceByTarget[invoice.id] || ''} onChange={(event) => setReferenceByTarget((current) => ({ ...current, [invoice.id]: event.target.value }))} className={inputClass} />
-                        <button type="button" disabled={working} onClick={() => void recordPayment(invoice.id)} className="inline-flex items-center justify-center gap-2 bg-emerald-700 px-3 py-2 text-xs font-bold uppercase text-white disabled:opacity-60"><Save className="h-4 w-4" /> Record payment</button>
-                      </div>
+                      <button
+                        type="button"
+                        disabled={working}
+                        onClick={() => { setErrorMessage(''); setSelectedInvoice(invoice); }}
+                        className="inline-flex items-center justify-center gap-2 bg-emerald-700 px-3 py-2 text-xs font-bold uppercase text-white disabled:opacity-60"
+                      >
+                        <Save className="h-4 w-4" /> Record payment
+                      </button>
                     ) : invoice ? <span className="font-semibold text-emerald-700">Paid</span> : '—'}
                   </td>
                 </tr>
@@ -358,6 +386,22 @@ export const PropertyLedger: React.FC<{
           </tbody>
         </table>
       </div>
+      {selectedInvoice && (
+        <PaymentCollectionModal
+          kind="invoice"
+          personName={selectedInvoice.hostelerName}
+          propertyName={selectedInvoice.propertyName}
+          unitNumber={selectedInvoice.unitNumber}
+          currency={currency}
+          amountDue={selectedInvoice.balance}
+          invoiceNumber={selectedInvoice.invoiceNumber}
+          billingMonth={selectedInvoice.billingMonth}
+          isSubmitting={working}
+          errorMessage={errorMessage}
+          onClose={() => setSelectedInvoice(null)}
+          onSubmit={(data) => void recordPayment(data)}
+        />
+      )}
     </section>
   );
 };

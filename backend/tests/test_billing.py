@@ -517,3 +517,43 @@ def test_reservation_checkin_collects_configured_security_deposit(client: TestCl
     assert receipt is not None
     assert receipt.payment_method == "UPI"
     assert receipt.reference == "UPI-DEPOSIT-1"
+
+
+def test_fee_ledger_rejects_hotel_properties(client: TestClient, db_session):
+    headers = _admin_headers(db_session)
+    response = client.post(
+        "/api/v1/properties",
+        headers=headers,
+        json={
+            "name": f"Hotel Ledger Test {uuid4().hex[:8]}",
+            "type": "HOTEL",
+            "floors": 1,
+            "address": "1 Hotel Lane",
+            "city": "Hotel City",
+            "state": "Hotel State",
+            "pincode": "10000",
+            "contactPhone": "1234567890",
+            "timezone": "Asia/Kolkata",
+        },
+    )
+    assert response.status_code == 201, response.text
+    property_id = response.json()["id"]
+
+    for endpoint in (
+        f"/api/v1/billing/properties/{property_id}/invoices",
+        f"/api/v1/billing/properties/{property_id}/assignments",
+        f"/api/v1/billing/properties/{property_id}/invoices/generate",
+    ):
+        ledger_response = client.get(endpoint, headers=headers) if endpoint.endswith(
+            ("/invoices", "/assignments")
+        ) else client.post(endpoint, headers=headers)
+        assert ledger_response.status_code == 400, ledger_response.text
+        assert ledger_response.json()["error"]["code"] == "HOSTEL_PROPERTY_REQUIRED"
+
+    bulk_generation = client.post(
+        "/api/v1/billing/invoices/generate-monthly",
+        headers=headers,
+        params={"propertyId": property_id},
+    )
+    assert bulk_generation.status_code == 400, bulk_generation.text
+    assert bulk_generation.json()["error"]["code"] == "HOSTEL_PROPERTY_REQUIRED"

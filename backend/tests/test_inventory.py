@@ -5,15 +5,17 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
-from app.core.crypto import decrypt_data
+from app.core.crypto import decrypt_data, process_id_document
 from app.core.permissions import Role
 from app.core.security import create_access_token
 from app.db.models import (
     AuditLog,
+    CustomerOccupantProfile,
     DepositEscrow,
     Floor,
+    MonthlyInvoice,
     PaymentReceipt,
     Property,
     PropertyFeeConfig,
@@ -485,6 +487,12 @@ def test_unit_status_and_staff_scope(client: TestClient, db_session):
     )
     assert status_response.status_code == 200, status_response.text
     assert status_response.json()["status"] == "OCCUPIED"
+    room_matrix = client.get(
+        f"/api/v1/properties/{prop['id']}/units/matrix",
+        headers=admin_headers,
+    )
+    assert room_matrix.status_code == 200, room_matrix.text
+    assert room_matrix.json()["floors"][0]["rooms"][0]["status"] == "UNAVAILABLE"
 
     staff = User(
         email=f"inventory-empty-{uuid4().hex[:8]}@example.test",
@@ -898,6 +906,354 @@ def test_sharing_rates_fee_rules_walk_in_rate_and_utility_arrears(client: TestCl
     assert reading.billing_status == "QUEUED"
 
 
+def test_hostel_walk_in_rejects_exactly_one_night(client: TestClient, db_session):
+    headers = _headers(db_session)
+    prop = _create_property(client, headers, "HOSTEL_COED")
+    prop_record = db_session.get(Property, prop["id"])
+    assert prop_record is not None
+    floor = Floor(property_id=prop_record.id, number=99, name="Ground")
+    db_session.add(floor)
+    db_session.flush()
+    bed = Unit(
+        property_id=prop_record.id,
+        floor_id=floor.id,
+        unit_number=f"BED-{uuid4().hex[:6]}",
+        floor=99,
+        type="BED",
+        category="CLASSIC",
+        capacity=1,
+        default_recurring_monthly_rate=100,
+        status="AVAILABLE",
+    )
+    guest = User(
+        email=f"hostel-one-night-{uuid4().hex[:8]}@example.test",
+        full_name="Hostel Guest",
+        password_hash="not-used",
+        role=Role.CUSTOMER,
+        status="ACTIVE",
+    )
+    db_session.add_all([bed, guest])
+    db_session.commit()
+
+    response = client.post(
+        "/api/v1/stay/assignments",
+        headers=headers,
+        json={
+            "unitId": bed.id,
+            "userId": guest.id,
+            "expectedCheckIn": "2026-11-06T14:00:00Z",
+            "expectedCheckOut": "2026-11-07T14:00:00Z",
+            "billingStrategy": "RECURRING_MONTHLY",
+            "checkInNow": False,
+        },
+    )
+
+    assert response.status_code == 400
+    assert "exactly one night" in response.json()["error"]["message"].lower()
+
+
+def test_unit_with_open_assignment_cannot_be_assigned_again(client: TestClient, db_session):
+    headers = _headers(db_session)
+    prop = _create_property(client, headers)
+    prop_record = db_session.get(Property, prop["id"])
+    assert prop_record is not None
+    floor = Floor(property_id=prop_record.id, number=98, name="Ground")
+    db_session.add(floor)
+    db_session.flush()
+    unit = Unit(
+        property_id=prop_record.id,
+        floor_id=floor.id,
+        unit_number=f"ROOM-{uuid4().hex[:6]}",
+        floor=98,
+        type="ROOM",
+        category="CLASSIC",
+        capacity=2,
+        default_price_per_night=100,
+        status="AVAILABLE",
+    )
+    guests = [
+        User(
+            email=f"double-assignment-{uuid4().hex[:8]}@example.test",
+            full_name="Assignment Guest",
+            password_hash="not-used",
+            role=Role.CUSTOMER,
+            status="ACTIVE",
+        )
+        for _ in range(2)
+    ]
+    db_session.add_all([unit, *guests])
+    db_session.commit()
+
+    assignment = client.post(
+        "/api/v1/stay/assignments",
+        headers=headers,
+        json={
+            "unitId": unit.id,
+            "userId": guests[0].id,
+            "expectedCheckIn": "2026-11-17T14:00:00Z",
+            "expectedCheckOut": "2026-11-19T11:00:00Z",
+            "billingStrategy": "PER_NIGHT_STAY",
+            "checkInNow": True,
+        },
+    )
+    assert assignment.status_code == 201, assignment.text
+
+    status_update = client.patch(
+        f"/api/v1/units/{unit.id}/status",
+        headers=headers,
+        json={"status": "AVAILABLE"},
+    )
+    assert status_update.status_code == 409
+    assert status_update.json()["error"]["code"] == "UNIT_ALREADY_ASSIGNED"
+
+    db_session.execute(
+        update(Unit).where(Unit.id == unit.id).values(status="AVAILABLE")
+    )
+    db_session.commit()
+    duplicate = client.post(
+        "/api/v1/stay/assignments",
+        headers=headers,
+        json={
+            "unitId": unit.id,
+            "userId": guests[1].id,
+            "expectedCheckIn": "2026-11-18T14:00:00Z",
+            "expectedCheckOut": "2026-11-20T11:00:00Z",
+            "billingStrategy": "PER_NIGHT_STAY",
+            "checkInNow": True,
+        },
+    )
+    assert duplicate.status_code == 409, duplicate.text
+    assert duplicate.json()["error"]["code"] == "UNIT_ALREADY_ASSIGNED"
+
+
+def test_active_additional_guest_cannot_be_assigned_to_another_room(
+    client: TestClient, db_session
+):
+    headers = _headers(db_session)
+    prop = _create_property(client, headers)
+    property_record = db_session.get(Property, prop["id"])
+    assert property_record is not None
+    floor = Floor(property_id=property_record.id, number=1, name="Ground")
+    db_session.add(floor)
+    db_session.flush()
+    current_room = Unit(
+        property_id=property_record.id,
+        floor_id=floor.id,
+        unit_number=f"ROOM-{uuid4().hex[:6]}",
+        floor=1,
+        type="ROOM",
+        category="CLASSIC",
+        capacity=2,
+        default_price_per_night=Decimal("120.00"),
+        status="AVAILABLE",
+    )
+    second_room = Unit(
+        property_id=property_record.id,
+        floor_id=floor.id,
+        unit_number=f"ROOM-{uuid4().hex[:6]}",
+        floor=1,
+        type="ROOM",
+        category="CLASSIC",
+        capacity=2,
+        default_price_per_night=Decimal("150.00"),
+        status="AVAILABLE",
+    )
+    primary_guest = User(
+        email=f"primary-{uuid4().hex[:8]}@example.test",
+        full_name="Primary Guest",
+        password_hash="not-used",
+        role=Role.CUSTOMER,
+        status="ACTIVE",
+    )
+    additional_guest = User(
+        email=f"additional-{uuid4().hex[:8]}@example.test",
+        phone=f"+1555{uuid4().int % 10000000:07d}",
+        full_name="Additional Guest",
+        password_hash="not-used",
+        role=Role.CUSTOMER,
+        customer_persona="HOTEL_GUEST",
+        status="ACTIVE",
+    )
+    encrypted_id, last4, lookup_hash = process_id_document(
+        f"ADDITIONAL-{uuid4().hex[:8]}"
+    )
+    additional_guest.id_document_type = "PASSPORT"
+    additional_guest.id_document_number_encrypted = encrypted_id
+    additional_guest.id_document_last4 = last4
+    additional_guest.id_document_lookup_hash = lookup_hash
+    db_session.add_all([current_room, second_room, primary_guest, additional_guest])
+    db_session.commit()
+
+    assignment = client.post(
+        "/api/v1/stay/assignments",
+        headers=headers,
+        json={
+            "unitId": current_room.id,
+            "userId": primary_guest.id,
+            "expectedCheckIn": datetime.now(timezone.utc).isoformat(),
+            "billingStrategy": "PER_NIGHT_STAY",
+            "checkInNow": True,
+        },
+    )
+    assert assignment.status_code == 201, assignment.text
+    stay_record = db_session.scalar(
+        select(StayRecord).where(
+            StayRecord.assignment_id == assignment.json()["id"]
+        )
+    )
+    assert stay_record is not None
+    occupant_document = f"ADDITIONAL-{uuid4().hex[:8]}"
+    encrypted_occupant_id, occupant_last4, _ = process_id_document(occupant_document)
+    db_session.add(
+        StayOccupant(
+            stay_record=stay_record,
+            full_name=additional_guest.full_name,
+            id_document_type="PASSPORT",
+            id_document_number_encrypted=encrypted_occupant_id,
+            id_document_last4=occupant_last4,
+        )
+    )
+    stay_record.guest_count = 2
+    db_session.commit()
+
+    active_assignments = client.get(
+        "/api/v1/stay/assignments/active",
+        headers=headers,
+        params={"propertyId": property_record.id},
+    )
+    assert active_assignments.status_code == 200, active_assignments.text
+    assert active_assignments.json()[0]["occupantUserIds"] == [
+        primary_guest.id,
+        additional_guest.id,
+    ]
+
+    second_assignment = client.post(
+        "/api/v1/stay/assignments",
+        headers=headers,
+        json={
+            "unitId": second_room.id,
+            "userId": additional_guest.id,
+            "expectedCheckIn": datetime.now(timezone.utc).isoformat(),
+            "billingStrategy": "PER_NIGHT_STAY",
+            "checkInNow": True,
+        },
+    )
+    assert second_assignment.status_code == 409, second_assignment.text
+    assert second_assignment.json()["error"]["code"] == "CUSTOMER_ALREADY_ASSIGNED"
+
+
+def test_customer_with_active_assignment_cannot_be_assigned_or_checked_in_again(
+    client: TestClient, db_session
+):
+    headers = _headers(db_session)
+    prop = _create_property(client, headers, "HOSTEL_COED")
+    for index in range(1, 4):
+        response = client.post(
+            f"/api/v1/properties/{prop['id']}/units",
+            headers=headers,
+            json={
+                "unitNumber": f"HOSTEL-{uuid4().hex[:6]}-{index}",
+                "floor": 1,
+                "type": "ROOM",
+                "category": "CLASSIC",
+                "sharingType": "SINGLE",
+                "capacity": 1,
+                "bedsPerRoom": 1,
+                "baseRateMonthly": "6000",
+            },
+        )
+        assert response.status_code == 201, response.text
+    beds = db_session.scalars(
+        select(Unit)
+        .where(Unit.property_id == prop["id"], Unit.type == "BED")
+        .order_by(Unit.unit_number)
+    ).all()
+    assert len(beds) == 3
+    customer = User(
+        email=f"single-room-{uuid4().hex[:8]}@example.test",
+        full_name="Single Room Resident",
+        password_hash="not-used",
+        role=Role.CUSTOMER,
+        status="ACTIVE",
+    )
+    db_session.add(customer)
+    db_session.commit()
+    expected_check_in = datetime.now(timezone.utc).isoformat()
+
+    reserved = client.post(
+        "/api/v1/stay/assignments",
+        headers=headers,
+        json={
+            "unitId": beds[1].id,
+            "userId": customer.id,
+            "expectedCheckIn": expected_check_in,
+            "billingStrategy": "RECURRING_MONTHLY",
+            "checkInNow": False,
+        },
+    )
+    assert reserved.status_code == 201, reserved.text
+    occupied = client.post(
+        "/api/v1/stay/assignments",
+        headers=headers,
+        json={
+            "unitId": beds[0].id,
+            "userId": customer.id,
+            "expectedCheckIn": expected_check_in,
+            "billingStrategy": "RECURRING_MONTHLY",
+            "checkInNow": True,
+        },
+    )
+    assert occupied.status_code == 201, occupied.text
+    active_assignments = client.get(
+        "/api/v1/stay/assignments/active",
+        headers=headers,
+        params={"includeHostelers": True},
+    )
+    assert active_assignments.status_code == 200, active_assignments.text
+    assert occupied.json()["id"] in [item["id"] for item in active_assignments.json()]
+
+    duplicate = client.post(
+        "/api/v1/stay/assignments",
+        headers=headers,
+        json={
+            "unitId": beds[2].id,
+            "userId": customer.id,
+            "expectedCheckIn": expected_check_in,
+            "billingStrategy": "RECURRING_MONTHLY",
+            "checkInNow": True,
+        },
+    )
+    assert duplicate.status_code == 409, duplicate.text
+    assert duplicate.json()["error"]["code"] == "CUSTOMER_ALREADY_ASSIGNED"
+
+    second_check_in = client.post(
+        f"/api/v1/stay/assignments/{reserved.json()['id']}/check-in",
+        headers=headers,
+        json={},
+    )
+    assert second_check_in.status_code == 409, second_check_in.text
+    assert second_check_in.json()["error"]["code"] == "CUSTOMER_ALREADY_ASSIGNED"
+
+    checkout = client.post(
+        f"/api/v1/stay/assignments/{occupied.json()['id']}/check-out",
+        headers=headers,
+        json={"folioSettled": True, "keycardReturned": True},
+    )
+    assert checkout.status_code == 200, checkout.text
+    reassignment = client.post(
+        "/api/v1/stay/assignments",
+        headers=headers,
+        json={
+            "unitId": beds[2].id,
+            "userId": customer.id,
+            "expectedCheckIn": expected_check_in,
+            "billingStrategy": "RECURRING_MONTHLY",
+            "checkInNow": True,
+        },
+    )
+    assert reassignment.status_code == 201, reassignment.text
+
+
 def test_preallocated_stay_check_in_and_check_out_lifecycle(client: TestClient, db_session):
     headers = _headers(db_session)
     prop = _create_property(client, headers)
@@ -924,7 +1280,23 @@ def test_preallocated_stay_check_in_and_check_out_lifecycle(client: TestClient, 
         role=Role.CUSTOMER,
         status="ACTIVE",
     )
-    db_session.add_all([unit, guest])
+    additional_guest = User(
+        email=f"stay-additional-{uuid4().hex[:8]}@example.test",
+        phone=f"+1555{uuid4().int % 10000000:07d}",
+        full_name="Additional Stay Guest",
+        password_hash="not-used",
+        role=Role.CUSTOMER,
+        customer_persona="HOTEL_GUEST",
+        status="ACTIVE",
+    )
+    encrypted_id, last4, lookup_hash = process_id_document(
+        f"ADDITIONAL-{uuid4().hex[:8]}"
+    )
+    additional_guest.id_document_type = "PASSPORT"
+    additional_guest.id_document_number_encrypted = encrypted_id
+    additional_guest.id_document_last4 = last4
+    additional_guest.id_document_lookup_hash = lookup_hash
+    db_session.add_all([unit, guest, additional_guest])
     db_session.commit()
 
     assignment_response = client.post(
@@ -973,7 +1345,7 @@ def test_preallocated_stay_check_in_and_check_out_lifecycle(client: TestClient, 
     checkin = client.post(
         f"/api/v1/stay/assignments/{assignment_data['id']}/check-in",
         headers=headers,
-        json={},
+        json={"guestUserIds": [additional_guest.id]},
     )
     assert checkin.status_code == 200, checkin.text
     assert checkin.json()["status"] == "CHECKED_IN"
@@ -983,8 +1355,147 @@ def test_preallocated_stay_check_in_and_check_out_lifecycle(client: TestClient, 
         select(StayRecord).where(StayRecord.assignment_id == assignment_data["id"])
     )
     assert stay_record is not None and stay_record.is_active
+    db_session.refresh(stay_record)
+    assert stay_record.user_id == guest.id
+    assert len(stay_record.additional_guests) == 1
+    assert stay_record.additional_guests[0].guest_user_id == additional_guest.id
+    active_assignment = client.get(
+        "/api/v1/stay/assignments/active",
+        headers=headers,
+        params={"propertyId": prop["id"]},
+    )
+    assert active_assignment.status_code == 200, active_assignment.text
+    assert active_assignment.json()[0]["billToCollect"] == "120.00"
+    assert active_assignment.json()[0]["guestCount"] == 2
+    assert active_assignment.json()[0]["additionalGuestNames"] == [
+        "Additional Stay Guest"
+    ]
+    assignment = db_session.get(UnitAssignment, assignment_data["id"])
+    assert assignment is not None
+    assignment.expected_check_out = datetime.now(timezone.utc) + timedelta(days=2)
+    invoice = MonthlyInvoice(
+        invoice_number=f"INV-{uuid4().hex[:8]}",
+        property_id=prop["id"],
+        unit_assignment_id=assignment.id,
+        user_id=guest.id,
+        billing_month=date.today().replace(day=1),
+        due_date=date.today(),
+        unit_fee=Decimal("120.00"),
+        mess_fee=Decimal("0.00"),
+        electricity_arrears=Decimal("0.00"),
+        water_arrears=Decimal("0.00"),
+        additional_fees=[],
+        total_amount=Decimal("120.00"),
+        paid_amount=Decimal("20.00"),
+        status="PARTIALLY_PAID",
+    )
+    db_session.add(invoice)
+    db_session.flush()
+    admin = db_session.scalar(select(User).where(User.email == "admin@havenstays.local"))
+    assert admin is not None
+    db_session.add(
+        PaymentReceipt(
+            property_id=prop["id"],
+            user_id=guest.id,
+            invoice_id=invoice.id,
+            amount=Decimal("20.00"),
+            payment_method="CASH",
+            received_by_user_id=admin.id,
+            received_at=datetime.now(timezone.utc),
+        )
+    )
+    db_session.commit()
+    active_stays = client.get(
+        "/api/v1/stay/assignments/active",
+        headers=headers,
+        params={"propertyId": prop["id"]},
+    )
+    assert active_stays.status_code == 200
+    assert [item["id"] for item in active_stays.json()] == [assignment_data["id"]]
+    assert active_stays.json()[0]["currency"] == "INR"
+    assert active_stays.json()[0]["billToCollect"] == "240.00"
+    assert "paymentsReceived" not in active_stays.json()[0]
 
+    stay_record.persona = "HOSTELER"
+    db_session.commit()
+    hosteler_stays = client.get(
+        "/api/v1/stay/assignments/active",
+        headers=headers,
+        params={"propertyId": prop["id"]},
+    )
+    assert hosteler_stays.status_code == 200
+    assert hosteler_stays.json() == []
+    inventory_hosteler_stays = client.get(
+        "/api/v1/stay/assignments/active",
+        headers=headers,
+        params={"propertyId": prop["id"], "includeHostelers": True},
+    )
+    assert inventory_hosteler_stays.status_code == 200
+    assert inventory_hosteler_stays.json() == []
 
+    stay_record.persona = "TEMP_CUSTOMER"
+    db_session.commit()
+    excluded_stays = client.get(
+        "/api/v1/stay/assignments/active",
+        headers=headers,
+        params={"propertyId": prop["id"]},
+    )
+    assert excluded_stays.status_code == 200
+    assert excluded_stays.json() == []
+
+    stay_record.persona = "HOTEL_GUEST"
+    escrow = DepositEscrow(
+        property_id=prop["id"],
+        unit_assignment_id=assignment_data["id"],
+        user_id=guest.id,
+        amount=Decimal("50.00"),
+        collected_amount=Decimal("50.00"),
+        status="HELD",
+    )
+    db_session.add(escrow)
+    db_session.flush()
+    db_session.add(
+        PaymentReceipt(
+            property_id=prop["id"],
+            user_id=guest.id,
+            deposit_escrow_id=escrow.id,
+            amount=Decimal("50.00"),
+            payment_method="CASH",
+            received_by_user_id=admin.id,
+            received_at=datetime.now(timezone.utc),
+        )
+    )
+    db_session.commit()
+    summary = client.get(
+        "/api/v1/stay/assignments/summary",
+        headers=headers,
+        params={"propertyId": prop["id"]},
+    )
+    assert summary.status_code == 200, summary.text
+    assert summary.json()["totalActiveStays"] == 1
+    assert summary.json()["checkInsToday"] == 1
+    assert summary.json()["checkOutsToday"] == 0
+    assert summary.json()["amountCollectedToday"] == [{"currency": "INR", "amount": "70.00"}]
+
+    stay_record.persona = "HOSTELER"
+    db_session.commit()
+    hosteler_summary = client.get(
+        "/api/v1/stay/assignments/summary",
+        headers=headers,
+        params={"propertyId": prop["id"]},
+    )
+    assert hosteler_summary.status_code == 200, hosteler_summary.text
+    assert hosteler_summary.json()["totalActiveStays"] == 0
+    assert hosteler_summary.json()["checkInsToday"] == 0
+    assert hosteler_summary.json()["checkOutsToday"] == 0
+    assert all(
+        Decimal(amount["amount"]) == 0
+        for amount in hosteler_summary.json()["amountCollectedToday"]
+    )
+    stay_record.persona = "HOTEL_GUEST"
+    db_session.commit()
+
+    occupant_document = f"A-{uuid4().hex[:8]}"
     occupants_response = client.put(
         f"/api/v1/stay/assignments/{assignment_data['id']}/occupants",
         headers=headers,
@@ -992,20 +1503,46 @@ def test_preallocated_stay_check_in_and_check_out_lifecycle(client: TestClient, 
             "occupants": [
                 {
                     "fullName": "Actual Occupant",
+                    "email": f"actual-{uuid4().hex[:8]}@example.com",
+                    "phone": f"+1555{uuid4().int % 10000000:07d}",
                     "idDocumentType": "PASSPORT",
-                    "idDocumentNumber": "A1234567",
+                    "idDocumentNumber": occupant_document,
                 }
             ]
         },
     )
     assert occupants_response.status_code == 200, occupants_response.text
-    assert occupants_response.json()[0]["idDocumentLast4"] == "4567"
+
+
+    assert occupants_response.json()[0]["idDocumentLast4"] == occupant_document[-4:].upper()
     occupant_record = db_session.scalar(
         select(StayOccupant).where(StayOccupant.stay_record_id == stay_record.id)
     )
     assert occupant_record is not None
-    assert decrypt_data(occupant_record.id_document_number_encrypted) == "A1234567"
-    assert stay_record.guest_count == 1
+    assert decrypt_data(occupant_record.id_document_number_encrypted) == occupant_document.upper()
+    assert stay_record.guest_count == 2
+    profile = db_session.scalar(
+        select(CustomerOccupantProfile).where(
+            CustomerOccupantProfile.owner_user_id == guest.id,
+            CustomerOccupantProfile.full_name == "Actual Occupant",
+        )
+    )
+    assert profile is not None
+
+    profile_selection = client.put(
+        f"/api/v1/stay/assignments/{assignment_data['id']}/occupants",
+        headers=headers,
+        json={"occupants": [{"profileId": profile.id, "fullName": "Ignored"}]},
+    )
+    assert profile_selection.status_code == 200, profile_selection.text
+    assert profile_selection.json()[0]["profileId"] == profile.id
+
+    occupant_record = db_session.scalar(
+        select(StayOccupant).where(StayOccupant.stay_record_id == stay_record.id)
+    )
+    assert occupant_record is not None
+    assert occupant_record.full_name == "Actual Occupant"
+    assert stay_record.guest_count == 2
 
     over_capacity = client.put(
         f"/api/v1/stay/assignments/{assignment_data['id']}/occupants",
@@ -1020,19 +1557,14 @@ def test_preallocated_stay_check_in_and_check_out_lifecycle(client: TestClient, 
                 {
                     "fullName": "Second Occupant",
                     "idDocumentType": "PASSPORT",
-                    "idDocumentNumber": "B9876543",
-                },
-                {
-                    "fullName": "Third Occupant",
-                    "idDocumentType": "PASSPORT",
-                    "idDocumentNumber": "C7654321",
+                    "idDocumentNumber": f"B-{uuid4().hex[:8]}",
                 },
             ]
         },
     )
     assert over_capacity.status_code == 400
     db_session.refresh(occupant_record)
-    assert decrypt_data(occupant_record.id_document_number_encrypted) == "A1234567"
+    assert decrypt_data(occupant_record.id_document_number_encrypted) == occupant_document.upper()
 
     not_settled = client.post(
         f"/api/v1/stay/assignments/{assignment_data['id']}/check-out",
@@ -1054,9 +1586,29 @@ def test_preallocated_stay_check_in_and_check_out_lifecycle(client: TestClient, 
     assert checkout.json()["status"] == "CHECKED_OUT"
     db_session.refresh(unit)
     db_session.refresh(stay_record)
-    assert unit.status == "DIRTY"
+    assert unit.status == "AVAILABLE"
+    room_matrix_after_checkout = client.get(
+        f"/api/v1/properties/{prop['id']}/units/matrix",
+        headers=headers,
+    )
+    assert room_matrix_after_checkout.status_code == 200, room_matrix_after_checkout.text
+    assert (
+        room_matrix_after_checkout.json()["floors"][0]["rooms"][0]["status"]
+        == "AVAILABLE"
+    )
     assert stay_record.is_active is False
     assert stay_record.final_amount_paid == Decimal("240.00")
+    summary_after_checkout = client.get(
+        "/api/v1/stay/assignments/summary",
+        headers=headers,
+        params={"propertyId": prop["id"]},
+    )
+    assert summary_after_checkout.status_code == 200, summary_after_checkout.text
+    assert summary_after_checkout.json()["totalActiveStays"] == 0
+    assert summary_after_checkout.json()["checkOutsToday"] == 1
+    assert summary_after_checkout.json()["amountCollectedToday"] == [
+        {"currency": "INR", "amount": "310.00"}
+    ]
     customer_token = create_access_token(
         subject=guest.id,
         audience="customer",
@@ -1069,6 +1621,77 @@ def test_preallocated_stay_check_in_and_check_out_lifecycle(client: TestClient, 
     assert history.status_code == 200, history.text
     assert history.json()[0]["assignmentStatus"] == "CHECKED_OUT"
     assert history.json()[0]["finalAmountPaid"] == "240.00"
+
+
+def test_hostel_active_assignment_is_available_to_inventory_only(
+    client: TestClient, db_session
+):
+    headers = _headers(db_session)
+    prop = _create_property(client, headers, "HOSTEL_COED")
+    room_response = client.post(
+        f"/api/v1/properties/{prop['id']}/units",
+        headers=headers,
+        json={
+            "unitNumber": "HOSTEL-1",
+            "floor": 1,
+            "type": "ROOM",
+            "category": "CLASSIC",
+            "sharingType": "SINGLE",
+            "capacity": 1,
+            "bedsPerRoom": 1,
+            "baseRateMonthly": "6000",
+        },
+    )
+    assert room_response.status_code == 201, room_response.text
+    bed = db_session.scalar(
+        select(Unit).where(Unit.property_id == prop["id"], Unit.type == "BED")
+    )
+    assert bed is not None
+    customer = User(
+        email=f"hosteler-{uuid4().hex[:8]}@example.test",
+        full_name="Hostel Resident",
+        password_hash="not-used",
+        role=Role.CUSTOMER,
+        status="ACTIVE",
+    )
+    db_session.add(customer)
+    db_session.commit()
+    assignment_response = client.post(
+        "/api/v1/stay/assignments",
+        headers=headers,
+        json={
+            "unitId": bed.id,
+            "userId": customer.id,
+            "expectedCheckIn": datetime.now(timezone.utc).isoformat(),
+            "billingStrategy": "RECURRING_MONTHLY",
+            "checkInNow": True,
+        },
+    )
+    assert assignment_response.status_code == 201, assignment_response.text
+    assignment_id = assignment_response.json()["id"]
+
+    inventory_stays = client.get(
+        "/api/v1/stay/assignments/active",
+        headers=headers,
+        params={"propertyId": prop["id"], "includeHostelers": True},
+    )
+    assert inventory_stays.status_code == 200, inventory_stays.text
+    assert [item["id"] for item in inventory_stays.json()] == [assignment_id]
+
+    active_stays = client.get(
+        "/api/v1/stay/assignments/active",
+        headers=headers,
+        params={"propertyId": prop["id"]},
+    )
+    assert active_stays.status_code == 400
+    assert active_stays.json()["error"]["code"] == "HOTEL_STAYS_ONLY"
+    summary = client.get(
+        "/api/v1/stay/assignments/summary",
+        headers=headers,
+        params={"propertyId": prop["id"]},
+    )
+    assert summary.status_code == 400
+    assert summary.json()["error"]["code"] == "HOTEL_STAYS_ONLY"
 
 
 def test_property_soft_delete_hides_property(client: TestClient, db_session):
@@ -1169,6 +1792,184 @@ def test_hotel_room_can_be_changed_to_suite(client: TestClient, db_session):
     assert updated.status_code == 200, updated.text
     assert updated.json()["type"] == "SUITE"
     assert updated.json()["category"] == "DELUXE"
+
+
+def test_hotel_room_change_moves_party_after_one_day_and_preserves_billing(
+    client: TestClient, db_session
+):
+    headers = _headers(db_session)
+    prop = _create_property(client, headers)
+    property_record = db_session.get(Property, prop["id"])
+    assert property_record is not None
+    floor = Floor(property_id=property_record.id, number=1, name="Ground")
+    db_session.add(floor)
+    db_session.flush()
+    current_room = Unit(
+        property_id=property_record.id,
+        floor_id=floor.id,
+        unit_number=f"ROOM-{uuid4().hex[:6]}",
+        floor=1,
+        type="ROOM",
+        category="CLASSIC",
+        capacity=2,
+        default_price_per_night=Decimal("120.00"),
+        status="AVAILABLE",
+    )
+    undersized_room = Unit(
+        property_id=property_record.id,
+        floor_id=floor.id,
+        unit_number=f"ROOM-{uuid4().hex[:6]}",
+        floor=1,
+        type="ROOM",
+        category="CLASSIC",
+        capacity=1,
+        default_price_per_night=Decimal("180.00"),
+        status="AVAILABLE",
+    )
+    target_suite = Unit(
+        property_id=property_record.id,
+        floor_id=floor.id,
+        unit_number=f"SUITE-{uuid4().hex[:6]}",
+        floor=1,
+        type="SUITE",
+        category="DELUXE",
+        capacity=2,
+        default_price_per_night=Decimal("240.00"),
+        status="AVAILABLE",
+    )
+    guest = User(
+        email=f"room-change-{uuid4().hex[:8]}@example.test",
+        full_name="Room Change Guest",
+        password_hash="not-used",
+        role=Role.CUSTOMER,
+        status="ACTIVE",
+    )
+    db_session.add_all([current_room, undersized_room, target_suite, guest])
+    db_session.commit()
+
+    assigned = client.post(
+        "/api/v1/stay/assignments",
+        headers=headers,
+        json={
+            "unitId": current_room.id,
+            "userId": guest.id,
+            "expectedCheckIn": datetime.now(timezone.utc).isoformat(),
+            "billingStrategy": "PER_NIGHT_STAY",
+            "checkInNow": False,
+        },
+    )
+    assert assigned.status_code == 201, assigned.text
+    assignment_id = assigned.json()["id"]
+    checkin = client.post(
+        f"/api/v1/stay/assignments/{assignment_id}/check-in",
+        headers=headers,
+        json={},
+    )
+    assert checkin.status_code == 200, checkin.text
+
+    occupant_document = f"MOVE-{uuid4().hex[:8]}"
+    occupants = client.put(
+        f"/api/v1/stay/assignments/{assignment_id}/occupants",
+        headers=headers,
+        json={
+            "occupants": [
+                {
+                    "fullName": "Additional Room Change Guest",
+                    "email": f"additional-{uuid4().hex[:8]}@example.test",
+                    "phone": f"+1555{uuid4().int % 10000000:07d}",
+                    "idDocumentType": "PASSPORT",
+                    "idDocumentNumber": occupant_document,
+                }
+            ]
+        },
+    )
+    assert occupants.status_code == 200, occupants.text
+    source_stay = db_session.scalar(
+        select(StayRecord).where(StayRecord.assignment_id == assignment_id)
+    )
+    assert source_stay is not None
+    original_occupant = source_stay.additional_guests[0]
+
+    too_small = client.post(
+        f"/api/v1/stay/assignments/{assignment_id}/change-room",
+        headers=headers,
+        json={"newUnitId": undersized_room.id},
+    )
+    assert too_small.status_code == 400
+    assert too_small.json()["error"]["code"] == "OCCUPANT_CAPACITY_EXCEEDED"
+
+    requested_at = datetime.now(ZoneInfo(property_record.timezone))
+    scheduled = client.post(
+        f"/api/v1/stay/assignments/{assignment_id}/change-room",
+        headers=headers,
+        json={"newUnitId": target_suite.id},
+    )
+    assert scheduled.status_code == 200, scheduled.text
+    old_checkout = datetime.fromisoformat(scheduled.json()["expectedCheckOut"])
+    if old_checkout.tzinfo is None:
+        old_checkout = old_checkout.replace(tzinfo=ZoneInfo(property_record.timezone))
+    target_assignment = db_session.scalar(
+        select(UnitAssignment).where(UnitAssignment.unit_id == target_suite.id)
+    )
+    assert target_assignment is not None
+    assert target_assignment.user_id == guest.id
+    assert target_assignment.standard_rate == Decimal("240.00")
+    target_checkin = target_assignment.expected_check_in
+    if target_checkin.tzinfo is None:
+        target_checkin = target_checkin.replace(tzinfo=ZoneInfo(property_record.timezone))
+    assert target_checkin == old_checkout
+    assert abs((old_checkout - requested_at).total_seconds() - 86400) < 10
+
+    active_before_move = client.get(
+        "/api/v1/stay/assignments/active",
+        headers=headers,
+        params={"propertyId": property_record.id},
+    )
+    assert active_before_move.status_code == 200, active_before_move.text
+    assert active_before_move.json()[0]["billToCollect"] == "120.00"
+    assert active_before_move.json()[0]["guestEmail"] == guest.email
+
+    target_assignment.expected_check_in = datetime.now(timezone.utc) - timedelta(minutes=1)
+    db_session.commit()
+    checkout = client.post(
+        f"/api/v1/stay/assignments/{assignment_id}/check-out",
+        headers=headers,
+        json={
+            "folioSettled": True,
+            "keycardReturned": True,
+            "finalAmountPaid": "120.00",
+        },
+    )
+    assert checkout.status_code == 200, checkout.text
+    moved = client.post(
+        f"/api/v1/stay/assignments/{target_assignment.id}/check-in",
+        headers=headers,
+        json={},
+    )
+    assert moved.status_code == 200, moved.text
+
+    moved_stay = db_session.scalar(
+        select(StayRecord).where(StayRecord.assignment_id == target_assignment.id)
+    )
+    assert moved_stay is not None
+    assert moved_stay.user_id == guest.id
+    assert moved_stay.guest_count == 2
+    assert len(moved_stay.additional_guests) == 1
+    assert moved_stay.additional_guests[0].full_name == original_occupant.full_name
+    assert moved_stay.additional_guests[0].id_document_last4 == original_occupant.id_document_last4
+    db_session.refresh(source_stay)
+    assert source_stay.is_active is False
+    assert len(source_stay.additional_guests) == 1
+
+    active_after_move = client.get(
+        "/api/v1/stay/assignments/active",
+        headers=headers,
+        params={"propertyId": property_record.id},
+    )
+    assert active_after_move.status_code == 200, active_after_move.text
+    assert active_after_move.json()[0]["guestEmail"] == guest.email
+    assert active_after_move.json()[0]["guestCount"] == 2
+    assert active_after_move.json()[0]["billToCollect"] == "240.00"
 
 
 def test_room_change_is_scheduled_for_next_month_and_keeps_fee_periods(client: TestClient, db_session):

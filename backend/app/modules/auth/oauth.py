@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.errors import ConflictError, ForbiddenError, UnauthorizedError, ValidationError
 from app.core.permissions import Role
-from app.db.models import LinkedIdentity, User
+from app.db.models import CustomerPersona, LinkedIdentity, User
 from app.modules.audit.service import write_audit_log
 from app.modules.auth.service import create_user_session, utc_now
 
@@ -194,6 +194,7 @@ def handle_oauth_callback(
         full_name=name,
         password_hash=secrets.token_urlsafe(32), # No usable password; OAuth primary
         role=Role.CUSTOMER,
+        customer_persona=CustomerPersona.TEMP_CUSTOMER.value,
         status="ACTIVE",
         email_verified_at=now,
     )

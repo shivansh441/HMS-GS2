@@ -2,7 +2,7 @@ export type Role = 'ADMIN' | 'STAFF' | 'CUSTOMER';
 
 export type StaffRole = 'FRONT_DESK' | 'MAINTENANCE' | 'HOUSEKEEPING';
 
-export type CustomerPersona = 'HOTEL_GUEST' | 'HOSTEL_GUEST' | 'HOSTELER';
+export type CustomerPersona = 'HOTEL_GUEST' | 'HOSTELER' | 'TEMP_CUSTOMER';
 
 export type UserStatus = 'PENDING_ACTIVATION' | 'ACTIVE' | 'INACTIVE' | 'SUSPENDED' | 'ARCHIVED';
 

@@ -113,6 +113,18 @@ function formatDate(value: string | null) {
     : 'Open-ended';
 }
 
+function addCalendarDays(value: string, days: number) {
+  const date = new Date(`${value}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function calendarDayDifference(start: string, end: string) {
+  return (
+    Date.parse(`${end}T00:00:00Z`) - Date.parse(`${start}T00:00:00Z`)
+  ) / 86_400_000;
+}
+
 export const ReservationsBoard: React.FC = () => {
   const { properties, selectedPropertyId } = useAuth();
   const [reservations, setReservations] = useState<Reservation[]>([]);
@@ -218,6 +230,11 @@ export const ReservationsBoard: React.FC = () => {
     leadProperty &&
     ['HOSTEL_BOYS', 'HOSTEL_GIRLS', 'HOSTEL_COED', 'CO_LIVING'].includes(leadProperty.type),
   );
+  const convertingProperty = properties.find((property) => property.id === converting?.propertyId);
+  const convertingIsHostel = Boolean(
+    convertingProperty &&
+    ['HOSTEL_BOYS', 'HOSTEL_GIRLS', 'HOSTEL_COED', 'CO_LIVING'].includes(convertingProperty.type),
+  );
   const leadInventoryOptions = useMemo<LeadInventoryOption[]>(() => {
     if (!leadInventory || leadInventory.propertyId !== leadPropertyId) return [];
 
@@ -307,8 +324,16 @@ export const ReservationsBoard: React.FC = () => {
       setLeadErrorMessage('Select an available room or bed type and a quantity within current availability.');
       return;
     }
+    if (leadIsHostel && leadQuantity > 1) {
+      setLeadErrorMessage('Create a separate hostel reservation for each customer; one customer can be assigned only one bed.');
+      return;
+    }
     if (leadCheckOut <= leadCheckIn) {
       setLeadErrorMessage('Choose a check-out date after check-in.');
+      return;
+    }
+    if (leadIsHostel && calendarDayDifference(leadCheckIn, leadCheckOut) === 1) {
+      setLeadErrorMessage('Hostel bed reservations cannot be booked for exactly one night.');
       return;
     }
     if (leadAdults + leadChildren > 100) {
@@ -417,6 +442,10 @@ export const ReservationsBoard: React.FC = () => {
   const convertReservation = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!converting || selectedUnitIds.length !== converting.requestedQuantity) return;
+    if (convertingIsHostel && converting.requestedQuantity > 1) {
+      setErrorMessage('This hostel reservation requests multiple beds for one customer. Create a separate reservation for each customer.');
+      return;
+    }
     if (conversionHasRateOverride && !rateOverrideReason.trim()) {
       setErrorMessage('Enter a reason for changing the standard rate.');
       return;
@@ -559,7 +588,7 @@ export const ReservationsBoard: React.FC = () => {
                   required
                   type="number"
                   min={1}
-                  max={selectedLeadInventoryOption?.availableCount || 1}
+                  max={leadIsHostel ? 1 : selectedLeadInventoryOption?.availableCount || 1}
                   value={leadQuantity}
                   onChange={(event) => setLeadQuantity(Number(event.target.value))}
                   disabled={!selectedLeadInventoryOption}
@@ -567,7 +596,9 @@ export const ReservationsBoard: React.FC = () => {
                 />
                 {selectedLeadInventoryOption && (
                   <span className="block font-normal text-slate-500">
-                    Up to {selectedLeadInventoryOption.availableCount} currently available.
+                    {leadIsHostel
+                      ? 'One bed can be assigned per customer account.'
+                      : `Up to ${selectedLeadInventoryOption.availableCount} currently available.`}
                   </span>
                 )}
               </label>
@@ -577,7 +608,19 @@ export const ReservationsBoard: React.FC = () => {
               </label>
               <label className="block space-y-1 text-xs font-semibold">
                 Check-out
-                <input required type="date" min={leadCheckIn || undefined} value={leadCheckOut} onChange={(event) => setLeadCheckOut(event.target.value)} className={inputClass} />
+                <input
+                  required
+                  type="date"
+                  min={leadCheckIn ? addCalendarDays(leadCheckIn, leadIsHostel ? 2 : 1) : undefined}
+                  value={leadCheckOut}
+                  onChange={(event) => setLeadCheckOut(event.target.value)}
+                  className={inputClass}
+                />
+                {leadIsHostel && (
+                  <span className="block font-normal text-slate-500">
+                    Hostel bed stays must be longer than one night.
+                  </span>
+                )}
               </label>
               <label className="block space-y-1 text-xs font-semibold">
                 Adults
@@ -784,6 +827,11 @@ export const ReservationsBoard: React.FC = () => {
                   Select {converting.requestedQuantity} units ({selectedUnitIds.length} selected).
                 </span>
               )}
+              {convertingIsHostel && converting.requestedQuantity > 1 && (
+                <span role="alert" className="block font-normal text-rose-700">
+                  One hostel customer can be assigned only one bed. Create a separate reservation for each customer.
+                </span>
+              )}
               {availableUnits.length === 0 && (
                 <span className="block font-normal text-amber-700">No matching available units found.</span>
               )}
@@ -825,6 +873,7 @@ export const ReservationsBoard: React.FC = () => {
               disabled={
                 selectedUnitIds.length !== converting.requestedQuantity ||
                 availableUnits.length < converting.requestedQuantity ||
+                (convertingIsHostel && converting.requestedQuantity > 1) ||
                 (conversionHasRateOverride && !rateOverrideReason.trim()) ||
                 workingId === converting.id
               }

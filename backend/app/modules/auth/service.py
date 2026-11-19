@@ -37,6 +37,7 @@ from app.core.security import (
     verify_totp_code_with_replay,
 )
 from app.db.models import (
+    CustomerPersona,
     CustomerPropertyLink,
     LinkedIdentity,
     MfaRecoveryCode,
@@ -324,6 +325,7 @@ def register_customer_flow(
         id_document_last4=id_last4,
         id_document_lookup_hash=id_lookup_hash,
         role=Role.CUSTOMER,
+        customer_persona=CustomerPersona.TEMP_CUSTOMER.value,
         status="PENDING_ACTIVATION",
     )
     db.add(user)
@@ -680,6 +682,7 @@ def verify_otp_flow(
                 password_hash=hash_password(secrets.token_urlsafe(32)),
                 full_name="Guest " + secrets.token_hex(2).upper(),
                 role=Role.CUSTOMER,
+                customer_persona=CustomerPersona.TEMP_CUSTOMER.value,
                 status="ACTIVE",
                 email_verified_at=now if is_email else None,
                 phone_verified_at=now if not is_email else None,

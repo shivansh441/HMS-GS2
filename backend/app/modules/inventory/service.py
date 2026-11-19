@@ -4,9 +4,9 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import pycountry
-from sqlalchemy import case, func, select
+from sqlalchemy import and_, case, exists, func, or_, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, aliased, selectinload
 
 from app.core.errors import (
     AppException,
@@ -25,7 +25,18 @@ from app.core.permissions import (
     UnitType,
 )
 from app.core.scoping import get_allowed_property_ids
-from app.db.models import Floor, MessFacility, Property, PropertyFeeConfig, Unit, User
+from app.db.models import (
+    AssignmentStatus,
+    Floor,
+    MessFacility,
+    Property,
+    PropertyFeeConfig,
+    StayOccupant,
+    StayRecord,
+    Unit,
+    UnitAssignment,
+    User,
+)
 from app.modules.inventory.schemas import (
     BulkUnitCreateRequest,
     BulkUnitCreateResponse,
@@ -38,6 +49,86 @@ from app.modules.inventory.schemas import (
 
 HOSTEL_TYPES = {PropertyType.HOSTEL_BOYS.value, PropertyType.HOSTEL_GIRLS.value, PropertyType.HOSTEL_COED.value}
 BED_LEVEL_TYPES = HOSTEL_TYPES | {PropertyType.CO_LIVING.value}
+
+
+def has_open_unit_assignment(
+    db: Session,
+    unit_ids: set[str] | list[str],
+    exclude_assignment_id: str | None = None,
+) -> bool:
+    if not unit_ids:
+        return False
+    filters = [
+        UnitAssignment.unit_id.in_(unit_ids),
+        or_(
+            UnitAssignment.is_active.is_(True),
+            UnitAssignment.status == AssignmentStatus.RESERVED.value,
+        ),
+    ]
+    if exclude_assignment_id:
+        filters.append(UnitAssignment.id != exclude_assignment_id)
+    return (
+        db.scalar(select(UnitAssignment.id).where(*filters).limit(1))
+        is not None
+    )
+
+
+def has_active_user_assignment(
+    db: Session,
+    user_id: str,
+    exclude_assignment_id: str | None = None,
+) -> bool:
+    other_user = aliased(User)
+    filters = [
+        or_(
+            UnitAssignment.user_id == user_id,
+            exists(
+                select(StayOccupant.id)
+                .select_from(StayOccupant)
+                .join(StayRecord, StayRecord.id == StayOccupant.stay_record_id)
+                .join(User, User.id == user_id)
+                .where(
+                    StayRecord.assignment_id == UnitAssignment.id,
+                    or_(
+                        StayOccupant.guest_user_id == user_id,
+                        and_(
+                            StayOccupant.email.is_not(None),
+                            User.email.is_not(None),
+                            func.lower(func.trim(StayOccupant.email))
+                            == func.lower(func.trim(User.email)),
+                        ),
+                        and_(
+                            StayOccupant.phone.is_not(None),
+                            User.phone.is_not(None),
+                            func.trim(StayOccupant.phone) == func.trim(User.phone),
+                        ),
+                        and_(
+                            StayOccupant.full_name.is_not(None),
+                            User.full_name.is_not(None),
+                            func.lower(func.trim(StayOccupant.full_name))
+                            == func.lower(func.trim(User.full_name)),
+                            ~exists(
+                                select(other_user.id)
+                                .where(
+                                    other_user.id != User.id,
+                                    other_user.role == Role.CUSTOMER.value,
+                                    other_user.status == "ACTIVE",
+                                    func.lower(func.trim(other_user.full_name))
+                                    == func.lower(func.trim(StayOccupant.full_name)),
+                                )
+                                .correlate(User, StayOccupant)
+                            ),
+                        ),
+                    ),
+                )
+            ),
+        ),
+        UnitAssignment.status == AssignmentStatus.CHECKED_IN.value,
+        UnitAssignment.is_active.is_(True),
+    ]
+    if exclude_assignment_id:
+        filters.append(UnitAssignment.id != exclude_assignment_id)
+    return db.scalar(select(UnitAssignment.id).where(*filters).limit(1)) is not None
 
 
 def require_admin(actor: User) -> None:
@@ -835,13 +926,18 @@ def unit_public_record(unit: Unit, prop: Property) -> dict[str, Any]:
 
 def unit_status_summary(unit: Unit) -> str:
     children = [child for child in unit.children if child.is_active]
-    if not children:
-        return unit.status
+    if unit.category != UnitCategory.DORMITORY.value:
+        return (
+            UnitStatus.AVAILABLE.value
+            if unit.status == UnitStatus.AVAILABLE.value
+            and all(child.status == UnitStatus.AVAILABLE.value for child in children)
+            else "UNAVAILABLE"
+        )
     occupied = sum(child.status == UnitStatus.OCCUPIED.value for child in children)
     if occupied == 0:
         return UnitStatus.AVAILABLE.value
     if occupied == len(children):
-        return UnitStatus.OCCUPIED.value
+        return "UNAVAILABLE"
     return "PARTIAL"
 
 

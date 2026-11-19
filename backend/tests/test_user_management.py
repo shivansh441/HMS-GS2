@@ -1,5 +1,5 @@
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -8,14 +8,22 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.core.crypto import decrypt_data
 from app.core.permissions import Role
-from app.core.security import create_access_token, decode_access_token, hash_token
+from app.core.security import (
+    create_access_token,
+    decode_access_token,
+    hash_token,
+    verify_password,
+)
 from app.db.models import (
     AuditLog,
+    CustomerOccupantProfile,
     CustomerPropertyLink,
+    Floor,
     OutboxMessage,
     Property,
     StayRecord,
     User,
+    Unit,
     VerificationToken,
 )
 
@@ -276,13 +284,29 @@ def test_admin_can_create_customer_and_assign_properties(client: TestClient, db_
         "guestCount": 1,
         "additionalGuests": [],
     }
-    assert created.json()["activationUrl"].startswith(
-        f"{settings.PUBLIC_WEBSITE_URL.rstrip('/')}/activate?token="
-    )
+    initial_password = created.json()["initialPassword"]
+    assert isinstance(initial_password, str) and len(initial_password) >= 32
+    assert created.json()["status"] == "ACTIVE"
+    assert created.json()["activationUrl"] is None
     created_user = db_session.get(User, user_id)
     assert created_user is not None
+    assert verify_password(initial_password, created_user.password_hash)
     assert created_user.id_document_number_encrypted != "A1234567"
     assert decrypt_data(created_user.id_document_number_encrypted) == "A1234567"
+    assert db_session.scalar(
+        select(VerificationToken).where(VerificationToken.user_id == user_id)
+    ) is None
+    assert db_session.scalar(
+        select(OutboxMessage).where(
+            OutboxMessage.destination == "new-customer@example.com"
+        )
+    ) is None
+    detail = client.get(
+        f"/api/v1/admin/users/{user_id}",
+        headers=headers,
+    )
+    assert detail.status_code == 200, detail.text
+    assert "initialPassword" not in detail.json()
     stay = db_session.scalar(select(StayRecord).where(StayRecord.user_id == user_id))
     assert stay is not None
     assert stay.persona == "HOTEL_GUEST"
@@ -318,6 +342,17 @@ def test_admin_can_create_customer_and_assign_properties(client: TestClient, db_
     assert stay.persona == "HOSTELER"
     assert stay.property_id == hostel.id
 
+    changed_to_temporary = client.patch(
+        f"/api/v1/admin/users/{user_id}",
+        headers=headers,
+        json={"customerPersona": "TEMP_CUSTOMER"},
+    )
+    assert changed_to_temporary.status_code == 200, changed_to_temporary.text
+    assert changed_to_temporary.json()["customerPersona"] == "TEMP_CUSTOMER"
+    db_session.refresh(stay)
+    assert stay.persona == "HOSTELER"
+    assert stay.property_id == hostel.id
+
     filtered = client.get(
         "/api/v1/admin/users",
         headers=headers,
@@ -327,34 +362,99 @@ def test_admin_can_create_customer_and_assign_properties(client: TestClient, db_
     assert any(item["id"] == user_id for item in filtered.json()["items"])
 
 
+def test_admin_created_customer_can_sign_in_and_be_assigned_to_a_room(client, db_session):
+    headers = _admin_headers(db_session)
+    prop = _create_property(db_session, "Immediately Active Customer")
+    suffix = uuid4().hex[:8]
+    email = f"immediate-{suffix}@example.com"
+    phone = f"+1555{uuid4().int % 10000000:07d}"
+    created = client.post(
+        "/api/v1/admin/users",
+        headers=headers,
+        json={
+            "email": email,
+            "fullName": "Immediately Active Customer",
+            "phone": phone,
+            "dateOfBirth": "1990-01-01",
+            "role": "CUSTOMER",
+            "customerPersona": "TEMP_CUSTOMER",
+            "idDocumentType": "PASSPORT",
+            "idDocumentNumber": f"P{suffix}",
+        },
+    )
+    assert created.status_code == 201, created.text
+    user_id = created.json()["id"]
+    initial_password = created.json()["initialPassword"]
+
+    login = client.post(
+        "/api/v1/auth/login",
+        json={"identifier": email, "password": initial_password},
+    )
+    assert login.status_code == 200, login.text
+
+    floor = Floor(property_id=prop.id, number=1, name="Ground Floor")
+    db_session.add(floor)
+    db_session.flush()
+    unit = Unit(
+        property_id=prop.id,
+        floor_id=floor.id,
+        unit_number=f"ROOM-{suffix}",
+        default_price_per_night=100,
+        status="AVAILABLE",
+    )
+    db_session.add(unit)
+    db_session.commit()
+
+    assignment = client.post(
+        "/api/v1/stay/assignments",
+        headers=headers,
+        json={
+            "unitId": unit.id,
+            "userId": user_id,
+            "expectedCheckIn": datetime.now(timezone.utc).isoformat(),
+            "checkInNow": True,
+            "billingStrategy": "PER_NIGHT_STAY",
+        },
+    )
+    assert assignment.status_code == 201, assignment.text
+
+
 def test_emergency_contact_number_is_saved_for_every_customer_type(client, db_session):
     headers = _admin_headers(db_session)
     test_cases = (
         ("HOTEL_GUEST", "HOTEL"),
-        ("HOSTEL_GUEST", "HOSTEL_COED"),
         ("HOSTELER", "HOSTEL_COED"),
+        ("TEMP_CUSTOMER", None),
     )
 
     for persona, property_type in test_cases:
-        prop = _create_property(db_session, f"{persona} Contact", property_type)
+        prop = (
+            _create_property(db_session, f"{persona} Contact", property_type)
+            if property_type
+            else None
+        )
         suffix = uuid4().hex[:8]
         emergency_phone = f"+1555{uuid4().int % 10000000:07d}"
+        payload = {
+            "email": f"{persona.lower()}-{suffix}@example.com",
+            "fullName": f"{persona} Guest",
+            "phone": f"+1666{uuid4().int % 10000000:07d}",
+            "dateOfBirth": "1990-01-01",
+            "role": "CUSTOMER",
+            "customerPersona": persona,
+            "idDocumentType": "PASSPORT",
+            "idDocumentNumber": f"P{suffix}",
+            "emergencyContactPhone": emergency_phone,
+        }
+        if prop:
+            payload.update(
+                initialStayPropertyId=prop.id,
+                stayStartDate="2026-11-10",
+            )
         response = client.post(
             "/api/v1/admin/users",
             headers=headers,
-            json={
-                "email": f"{persona.lower()}-{suffix}@example.com",
-                "fullName": f"{persona} Guest",
-                "phone": f"+1666{uuid4().int % 10000000:07d}",
-                "dateOfBirth": "1990-01-01",
-                "role": "CUSTOMER",
-                "customerPersona": persona,
-                "idDocumentType": "PASSPORT",
-                "idDocumentNumber": f"P{suffix}",
-                "emergencyContactPhone": emergency_phone,
-                "initialStayPropertyId": prop.id,
-                "stayStartDate": "2026-11-10",
-            },
+            json=payload,
         )
 
         assert response.status_code == 201, response.text
@@ -362,35 +462,39 @@ def test_emergency_contact_number_is_saved_for_every_customer_type(client, db_se
         assert "emergencyContactName" not in response.json()
 
 
-def test_hostel_guest_and_hosteler_cannot_have_additional_occupants(client, db_session):
+def test_hosteler_and_temporary_customer_cannot_have_additional_occupants(client, db_session):
     hostel = _create_property(db_session, "Group Guest Hostel", "HOSTEL_COED")
     headers = _admin_headers(db_session)
-    for persona in ("HOSTEL_GUEST", "HOSTELER"):
+    for persona in ("HOSTELER", "TEMP_CUSTOMER"):
+        payload = {
+            "email": f"{persona.lower()}-{uuid4().hex[:8]}@example.com",
+            "fullName": f"Primary {persona}",
+            "phone": f"+1555{uuid4().int % 10000000:07d}",
+            "dateOfBirth": "1990-01-01",
+            "idDocumentType": "AADHAAR",
+            "idDocumentNumber": "123456789012",
+            "role": "CUSTOMER",
+            "customerPersona": persona,
+            "emergencyContactPhone": "+15550005555",
+            "guestCount": 2,
+            "additionalGuests": [
+                {
+                    "fullName": "Additional Guest",
+                    "dateOfBirth": "2004-01-01",
+                    "idDocumentType": "PAN",
+                    "idDocumentNumber": "ABCDE1234F",
+                }
+            ],
+        }
+        if persona == "HOSTELER":
+            payload.update(
+                initialStayPropertyId=hostel.id,
+                stayStartDate="2026-11-10",
+            )
         response = client.post(
             "/api/v1/admin/users",
             headers=headers,
-            json={
-                "email": f"{persona.lower()}-{uuid4().hex[:8]}@example.com",
-                "fullName": f"Primary {persona}",
-                "phone": f"+1555{uuid4().int % 10000000:07d}",
-                "dateOfBirth": "1990-01-01",
-                "idDocumentType": "AADHAAR",
-                "idDocumentNumber": "123456789012",
-                "role": "CUSTOMER",
-                "customerPersona": persona,
-                "initialStayPropertyId": hostel.id,
-                "stayStartDate": "2026-11-10",
-                "emergencyContactPhone": "+15550005555",
-                "guestCount": 2,
-                "additionalGuests": [
-                    {
-                        "fullName": "Additional Guest",
-                        "dateOfBirth": "2004-01-01",
-                        "idDocumentType": "PAN",
-                        "idDocumentNumber": "ABCDE1234F",
-                    }
-                ],
-            },
+            json=payload,
         )
         assert response.status_code == 422
 
@@ -467,6 +571,8 @@ def test_hotel_guest_can_add_occupants(client, db_session):
                 {
                     "fullName": "Additional Guest",
                     "dateOfBirth": "2004-01-01",
+                    "email": f"additional-{uuid4().hex[:8]}@example.com",
+                    "phone": f"+1555{uuid4().int % 10000000:07d}",
                     "idDocumentType": "AADHAAR",
                     "idDocumentNumber": "234567890123",
                 }
@@ -481,6 +587,15 @@ def test_hotel_guest_can_add_occupants(client, db_session):
         == "Additional Guest"
     )
     existing_occupant = response_with_occupants.json()["initialStay"]["additionalGuests"][0]
+    primary_user_id = response_with_occupants.json()["id"]
+    profile = db_session.scalar(
+        select(CustomerOccupantProfile).where(
+            CustomerOccupantProfile.owner_user_id == primary_user_id
+        )
+    )
+    assert profile is not None
+    assert profile.full_name == "Additional Guest"
+    assert profile.id_document_last4 == "0123"
 
     edited = client.patch(
         f"/api/v1/admin/users/{response_with_occupants.json()['id']}",
@@ -497,6 +612,8 @@ def test_hotel_guest_can_add_occupants(client, db_session):
                 {
                     "fullName": "New Additional Guest",
                     "dateOfBirth": "2005-02-02",
+                    "email": f"new-additional-{uuid4().hex[:8]}@example.com",
+                    "phone": f"+1555{uuid4().int % 10000000:07d}",
                     "idDocumentType": "PAN",
                     "idDocumentNumber": "ABCDE1234F",
                 },
@@ -511,6 +628,14 @@ def test_hotel_guest_can_add_occupants(client, db_session):
     assert edited_occupants[0]["idDocumentLast4"] == existing_occupant["idDocumentLast4"]
     assert edited_occupants[1]["fullName"] == "New Additional Guest"
     assert edited_occupants[1]["idDocumentLast4"] == "234F"
+    db_session.refresh(profile)
+    assert profile.full_name == "Edited Additional Guest"
+    assert db_session.scalar(
+        select(CustomerOccupantProfile.id).where(
+            CustomerOccupantProfile.owner_user_id == primary_user_id,
+            CustomerOccupantProfile.full_name == "New Additional Guest",
+        )
+    ) is not None
 
     removed = client.patch(
         f"/api/v1/admin/users/{response_with_occupants.json()['id']}",
@@ -519,6 +644,169 @@ def test_hotel_guest_can_add_occupants(client, db_session):
     )
     assert removed.status_code == 200, removed.text
     assert removed.json()["initialStay"]["additionalGuests"] == []
+    assert db_session.scalar(
+        select(CustomerOccupantProfile.id).where(
+            CustomerOccupantProfile.owner_user_id == primary_user_id,
+            CustomerOccupantProfile.id == profile.id,
+        )
+    ) is not None
+
+
+def test_repeat_stay_preserves_occupant_history_and_reuses_guest_accounts(
+    client, db_session
+):
+    headers = _admin_headers(db_session)
+    prop = _create_property(db_session, "Repeat Stay Hotel")
+    suffix = uuid4().hex[:8]
+    primary_email = f"repeat-primary-{suffix}@example.com"
+    additional_email = f"repeat-guest-{suffix}@example.com"
+    additional_phone = f"+1555{uuid4().int % 10000000:07d}"
+    first_start = date.today() + timedelta(days=10)
+    second_start = date.today() + timedelta(days=30)
+    created = client.post(
+        "/api/v1/admin/users",
+        headers=headers,
+        json={
+            "email": primary_email,
+            "fullName": "Repeat Stay Primary",
+            "phone": f"+1666{uuid4().int % 10000000:07d}",
+            "dateOfBirth": "1990-01-01",
+            "idDocumentType": "PASSPORT",
+            "idDocumentNumber": f"PRIMARY-{suffix}",
+            "role": "CUSTOMER",
+            "customerPersona": "HOTEL_GUEST",
+            "initialStayPropertyId": prop.id,
+            "stayStartDate": first_start.isoformat(),
+            "guestCount": 2,
+            "additionalGuests": [
+                {
+                    "fullName": "Returning Additional Guest",
+                    "dateOfBirth": "1992-02-02",
+                    "email": additional_email,
+                    "phone": additional_phone,
+                    "idDocumentType": "PASSPORT",
+                    "idDocumentNumber": f"RETURNING-{suffix}",
+                }
+            ],
+        },
+    )
+    assert created.status_code == 201, created.text
+    primary_user_id = created.json()["id"]
+    first_stay = db_session.scalar(
+        select(StayRecord).where(
+            StayRecord.user_id == primary_user_id,
+            StayRecord.start_date == first_start,
+        )
+    )
+    assert first_stay is not None
+    first_guest_id = first_stay.additional_guests[0].guest_user_id
+    assert first_guest_id is not None
+
+    repeat = client.post(
+        f"/api/v1/admin/users/{primary_user_id}/stays",
+        headers=headers,
+        json={
+            "propertyId": prop.id,
+            "startDate": second_start.isoformat(),
+            "guestCount": 3,
+            "additionalGuests": [
+                {
+                    "fullName": "Returning Additional Guest",
+                    "dateOfBirth": "1992-02-02",
+                    "email": additional_email,
+                    "phone": additional_phone,
+                    "idDocumentType": "PASSPORT",
+                    "idDocumentNumber": f"RETURNING-{suffix}",
+                },
+                {
+                    "fullName": "New Additional Guest",
+                    "dateOfBirth": "1994-04-04",
+                    "email": f"repeat-new-{suffix}@example.com",
+                    "phone": f"+1777{uuid4().int % 10000000:07d}",
+                    "idDocumentType": "PAN",
+                    "idDocumentNumber": f"NEW-{suffix}",
+                },
+            ],
+        },
+    )
+    assert repeat.status_code == 201, repeat.text
+    second_stay = db_session.scalar(
+        select(StayRecord).where(
+            StayRecord.user_id == primary_user_id,
+            StayRecord.start_date == second_start,
+        )
+    )
+    assert second_stay is not None
+    assert second_stay.id != first_stay.id
+    assert [guest.guest_user_id for guest in second_stay.additional_guests][0] == first_guest_id
+    assert second_stay.additional_guests[1].guest_user_id != first_guest_id
+    db_session.refresh(first_stay)
+    assert len(first_stay.additional_guests) == 1
+    assert first_stay.additional_guests[0].full_name == "Returning Additional Guest"
+    assert db_session.scalar(
+        select(StayRecord.id).where(
+            StayRecord.user_id == primary_user_id,
+            StayRecord.start_date == first_start,
+        )
+    ) == first_stay.id
+
+    changed_contact = client.post(
+        f"/api/v1/admin/users/{primary_user_id}/stays",
+        headers=headers,
+        json={
+            "propertyId": prop.id,
+            "startDate": (second_start + timedelta(days=30)).isoformat(),
+            "guestCount": 2,
+            "additionalGuests": [
+                {
+                    "fullName": "Returning Additional Guest",
+                    "dateOfBirth": "1992-02-02",
+                    "email": f"changed-{suffix}@example.com",
+                    "phone": additional_phone,
+                    "idDocumentType": "PASSPORT",
+                    "idDocumentNumber": f"RETURNING-{suffix}",
+                }
+            ],
+        },
+    )
+    assert changed_contact.status_code == 409
+    assert changed_contact.json()["error"]["code"] == "GUEST_IDENTITY_CONFLICT"
+
+    reused_contact = client.post(
+        f"/api/v1/admin/users/{primary_user_id}/stays",
+        headers=headers,
+        json={
+            "propertyId": prop.id,
+            "startDate": (second_start + timedelta(days=60)).isoformat(),
+            "guestCount": 2,
+            "additionalGuests": [
+                {
+                    "fullName": "Different Guest",
+                    "dateOfBirth": "1995-05-05",
+                    "email": additional_email,
+                    "phone": f"+1777{uuid4().int % 10000000:07d}",
+                    "idDocumentType": "PASSPORT",
+                    "idDocumentNumber": f"DIFFERENT-{suffix}",
+                }
+            ],
+        },
+    )
+    assert reused_contact.status_code == 409
+    assert reused_contact.json()["error"]["code"] == "GUEST_CONTACT_IN_USE"
+
+    db_session.expire_all()
+    assert db_session.scalar(
+        select(StayRecord.id).where(
+            StayRecord.user_id == primary_user_id,
+            StayRecord.start_date == second_start + timedelta(days=30),
+        )
+    ) is None
+    assert db_session.scalar(
+        select(StayRecord.id).where(
+            StayRecord.user_id == primary_user_id,
+            StayRecord.start_date == second_start + timedelta(days=60),
+        )
+    ) is None
 
 
 def test_resending_invite_rotates_token_and_uses_admin_activation_page(client, db_session):
@@ -698,7 +986,7 @@ def test_admin_can_soft_delete_users_and_cannot_delete_self(client: TestClient, 
     assert self_delete.status_code == 403
 
 
-def test_guest_subtype_must_match_initial_stay_property_type(client: TestClient, db_session):
+def test_customer_type_must_match_initial_stay_property_type(client: TestClient, db_session):
     headers = _admin_headers(db_session)
     hostel = _create_property(db_session, "Subtype Mismatch Hostel", "HOSTEL_BOYS")
     response = client.post(
@@ -721,7 +1009,7 @@ def test_guest_subtype_must_match_initial_stay_property_type(client: TestClient,
     assert response.json()["error"]["code"] == "GUEST_PROPERTY_TYPE_MISMATCH"
 
 
-def test_guest_creation_requires_subtype_and_initial_stay(client: TestClient, db_session):
+def test_guest_creation_requires_customer_type_and_initial_stay(client: TestClient, db_session):
     response = client.post(
         "/api/v1/admin/users",
         headers=_admin_headers(db_session),
@@ -736,7 +1024,62 @@ def test_guest_creation_requires_subtype_and_initial_stay(client: TestClient, db
         },
     )
     assert response.status_code == 400
-    assert "guest subtype" in response.json()["error"]["message"].lower()
+    assert "customer type" in response.json()["error"]["message"].lower()
+
+
+def test_temporary_customer_can_be_created_without_property_or_stay(client, db_session):
+    response = client.post(
+        "/api/v1/admin/users",
+        headers=_admin_headers(db_session),
+        json={
+            "email": f"temporary-{uuid4().hex[:8]}@example.com",
+            "fullName": "Temporary Customer",
+            "phone": f"+1555{uuid4().int % 10000000:07d}",
+            "dateOfBirth": "1990-01-01",
+            "idDocumentType": "PASSPORT",
+            "idDocumentNumber": "A1234567",
+            "role": "CUSTOMER",
+            "customerPersona": "TEMP_CUSTOMER",
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    data = response.json()
+    assert data["customerPersona"] == "TEMP_CUSTOMER"
+    assert data["propertyIds"] == []
+    assert data["initialStay"] is None
+    assert db_session.scalar(
+        select(StayRecord).where(StayRecord.user_id == data["id"])
+    ) is None
+    assert db_session.scalar(
+        select(CustomerPropertyLink).where(
+            CustomerPropertyLink.user_id == data["id"]
+        )
+    ) is None
+
+
+def test_hosteler_stay_cannot_be_exactly_one_night(client, db_session):
+    hostel = _create_property(db_session, "One Night Hostel", "HOSTEL_COED")
+    response = client.post(
+        "/api/v1/admin/users",
+        headers=_admin_headers(db_session),
+        json={
+            "email": f"one-night-{uuid4().hex[:8]}@example.com",
+            "fullName": "One Night Hosteler",
+            "phone": f"+1555{uuid4().int % 10000000:07d}",
+            "dateOfBirth": "1990-01-01",
+            "idDocumentType": "PASSPORT",
+            "idDocumentNumber": "A1234567",
+            "role": "CUSTOMER",
+            "customerPersona": "HOSTELER",
+            "initialStayPropertyId": hostel.id,
+            "stayStartDate": "2026-11-10",
+            "stayEndDate": "2026-11-11",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "exactly one night" in response.json()["error"]["message"].lower()
 
 
 def test_admin_can_create_admin_account_with_global_property_access(client: TestClient, db_session):
@@ -825,7 +1168,9 @@ def test_staff_creation_requires_property_assignment(client: TestClient, db_sess
     assert response.status_code == 400
 
 
-def test_customer_activation_uses_customer_audience(client: TestClient, db_session):
+def test_admin_created_customer_can_sign_in_with_customer_audience(
+    client: TestClient, db_session
+):
     headers = _admin_headers(db_session)
     suffix = uuid4().hex[:8]
     email = f"activation-{suffix}@example.com"
@@ -848,16 +1193,16 @@ def test_customer_activation_uses_customer_audience(client: TestClient, db_sessi
         },
     )
     assert created.status_code == 201, created.text
+    assert created.json()["status"] == "ACTIVE"
+    initial_password = created.json()["initialPassword"]
     invite = db_session.scalar(
         select(OutboxMessage).where(OutboxMessage.destination == email)
     )
-    assert invite is not None
-    token = re.search(r"token=([A-Za-z0-9_-]+)", invite.body)
-    assert token is not None
-    activated = client.post(
-        "/api/v1/auth/activate",
-        json={"token": token.group(1), "newPassword": "StrongPass123!"},
+    assert invite is None
+    login = client.post(
+        "/api/v1/auth/login",
+        json={"identifier": email, "password": initial_password},
     )
-    assert activated.status_code == 200, activated.text
-    claims = decode_access_token(activated.json()["accessToken"], "customer")
+    assert login.status_code == 200, login.text
+    claims = decode_access_token(login.json()["accessToken"], "customer")
     assert claims["sub"] == created.json()["id"]

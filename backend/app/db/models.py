@@ -144,6 +144,11 @@ class User(Base):
         foreign_keys="UnitAssignment.user_id",
     )
     stay_records: Mapped[list["StayRecord"]] = relationship("StayRecord", back_populates="user")
+    occupant_profiles: Mapped[list["CustomerOccupantProfile"]] = relationship(
+        "CustomerOccupantProfile",
+        back_populates="owner",
+        cascade="all, delete-orphan",
+    )
     staff_profile: Mapped["StaffProfile | None"] = relationship(
         "StaffProfile", back_populates="user", uselist=False
     )
@@ -600,8 +605,8 @@ class BillingStrategy(str, enum.Enum):
 
 class CustomerPersona(str, enum.Enum):
     HOTEL_GUEST = "HOTEL_GUEST"
-    HOSTEL_GUEST = "HOSTEL_GUEST"
     HOSTELER = "HOSTELER"
+    TEMP_CUSTOMER = "TEMP_CUSTOMER"
 
 
 class PaymentStatus(str, enum.Enum):
@@ -684,6 +689,14 @@ class ReservationOccupant(Base):
         ForeignKey("reservation_requests.id", ondelete="CASCADE"),
         nullable=False,
     )
+    profile_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("customer_occupant_profiles.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    guest_user_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
     is_primary: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     first_name: Mapped[str] = mapped_column(String(50), nullable=False)
     last_name: Mapped[str | None] = mapped_column(String(50), nullable=True)
@@ -697,6 +710,10 @@ class ReservationOccupant(Base):
     reservation_request: Mapped["ReservationRequest"] = relationship(
         "ReservationRequest", back_populates="occupants"
     )
+    profile: Mapped["CustomerOccupantProfile | None"] = relationship(
+        "CustomerOccupantProfile"
+    )
+    guest_user: Mapped["User | None"] = relationship("User")
 
 
 class UnitAssignment(Base):
@@ -973,6 +990,14 @@ class StayOccupant(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    guest_user_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    profile_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("customer_occupant_profiles.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     stay_record_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("stay_records.id", ondelete="CASCADE"), nullable=False
     )
@@ -990,6 +1015,46 @@ class StayOccupant(Base):
     stay_record: Mapped["StayRecord"] = relationship(
         "StayRecord", back_populates="additional_guests"
     )
+    profile: Mapped["CustomerOccupantProfile | None"] = relationship(
+        "CustomerOccupantProfile"
+    )
+    guest_user: Mapped["User | None"] = relationship("User")
+
+
+class CustomerOccupantProfile(Base):
+    __tablename__ = "customer_occupant_profiles"
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_user_id",
+            "id_document_lookup_hash",
+            name="uq_customer_occupant_owner_document",
+        ),
+        Index("ix_customer_occupant_profiles_owner_user_id", "owner_user_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    owner_user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    full_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    date_of_birth: Mapped[date | None] = mapped_column(Date, nullable=True)
+    age: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    gender: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    permanent_address: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    id_document_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    id_document_number_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    id_document_last4: Mapped[str] = mapped_column(String(8), nullable=False)
+    id_document_lookup_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+    owner: Mapped["User"] = relationship("User", back_populates="occupant_profiles")
 
 
 class StaffProfile(Base):

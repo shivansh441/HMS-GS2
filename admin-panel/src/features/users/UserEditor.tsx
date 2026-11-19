@@ -2,10 +2,11 @@ import React from 'react';
 import { Pencil, Save } from 'lucide-react';
 import { AddressFields } from './AddressFields';
 import { AdditionalOccupants } from './AdditionalOccupants';
+import { RepeatStayRegistration } from './RepeatStayRegistration';
 import { LoadingIndicator } from '../../components/ui/LoadingIndicator';
 import { BackLinkButton } from '../../components/ui/BackLinkButton';
 import { CustomerPersona, Property } from '../../types';
-import { addressPartsFromString, emptyAdditionalGuestForm, guestPersonaForProperty, isPropertyCompatibleWithGuest, localDateToday } from './userForm';
+import { addCalendarDays, addressPartsFromString, emptyAdditionalGuestForm, guestPersonaForProperty, localDateToday } from './userForm';
 import { userInputClass, userLabelClass, userSectionClass } from './userStyles';
 import { ManagedUser, UserEditorMode, UserForm } from './userTypes';
 
@@ -18,15 +19,19 @@ interface UserEditorProps {
   editorSaving: boolean;
   editorError: string | null;
   activationUrl: string | null;
+  initialPassword: string | null;
   isAdmin: boolean;
   selectedPropertyId: string | null;
   properties: Property[];
-  guestProperties: Property[];
   closeEditor: () => void;
   saveUser: (event: React.FormEvent<HTMLFormElement>) => void;
   toggleProperty: (propertyId: string) => void;
   setEditorMode: React.Dispatch<React.SetStateAction<UserEditorMode>>;
+  onStayRegistered: () => Promise<void>;
 }
+
+const isAllPropertyScope = (selectedPropertyId: string | null) =>
+  !selectedPropertyId || selectedPropertyId === 'ALL';
 
 export const UserEditor: React.FC<UserEditorProps> = ({
   editorMode,
@@ -37,14 +42,15 @@ export const UserEditor: React.FC<UserEditorProps> = ({
   editorSaving,
   editorError,
   activationUrl,
+  initialPassword,
   isAdmin,
   selectedPropertyId,
   properties,
-  guestProperties,
   closeEditor,
   saveUser,
   toggleProperty,
   setEditorMode,
+  onStayRegistered,
 }) => (
   <>
     <section aria-labelledby="user-editor-title" className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900 sm:p-6">
@@ -220,27 +226,69 @@ export const UserEditor: React.FC<UserEditorProps> = ({
                 </fieldset>
 
                 {(userForm.role === 'CUSTOMER' || editorMode === 'create') && (
-                  <fieldset className={`order-first grid min-w-0 grid-cols-1 gap-4 border-b border-slate-200 bg-transparent px-0 pb-5 dark:border-slate-700 md:col-span-2 md:grid-cols-2 ${userForm.customerPersona === 'HOSTEL_GUEST' ? 'lg:grid-cols-2' : 'lg:grid-cols-3'}`}>
+                  <fieldset className="order-first grid min-w-0 grid-cols-1 gap-4 border-b border-slate-200 bg-transparent px-0 pb-5 dark:border-slate-700 md:col-span-2 md:grid-cols-2 lg:grid-cols-3">
                     <legend className="col-span-full mb-1 text-base font-semibold text-slate-900 dark:text-white">
                       {userForm.role === 'CUSTOMER' ? 'Customer information' : 'Account role'}
                     </legend>
-                    {userForm.role === 'CUSTOMER' && (
+                    {userForm.role === 'CUSTOMER' && userForm.customerPersona !== 'TEMP_CUSTOMER' && (
                       <label className={userLabelClass}>
                         <span>Property <span className="text-red-600" aria-hidden="true">*</span></span>
-                        <select
-                          required
-                          disabled={editorMode === 'view' || editorSaving}
-                          className={userInputClass}
-                          value={userForm.initialStayPropertyId}
-                          onChange={(event) =>
-                            setUserForm((form) => ({ ...form, initialStayPropertyId: event.target.value }))
-                          }
-                        >
-                          <option value="">Select property</option>
-                          {guestProperties.map((property) => (
-                            <option key={property.id} value={property.id}>{property.code} · {property.name}</option>
-                          ))}
-                        </select>
+                        {isAllPropertyScope(selectedPropertyId) ? (
+                          <select
+                            required
+                            disabled={editorMode === 'view' || editorSaving}
+                            className={userInputClass}
+                            value={userForm.initialStayPropertyId}
+                            onChange={(event) =>
+                              setUserForm((form) => {
+                                const property = properties.find(
+                                  (item) => item.id === event.target.value,
+                                );
+                                const customerPersona = property
+                                  ? guestPersonaForProperty(property.type)
+                                  : '';
+                                const personaChanged = customerPersona !== form.customerPersona;
+                                return {
+                                  ...form,
+                                  initialStayPropertyId: property?.id || '',
+                                  customerPersona,
+                                  propertyIds: property ? [property.id] : [],
+                                  guestCount: personaChanged ? 1 : form.guestCount,
+                                  additionalGuests: personaChanged ? [] : form.additionalGuests,
+                                  stayStartDate: property
+                                    ? form.stayStartDate || localDateToday()
+                                    : '',
+                                  stayEndDate: property ? form.stayEndDate : '',
+                                };
+                              })
+                            }
+                          >
+                            <option value="">Select property</option>
+                            {properties
+                              .filter((property) =>
+                                !userForm.customerPersona ||
+                                guestPersonaForProperty(property.type) === userForm.customerPersona,
+                              )
+                              .map((property) => (
+                                <option key={property.id} value={property.id}>
+                                  {property.code} · {property.name}
+                                </option>
+                              ))}
+                          </select>
+                        ) : (
+                          <input
+                            readOnly
+                            className={userInputClass}
+                            value={(() => {
+                              const property = properties.find(
+                                (item) => item.id === userForm.initialStayPropertyId,
+                              );
+                              return property
+                                ? `${property.code} · ${property.name}`
+                                : 'Property from selected scope';
+                            })()}
+                          />
+                        )}
                       </label>
                     )}
                     <label className={userLabelClass}>
@@ -258,11 +306,8 @@ export const UserEditor: React.FC<UserEditorProps> = ({
                           const scopedProperty = properties.find((property) => property.id === scopedPropertyId);
                           const customerPersona = scopedProperty
                             ? guestPersonaForProperty(scopedProperty.type)
-                            : 'HOTEL_GUEST';
-                          const guestPropertyId = scopedProperty
-                            && isPropertyCompatibleWithGuest(scopedProperty.type, customerPersona)
-                            ? scopedPropertyId
                             : '';
+                          const guestPropertyId = scopedProperty ? scopedPropertyId : '';
                           setUserForm((form) => ({
                             ...form,
                             role,
@@ -295,38 +340,60 @@ export const UserEditor: React.FC<UserEditorProps> = ({
                     </label>
                     {userForm.role === 'CUSTOMER' && (
                     <>
-                    <label className={userLabelClass}>
-                      <span>Guest subtype <span className="text-red-600" aria-hidden="true">*</span></span>
-                      <select
-                        required
-                        disabled={editorMode === 'view' || editorSaving}
-                        className={userInputClass}
-                        value={userForm.customerPersona}
-                        onChange={(event) =>
-                          setUserForm((form) => {
-                            const customerPersona = event.target.value as CustomerPersona;
-                            const selectedProperty = properties.find(
-                              (property) => property.id === form.initialStayPropertyId,
-                            );
-                            const keepSelectedProperty = selectedProperty
-                              && isPropertyCompatibleWithGuest(selectedProperty.type, customerPersona);
-                            return {
-                              ...form,
-                              customerPersona,
-                              guestCount: 1,
-                              additionalGuests: [],
-                              initialStayPropertyId: keepSelectedProperty ? form.initialStayPropertyId : '',
-                              propertyIds: keepSelectedProperty ? [form.initialStayPropertyId] : [],
-                            };
-                          })
-                        }
-                      >
-                        <option value="">Select guest subtype</option>
-                        <option value="HOTEL_GUEST">Hotel guest</option>
-                        <option value="HOSTEL_GUEST">Hostel guest</option>
-                        <option value="HOSTELER">Hosteler</option>
-                      </select>
-                    </label>
+                    {userForm.customerPersona !== 'TEMP_CUSTOMER' && (
+                      isAllPropertyScope(selectedPropertyId) ? (
+                        <label className={userLabelClass}>
+                          <span>Customer type <span className="text-red-600" aria-hidden="true">*</span></span>
+                          <select
+                            required
+                            disabled={editorMode === 'view' || editorSaving}
+                            className={userInputClass}
+                            value={userForm.customerPersona}
+                            onChange={(event) =>
+                              setUserForm((form) => {
+                                const customerPersona = event.target.value as CustomerPersona | '';
+                                const selectedProperty = properties.find(
+                                  (property) => property.id === form.initialStayPropertyId,
+                                );
+                                const keepSelectedProperty =
+                                  selectedProperty &&
+                                  guestPersonaForProperty(selectedProperty.type) === customerPersona;
+                                const personaChanged = customerPersona !== form.customerPersona;
+                                return {
+                                  ...form,
+                                  customerPersona,
+                                  initialStayPropertyId: keepSelectedProperty
+                                    ? form.initialStayPropertyId
+                                    : '',
+                                  propertyIds: keepSelectedProperty
+                                    ? [form.initialStayPropertyId]
+                                    : [],
+                                  guestCount: personaChanged ? 1 : form.guestCount,
+                                  additionalGuests: personaChanged ? [] : form.additionalGuests,
+                                };
+                              })
+                            }
+                          >
+                            <option value="">Select customer type</option>
+                            <option value="HOTEL_GUEST">Guest</option>
+                            <option value="HOSTELER">Hosteler</option>
+                          </select>
+                        </label>
+                      ) : (
+                        <div className={userLabelClass}>
+                          <span>Customer type</span>
+                          <input
+                            readOnly
+                            className={userInputClass}
+                            value={userForm.customerPersona === 'HOSTELER'
+                              ? 'Hosteler'
+                              : userForm.customerPersona === 'HOTEL_GUEST'
+                                ? 'Guest'
+                                : '—'}
+                          />
+                        </div>
+                      )
+                    )}
                     {userForm.customerPersona === 'HOSTELER' && (
                       <>
                         <label className={userLabelClass}>
@@ -341,7 +408,9 @@ export const UserEditor: React.FC<UserEditorProps> = ({
                         </label>
                       </>
                     )}
-                    <fieldset className={`grid min-w-0 grid-cols-1 gap-4 border-t border-slate-200 bg-transparent px-0 pt-4 dark:border-slate-700 md:col-span-2 md:grid-cols-2 lg:col-span-full ${userForm.customerPersona === 'HOSTEL_GUEST' ? 'lg:grid-cols-2' : 'lg:grid-cols-3'}`}>
+                    {userForm.customerPersona !== 'TEMP_CUSTOMER' &&
+                    userForm.customerPersona !== '' ? (
+                    <fieldset className="grid min-w-0 grid-cols-1 gap-4 border-t border-slate-200 bg-transparent px-0 pt-4 dark:border-slate-700 md:col-span-2 md:grid-cols-2 lg:col-span-full">
                       <legend className="mb-1 text-sm font-semibold text-slate-800 dark:text-slate-100">Initial stay <span className="text-red-600" aria-hidden="true">*</span></legend>
                       {userForm.customerPersona === 'HOTEL_GUEST' && (
                         <label className={userLabelClass}>
@@ -386,7 +455,12 @@ export const UserEditor: React.FC<UserEditorProps> = ({
                         Expected end date
                         <input
                           type="date"
-                          min={userForm.stayStartDate || undefined}
+                          min={userForm.stayStartDate
+                            ? addCalendarDays(
+                                userForm.stayStartDate,
+                                userForm.customerPersona === 'HOSTELER' ? 2 : 1,
+                              )
+                            : undefined}
                           disabled={editorMode === 'view' || editorSaving}
                           className={userInputClass}
                           value={userForm.stayEndDate}
@@ -394,6 +468,11 @@ export const UserEditor: React.FC<UserEditorProps> = ({
                         />
                       </label>
                     </fieldset>
+                    ) : (
+                      <p className="text-sm text-slate-500 dark:text-slate-400 md:col-span-2">
+                        Stays for temporary customer accounts are recorded separately when booked.
+                      </p>
+                    )}
                     </>
                     )}
                   </fieldset>
@@ -478,6 +557,21 @@ export const UserEditor: React.FC<UserEditorProps> = ({
                   </div>
                 )}
 
+                {initialPassword && (
+                  <div className="space-y-2 border-t border-slate-200 pt-4 dark:border-slate-700">
+                    <p className="text-sm font-medium text-slate-800 dark:text-slate-200">
+                      One-time initial password. Share it securely; it will not be shown again.
+                    </p>
+                    <input
+                      readOnly
+                      aria-label="One-time initial password"
+                      className={userInputClass}
+                      value={initialPassword}
+                      onFocus={(event) => event.currentTarget.select()}
+                    />
+                  </div>
+                )}
+
                 <div className="flex flex-wrap justify-end gap-3 pt-1">
                   <button
                     type="button"
@@ -510,5 +604,21 @@ export const UserEditor: React.FC<UserEditorProps> = ({
               </form>
             )}
           </section>
+    {editorMode === 'view' &&
+      isAdmin &&
+      selectedUser?.role === 'CUSTOMER' &&
+      selectedUser.customerPersona === 'HOTEL_GUEST' && (
+        <section className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+          <h2 className="mb-3 text-sm font-semibold">Stay history</h2>
+          <p className="mb-3 text-xs text-slate-500">
+            Register a separate visit without replacing the existing stay or guest records.
+          </p>
+          <RepeatStayRegistration
+            customer={selectedUser}
+            properties={properties}
+            onRegistered={onStayRegistered}
+          />
+        </section>
+      )}
   </>
 );

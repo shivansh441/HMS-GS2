@@ -4,9 +4,9 @@ from decimal import ROUND_HALF_UP, Decimal
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Query, Request
-from sqlalchemy import exists, not_, select, update
+from sqlalchemy import and_, exists, func, not_, or_, select, update
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, aliased, selectinload
 
 from app.core.crypto import process_id_document
 from app.core.errors import (
@@ -30,8 +30,10 @@ from app.db.models import (
     AssignmentStatus,
     BillingStrategy,
     CustomerPersona,
+    CustomerOccupantProfile,
     CustomerPropertyLink,
     DepositEscrow,
+    MonthlyInvoice,
     PaymentReceipt,
     Property,
     PropertyFeeConfig,
@@ -52,6 +54,16 @@ from app.modules.auth.deps import (
     get_property_scope,
 )
 from app.modules.billing.service import ensure_deposit_escrow
+from app.modules.customer.occupant_service import (
+    copy_stay_occupant_to_record,
+    get_guest_accounts,
+    get_or_create_guest_account_from_profile,
+    get_owned_occupant_profiles,
+    stay_occupant_from_guest_account,
+    stay_occupant_from_profile,
+    stay_occupant_from_reservation_occupant,
+    sync_profile_from_stay_occupant,
+)
 from app.modules.inventory.schemas import (
     BulkUnitCreateRequest,
     BulkUnitCreateResponse,
@@ -64,6 +76,8 @@ from app.modules.inventory.schemas import (
     PublicUnitResponse,
     StayAssignmentCreateRequest,
     StayAssignmentResponse,
+    StayAssignmentSummaryResponse,
+    StayCollectedAmountResponse,
     StayCheckInRequest,
     StayCheckOutRequest,
     StayRoomChangeRequest,
@@ -86,6 +100,8 @@ from app.modules.inventory.service import (
     create_property,
     create_unit,
     get_scoped_property,
+    has_active_user_assignment,
+    has_open_unit_assignment,
     property_matrix,
     property_summary,
     property_summaries,
@@ -141,6 +157,23 @@ def _require_front_desk_or_admin(actor: User) -> None:
         return
     if actor.staff_role != "FRONT_DESK":
         raise ForbiddenError("Only front-desk staff or admins can perform desk operations")
+
+
+def _is_one_night_hostel_stay(
+    property_timezone: str,
+    check_in: datetime,
+    check_out: datetime | None,
+) -> bool:
+    if check_out is None:
+        return False
+    timezone_info = ZoneInfo(property_timezone)
+    if check_in.tzinfo is None:
+        check_in = check_in.replace(tzinfo=timezone.utc)
+    if check_out.tzinfo is None:
+        check_out = check_out.replace(tzinfo=timezone.utc)
+    local_check_in = check_in.astimezone(timezone_info).date()
+    local_check_out = check_out.astimezone(timezone_info).date()
+    return (local_check_out - local_check_in).days == 1
 
 
 def _fee_response(config: PropertyFeeConfig, reveal_amount: bool) -> PropertyFeeResponse:
@@ -498,11 +531,23 @@ def create_stay_assignment_endpoint(
     if not unit:
         raise NotFoundError("Available unit not found")
     prop = _scoped_property(db, actor, unit.property_id, property_scope)
-    customer = db.get(User, payload.user_id)
+    customer = db.scalar(
+        select(User).where(User.id == payload.user_id).with_for_update()
+    )
     if not customer or customer.role != Role.CUSTOMER or customer.status != "ACTIVE":
         raise BadRequestError("Check-in requires an active customer account")
+    if has_active_user_assignment(db, customer.id):
+        raise ConflictError(
+            "This customer already occupies an assigned unit and cannot be assigned another",
+            code="CUSTOMER_ALREADY_ASSIGNED",
+        )
     if unit.status != UnitStatus.AVAILABLE.value:
         raise BadRequestError("Selected unit is not available", code="UNIT_UNAVAILABLE")
+    if has_open_unit_assignment(db, {unit.id}):
+        raise ConflictError(
+            "Selected unit already has an active or reserved assignment",
+            code="UNIT_ALREADY_ASSIGNED",
+        )
     reservation = None
     if payload.reservation_id:
         reservation = db.get(ReservationRequest, payload.reservation_id)
@@ -529,6 +574,41 @@ def create_stay_assignment_endpoint(
         raise BadRequestError("Hostel walk-ins must be assigned to an available bed")
     if not is_hostel and unit.type not in (UnitType.ROOM.value, UnitType.SUITE.value):
         raise BadRequestError("Hotel walk-ins must be assigned to a room or suite")
+    if is_hostel and (payload.occupant_profile_ids or payload.guest_user_ids):
+        raise BadRequestError(
+            "Hostel beds are assigned to one customer; additional occupants must book separately",
+            code="HOSTEL_SINGLE_OCCUPANT_PER_BED",
+        )
+    if (payload.occupant_profile_ids or payload.guest_user_ids) and not payload.check_in_now:
+        raise BadRequestError(
+            "Additional guests can only be assigned during check-in",
+            code="OCCUPANTS_REQUIRE_CHECK_IN",
+        )
+    profiles = get_owned_occupant_profiles(
+        db, customer.id, payload.occupant_profile_ids
+    )
+    guest_users = get_guest_accounts(db, payload.guest_user_ids, customer.id)
+    reservation_occupants = (
+        [occupant for occupant in reservation.occupants if not occupant.is_primary]
+        if reservation
+        else []
+    )
+    if (profiles or guest_users) and reservation_occupants:
+        raise BadRequestError(
+            "Choose occupants from the reservation or from guest profiles, not both",
+            code="DUPLICATE_STAY_OCCUPANTS",
+        )
+    if profiles and guest_users:
+        raise BadRequestError(
+            "Choose saved guest profiles or guest accounts, not both",
+            code="DUPLICATE_STAY_OCCUPANTS",
+        )
+    additional_occupant_count = len(reservation_occupants) + len(profiles) + len(guest_users)
+    if 1 + additional_occupant_count > unit.capacity:
+        raise BadRequestError(
+            f"This unit can have at most {unit.capacity} occupant(s)",
+            code="OCCUPANT_CAPACITY_EXCEEDED",
+        )
     if is_hostel and payload.billing_strategy != BillingStrategy.RECURRING_MONTHLY.value:
         raise BadRequestError("Hostel assignments use recurring monthly billing")
     if not is_hostel and payload.billing_strategy != BillingStrategy.PER_NIGHT_STAY.value:
@@ -566,6 +646,10 @@ def create_stay_assignment_endpoint(
     expected_check_out = payload.expected_check_out
     if expected_check_out and expected_check_out.tzinfo is None:
         expected_check_out = expected_check_out.replace(tzinfo=timezone.utc)
+    if is_hostel and _is_one_night_hostel_stay(
+        prop.timezone, expected_check_in, expected_check_out
+    ):
+        raise BadRequestError("Hostel stays cannot be booked for exactly one night")
 
     claimed_status = (
         UnitStatus.OCCUPIED.value if payload.check_in_now else UnitStatus.RESERVED.value
@@ -629,11 +713,7 @@ def create_stay_assignment_endpoint(
     if prop.type == "HOTEL":
         persona = CustomerPersona.HOTEL_GUEST.value
     else:
-        persona = (
-            CustomerPersona.HOSTELER.value
-            if assignment.billing_strategy == BillingStrategy.RECURRING_MONTHLY.value
-            else CustomerPersona.HOSTEL_GUEST.value
-        )
+        persona = CustomerPersona.HOSTELER.value
 
     db.add(assignment)
     db.flush()
@@ -683,9 +763,38 @@ def create_stay_assignment_endpoint(
             persona=persona,
             start_date=expected_check_in.date(),
             end_date=expected_check_out.date() if expected_check_out else None,
+            guest_count=1 + additional_occupant_count,
             is_active=True,
         )
         db.add(stay_record)
+        db.flush()
+        if reservation_occupants:
+            db.add_all(
+                [
+                    stay_occupant_from_reservation_occupant(
+                        db, customer.id, stay_record, occupant, prop.id
+                    )
+                    for occupant in reservation_occupants
+                ]
+            )
+        elif guest_users:
+            stay_record.additional_guests = [
+                stay_occupant_from_guest_account(db, customer.id, stay_record, guest)
+                for guest in guest_users
+            ]
+        else:
+            profile_occupants = []
+            for profile in profiles:
+                guest = get_or_create_guest_account_from_profile(db, profile, prop.id)
+                if guest.id == customer.id:
+                    raise BadRequestError(
+                        "The main guest cannot also be listed as an additional guest",
+                        code="DUPLICATE_STAY_OCCUPANT",
+                    )
+                profile_occupants.append(
+                    stay_occupant_from_profile(profile, stay_record, guest.id)
+                )
+            stay_record.additional_guests = profile_occupants
     write_audit_log(
         db,
         action="WALK_IN_STAY_ASSIGNED",
@@ -734,6 +843,7 @@ def create_stay_assignment_endpoint(
         unitNumber=unit.unit_number,
         unitType=unit.type,
         unitCategory=unit.category,
+        currency=prop.currency,
         persona=persona,
         stayRecordId=stay_record.id if stay_record else None,
     )
@@ -770,6 +880,25 @@ def _stay_assignment_response(assignment: UnitAssignment) -> StayAssignmentRespo
         unitNumber=unit.unit_number,
         unitType=unit.type,
         unitCategory=unit.category,
+        currency=prop.currency,
+        guestCount=stay.guest_count if stay else 1,
+        additionalGuestNames=(
+            [occupant.full_name for occupant in stay.additional_guests]
+            if stay
+            else []
+        ),
+        occupantUserIds=list(
+            dict.fromkeys(
+                [customer.id]
+                + [
+                    occupant.guest_user_id
+                    for occupant in stay.additional_guests
+                    if occupant.guest_user_id
+                ]
+                if stay
+                else [customer.id]
+            )
+        ),
         persona=stay.persona if stay else None,
         stayRecordId=stay.id if stay else None,
     )
@@ -790,7 +919,13 @@ def check_in_stay_assignment_endpoint(
     _require_front_desk_or_admin(actor)
     assignment = db.scalar(
         select(UnitAssignment)
-        .options(selectinload(UnitAssignment.user), selectinload(UnitAssignment.unit))
+        .options(
+            selectinload(UnitAssignment.user),
+            selectinload(UnitAssignment.unit),
+            selectinload(UnitAssignment.reservation_request).selectinload(
+                ReservationRequest.occupants
+            ),
+        )
         .where(UnitAssignment.id == assignment_id)
         .with_for_update()
     )
@@ -798,10 +933,17 @@ def check_in_stay_assignment_endpoint(
         raise NotFoundError("Stay assignment not found")
     if assignment.status != AssignmentStatus.RESERVED.value:
         raise ConflictError("Only reserved assignments can be checked in")
+    db.scalar(select(User.id).where(User.id == assignment.user_id).with_for_update())
+    if has_active_user_assignment(db, assignment.user_id, assignment.id):
+        raise ConflictError(
+            "This customer already occupies another assigned unit",
+            code="CUSTOMER_ALREADY_ASSIGNED",
+        )
     is_scheduled_room_change = bool(
         assignment.notes and assignment.notes.startswith("Scheduled room change from ")
     )
     source_assignment_id = None
+    source_stay = None
     now = datetime.now(timezone.utc)
     if is_scheduled_room_change:
         effective_check_in = assignment.expected_check_in
@@ -815,15 +957,89 @@ def check_in_stay_assignment_endpoint(
         )
         source_assignment = db.scalar(
             select(UnitAssignment)
+            .options(
+                selectinload(UnitAssignment.stay_record).selectinload(
+                    StayRecord.additional_guests
+                )
+            )
             .where(UnitAssignment.id == source_assignment_id)
             .with_for_update()
         )
+        if not source_assignment or not source_assignment.stay_record:
+            raise ConflictError(
+                "The original stay record for this room change is unavailable",
+                code="ROOM_CHANGE_SOURCE_MISSING",
+            )
+        source_stay = source_assignment.stay_record
         if source_assignment and source_assignment.is_active:
             raise ConflictError(
                 "Check out the current room before completing the scheduled room change"
             )
     unit = assignment.unit
     prop = unit.property
+    reservation_occupants = (
+        [
+            occupant
+            for occupant in assignment.reservation_request.occupants
+            if not occupant.is_primary
+        ]
+        if assignment.reservation_request
+        else []
+    )
+    profiles = get_owned_occupant_profiles(
+        db, assignment.user_id, payload.occupant_profile_ids
+    )
+    guest_users = get_guest_accounts(db, payload.guest_user_ids, assignment.user_id)
+    if (profiles or guest_users) and reservation_occupants:
+        raise BadRequestError(
+            "Choose occupants from the reservation or from guest profiles, not both",
+            code="DUPLICATE_STAY_OCCUPANTS",
+        )
+    if profiles and guest_users:
+        raise BadRequestError(
+            "Choose saved guest profiles or guest accounts, not both",
+            code="DUPLICATE_STAY_OCCUPANTS",
+        )
+    if is_scheduled_room_change and (profiles or guest_users or reservation_occupants):
+        raise BadRequestError(
+            "Scheduled room changes automatically transfer the existing occupants",
+            code="ROOM_CHANGE_OCCUPANTS_TRANSFERRED",
+        )
+    if prop.type in BED_LEVEL_TYPES and (profiles or guest_users or reservation_occupants):
+        raise BadRequestError(
+            "Hostel beds are assigned to one customer; additional occupants must book separately",
+            code="HOSTEL_SINGLE_OCCUPANT_PER_BED",
+        )
+    source_guest_count = (
+        max(source_stay.guest_count, len(source_stay.additional_guests) + 1)
+        if source_stay
+        else None
+    )
+    additional_occupant_count = (
+        source_guest_count - 1
+        if source_guest_count is not None
+        else len(reservation_occupants) + len(profiles) + len(guest_users)
+    )
+    if 1 + additional_occupant_count > unit.capacity:
+        raise BadRequestError(
+            f"This unit can have at most {unit.capacity} occupant(s)",
+            code="OCCUPANT_CAPACITY_EXCEEDED",
+        )
+    if has_open_unit_assignment(
+        db,
+        {unit.id},
+        exclude_assignment_id=assignment.id,
+    ):
+        raise ConflictError(
+            "The assigned unit already has another active or reserved assignment",
+            code="UNIT_ALREADY_ASSIGNED",
+        )
+    if prop.type in BED_LEVEL_TYPES and _is_one_night_hostel_stay(
+        prop.timezone,
+        assignment.expected_check_in,
+        assignment.expected_check_out,
+    ):
+        raise BadRequestError("Hostel stays cannot be booked for exactly one night")
     if unit.status != UnitStatus.RESERVED.value:
         raise ConflictError("The assigned unit is no longer reserved")
 
@@ -842,11 +1058,7 @@ def check_in_stay_assignment_endpoint(
     persona = (
         CustomerPersona.HOTEL_GUEST.value
         if prop.type == "HOTEL"
-        else (
-            CustomerPersona.HOSTELER.value
-            if assignment.billing_strategy == BillingStrategy.RECURRING_MONTHLY.value
-            else CustomerPersona.HOSTEL_GUEST.value
-        )
+        else CustomerPersona.HOSTELER.value
     )
     transferred_escrow = None
     if is_scheduled_room_change:
@@ -906,9 +1118,53 @@ def check_in_stay_assignment_endpoint(
             if assignment.expected_check_out
             else None
         ),
+        guest_count=(
+            source_guest_count
+            if source_guest_count is not None
+            else 1 + additional_occupant_count
+        ),
         is_active=True,
     )
     db.add(stay_record)
+    db.flush()
+    if is_scheduled_room_change and source_stay:
+        stay_record.additional_guests = [
+            copy_stay_occupant_to_record(occupant, stay_record)
+            for occupant in source_stay.additional_guests
+        ]
+    elif reservation_occupants:
+        db.add_all(
+            [
+                stay_occupant_from_reservation_occupant(
+                    db,
+                    assignment.user_id,
+                    stay_record,
+                    occupant,
+                    prop.id,
+                )
+                for occupant in reservation_occupants
+            ]
+        )
+    elif guest_users:
+        stay_record.additional_guests = [
+            stay_occupant_from_guest_account(
+                db, assignment.user_id, stay_record, guest
+            )
+            for guest in guest_users
+        ]
+    else:
+        profile_occupants = []
+        for profile in profiles:
+            guest = get_or_create_guest_account_from_profile(db, profile, prop.id)
+            if guest.id == assignment.user_id:
+                raise BadRequestError(
+                    "The main guest cannot also be listed as an additional guest",
+                    code="DUPLICATE_STAY_OCCUPANT",
+                )
+            profile_occupants.append(
+                stay_occupant_from_profile(profile, stay_record, guest.id)
+            )
+        stay_record.additional_guests = profile_occupants
     write_audit_log(
         db,
         action="STAY_CHECKED_IN",
@@ -964,7 +1220,7 @@ def check_out_stay_assignment_endpoint(
     claimed = db.execute(
         update(Unit)
         .where(Unit.id == unit.id, Unit.status == UnitStatus.OCCUPIED.value)
-        .values(status=UnitStatus.DIRTY.value)
+        .values(status=UnitStatus.AVAILABLE.value)
     )
     if claimed.rowcount != 1:
         db.rollback()
@@ -1006,6 +1262,7 @@ def check_out_stay_assignment_endpoint(
 def list_active_stay_assignments_endpoint(
     property_id: str | None = Query(default=None, alias="propertyId"),
     unit_type: str | None = Query(default=None, alias="unitType"),
+    include_hostelers: bool = Query(default=False, alias="includeHostelers"),
     actor: User = Depends(get_current_admin_user),
     db: Session = Depends(get_db),
     property_scope: set[str] = Depends(get_property_scope),
@@ -1013,19 +1270,51 @@ def list_active_stay_assignments_endpoint(
     _require_front_desk_or_admin(actor)
     if property_id and property_id not in property_scope:
         raise NotFoundError("Property not found")
+    if property_id:
+        selected_property = db.scalar(
+            select(Property).where(
+                Property.id == property_id,
+                Property.is_deleted.is_(False),
+            )
+        )
+        if not selected_property:
+            raise NotFoundError("Property not found")
+        if selected_property.type != "HOTEL" and not (
+            include_hostelers and selected_property.type in BED_LEVEL_TYPES
+        ):
+            raise BadRequestError(
+                "Active stays are only available for hotel properties",
+                code="HOTEL_STAYS_ONLY",
+            )
     query = (
         select(UnitAssignment)
         .join(Unit, Unit.id == UnitAssignment.unit_id)
+        .join(Property, Property.id == Unit.property_id)
         .options(
             selectinload(UnitAssignment.user),
             selectinload(UnitAssignment.unit).selectinload(Unit.property),
-            selectinload(UnitAssignment.stay_record),
+            selectinload(UnitAssignment.stay_record).selectinload(
+                StayRecord.additional_guests
+            ),
         )
         .where(
             UnitAssignment.status == AssignmentStatus.CHECKED_IN.value,
             UnitAssignment.is_active.is_(True),
+            or_(
+                and_(
+                    StayRecord.persona == CustomerPersona.HOTEL_GUEST.value,
+                    Property.type == "HOTEL",
+                ),
+                and_(
+                    include_hostelers,
+                    StayRecord.persona == CustomerPersona.HOSTELER.value,
+                    Property.type.in_(BED_LEVEL_TYPES),
+                ),
+            ),
+            StayRecord.property_id == Unit.property_id,
             Unit.property_id == property_id if property_id else Unit.property_id.in_(property_scope),
         )
+        .join(StayRecord, StayRecord.assignment_id == UnitAssignment.id)
         .order_by(UnitAssignment.actual_check_in.desc())
     )
     if unit_type:
@@ -1033,7 +1322,234 @@ def list_active_stay_assignments_endpoint(
             raise BadRequestError("Invalid unit type")
         query = query.where(Unit.type == unit_type)
     assignments = db.scalars(query).all()
-    return [_stay_assignment_response(assignment) for assignment in assignments]
+    occupant_user_ids_by_assignment: dict[str, list[str]] = {}
+    if assignments:
+        other_user = aliased(User)
+        occupant_accounts = db.execute(
+            select(StayRecord.assignment_id, User.id)
+            .join(StayOccupant, StayOccupant.stay_record_id == StayRecord.id)
+            .join(
+                User,
+                or_(
+                    User.id == StayOccupant.guest_user_id,
+                    and_(
+                        StayOccupant.email.is_not(None),
+                        User.email.is_not(None),
+                        func.lower(func.trim(StayOccupant.email))
+                        == func.lower(func.trim(User.email)),
+                    ),
+                    and_(
+                        StayOccupant.phone.is_not(None),
+                        User.phone.is_not(None),
+                        func.trim(StayOccupant.phone) == func.trim(User.phone),
+                    ),
+                    and_(
+                        StayOccupant.full_name.is_not(None),
+                        User.full_name.is_not(None),
+                        func.lower(func.trim(StayOccupant.full_name))
+                        == func.lower(func.trim(User.full_name)),
+                        ~exists(
+                            select(other_user.id)
+                            .where(
+                                other_user.id != User.id,
+                                other_user.role == Role.CUSTOMER.value,
+                                other_user.status == "ACTIVE",
+                                func.lower(func.trim(other_user.full_name))
+                                == func.lower(func.trim(StayOccupant.full_name)),
+                            )
+                            .correlate(User, StayOccupant)
+                        ),
+                    ),
+                ),
+            )
+            .where(
+                StayRecord.assignment_id.in_(
+                    [assignment.id for assignment in assignments]
+                ),
+                User.role == Role.CUSTOMER.value,
+            )
+            .distinct()
+        ).all()
+        for assignment_id, occupant_user_id in occupant_accounts:
+            occupant_user_ids_by_assignment.setdefault(assignment_id, []).append(
+                occupant_user_id
+            )
+    responses = []
+    for assignment in assignments:
+        response = _stay_assignment_response(assignment)
+        property_timezone = ZoneInfo(assignment.unit.property.timezone)
+        local_now = datetime.now(property_timezone)
+        check_in = assignment.actual_check_in or assignment.expected_check_in
+        if check_in.tzinfo is None:
+            check_in = check_in.replace(tzinfo=timezone.utc)
+        check_in_date = check_in.astimezone(property_timezone).date()
+        expected_check_out = assignment.expected_check_out
+        if expected_check_out and expected_check_out.tzinfo is None:
+            expected_check_out = expected_check_out.replace(tzinfo=timezone.utc)
+        check_out_date = expected_check_out.astimezone(property_timezone).date() if expected_check_out else local_now.date()
+        billable_end_date = max(check_out_date, local_now.date())
+        nights = max(1, (billable_end_date - check_in_date).days)
+        rate = response.agreed_rate or response.standard_rate or Decimal("0.00")
+        bill_to_collect = max(Decimal("0.00"), rate * nights)
+        responses.append(
+            response.model_copy(
+                update={
+                    "bill_to_collect": bill_to_collect,
+                    "occupant_user_ids": list(
+                        dict.fromkeys(
+                            [
+                                assignment.user_id,
+                                *occupant_user_ids_by_assignment.get(
+                                    assignment.id, []
+                                ),
+                            ]
+                        )
+                    ),
+                }
+            )
+        )
+    return responses
+
+
+@inventory_router.get(
+    "/stay/assignments/summary",
+    response_model=StayAssignmentSummaryResponse,
+)
+def stay_assignment_summary_endpoint(
+    property_id: str | None = Query(default=None, alias="propertyId"),
+    actor: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db),
+    property_scope: set[str] = Depends(get_property_scope),
+):
+    _require_front_desk_or_admin(actor)
+    if property_id and property_id not in property_scope:
+        raise NotFoundError("Property not found")
+
+    if property_id:
+        selected_property = db.scalar(
+            select(Property).where(
+                Property.id == property_id,
+                Property.is_deleted.is_(False),
+            )
+        )
+        if not selected_property:
+            raise NotFoundError("Property not found")
+        if selected_property.type != "HOTEL":
+            raise BadRequestError(
+                "Active stay summaries are only available for hotel properties",
+                code="HOTEL_STAYS_ONLY",
+            )
+        properties = [selected_property]
+    else:
+        properties = db.scalars(
+            select(Property).where(
+                Property.id.in_(property_scope),
+                Property.type == "HOTEL",
+                Property.is_deleted.is_(False),
+            )
+        ).all()
+
+    personas = (CustomerPersona.HOTEL_GUEST.value,)
+    total_active_stays = 0
+    check_ins_today = 0
+    check_outs_today = 0
+    collected_by_currency: dict[str, Decimal] = {}
+
+    for prop in properties:
+        local_now = datetime.now(ZoneInfo(prop.timezone))
+        local_start = datetime.combine(local_now.date(), time.min, tzinfo=local_now.tzinfo)
+        local_end = local_start + timedelta(days=1)
+        start_utc = local_start.astimezone(timezone.utc)
+        end_utc = local_end.astimezone(timezone.utc)
+        assignment_scope = (
+            select(UnitAssignment.id)
+            .join(Unit, Unit.id == UnitAssignment.unit_id)
+            .join(StayRecord, StayRecord.assignment_id == UnitAssignment.id)
+            .where(
+                Unit.property_id == prop.id,
+                StayRecord.property_id == prop.id,
+                StayRecord.persona.in_(personas),
+            )
+        )
+        total_active_stays += db.scalar(
+            select(func.count())
+            .select_from(UnitAssignment)
+            .where(
+                UnitAssignment.id.in_(assignment_scope),
+                UnitAssignment.status == AssignmentStatus.CHECKED_IN.value,
+                UnitAssignment.is_active.is_(True),
+            )
+        ) or 0
+        check_ins_today += db.scalar(
+            select(func.count())
+            .select_from(UnitAssignment)
+            .where(
+                UnitAssignment.id.in_(assignment_scope),
+                UnitAssignment.actual_check_in >= start_utc,
+                UnitAssignment.actual_check_in < end_utc,
+            )
+        ) or 0
+        check_outs_today += db.scalar(
+            select(func.count())
+            .select_from(UnitAssignment)
+            .where(
+                UnitAssignment.id.in_(assignment_scope),
+                UnitAssignment.actual_check_out >= start_utc,
+                UnitAssignment.actual_check_out < end_utc,
+            )
+        ) or 0
+
+        invoice_collected = db.scalar(
+            select(func.coalesce(func.sum(PaymentReceipt.amount), 0))
+            .select_from(PaymentReceipt)
+            .join(MonthlyInvoice, PaymentReceipt.invoice_id == MonthlyInvoice.id)
+            .join(StayRecord, StayRecord.assignment_id == MonthlyInvoice.unit_assignment_id)
+            .where(
+                PaymentReceipt.property_id == prop.id,
+                PaymentReceipt.received_at >= start_utc,
+                PaymentReceipt.received_at < end_utc,
+                StayRecord.persona.in_(personas),
+            )
+        ) or Decimal("0")
+        deposit_collected = db.scalar(
+            select(func.coalesce(func.sum(PaymentReceipt.amount), 0))
+            .select_from(PaymentReceipt)
+            .join(DepositEscrow, PaymentReceipt.deposit_escrow_id == DepositEscrow.id)
+            .join(StayRecord, StayRecord.assignment_id == DepositEscrow.unit_assignment_id)
+            .where(
+                PaymentReceipt.property_id == prop.id,
+                PaymentReceipt.received_at >= start_utc,
+                PaymentReceipt.received_at < end_utc,
+                StayRecord.persona.in_(personas),
+            )
+        ) or Decimal("0")
+        checkout_collected = db.scalar(
+            select(func.coalesce(func.sum(StayRecord.final_amount_paid), 0))
+            .select_from(StayRecord)
+            .join(UnitAssignment, StayRecord.assignment_id == UnitAssignment.id)
+            .where(
+                StayRecord.property_id == prop.id,
+                StayRecord.persona.in_(personas),
+                UnitAssignment.actual_check_out >= start_utc,
+                UnitAssignment.actual_check_out < end_utc,
+            )
+        ) or Decimal("0")
+        collected_by_currency[prop.currency] = (
+            collected_by_currency.get(prop.currency, Decimal("0"))
+            + invoice_collected
+            + deposit_collected
+            + checkout_collected
+        )
+
+    return StayAssignmentSummaryResponse(
+        totalActiveStays=total_active_stays,
+        amountCollectedToday=[
+            StayCollectedAmountResponse(currency=currency, amount=amount)
+            for currency, amount in sorted(collected_by_currency.items())
+        ],
+        checkInsToday=check_ins_today,
+        checkOutsToday=check_outs_today,
+    )
 
 
 @inventory_router.get(
@@ -1084,7 +1600,13 @@ def schedule_stay_room_change_endpoint(
     _require_front_desk_or_admin(actor)
     assignment = db.scalar(
         select(UnitAssignment)
-        .options(selectinload(UnitAssignment.user), selectinload(UnitAssignment.unit).selectinload(Unit.property))
+        .options(
+            selectinload(UnitAssignment.user),
+            selectinload(UnitAssignment.unit).selectinload(Unit.property),
+            selectinload(UnitAssignment.stay_record).selectinload(
+                StayRecord.additional_guests
+            ),
+        )
         .where(UnitAssignment.id == assignment_id)
         .with_for_update()
     )
@@ -1097,22 +1619,33 @@ def schedule_stay_room_change_endpoint(
     unit = assignment.unit
     prop = _scoped_property(db, actor, unit.property_id, property_scope)
     local_now = datetime.now(ZoneInfo(prop.timezone))
-    month_end = date(
-        local_now.year,
-        local_now.month,
-        calendar.monthrange(local_now.year, local_now.month)[1],
-    )
-    next_month = (
-        date(local_now.year + 1, 1, 1)
-        if local_now.month == 12
-        else date(local_now.year, local_now.month + 1, 1)
-    )
-    scheduled_checkout = datetime.combine(month_end, time.max, tzinfo=local_now.tzinfo)
-    scheduled_checkin = datetime.combine(next_month, time.min, tzinfo=local_now.tzinfo)
+    if prop.type == "HOTEL":
+        scheduled_checkout = local_now + timedelta(days=1)
+        scheduled_checkin = scheduled_checkout
+        effective_date = scheduled_checkin.date()
+    else:
+        month_end = date(
+            local_now.year,
+            local_now.month,
+            calendar.monthrange(local_now.year, local_now.month)[1],
+        )
+        next_month = (
+            date(local_now.year + 1, 1, 1)
+            if local_now.month == 12
+            else date(local_now.year, local_now.month + 1, 1)
+        )
+        scheduled_checkout = datetime.combine(month_end, time.max, tzinfo=local_now.tzinfo)
+        scheduled_checkin = datetime.combine(next_month, time.min, tzinfo=local_now.tzinfo)
+        effective_date = next_month
     if assignment.expected_check_out:
         raise ConflictError(
             "This stay already has a scheduled check-out",
             code="STAY_ALREADY_SCHEDULED",
+        )
+    if prop.type == "HOTEL" and not assignment.stay_record:
+        raise ConflictError(
+            "The original stay record for this room change is unavailable",
+            code="ROOM_CHANGE_SOURCE_MISSING",
         )
 
     next_assignment = None
@@ -1129,12 +1662,40 @@ def schedule_stay_room_change_endpoint(
         if (
             not new_unit
             or new_unit.status != UnitStatus.AVAILABLE.value
-            or new_unit.type != unit.type
             or new_unit.id == unit.id
         ):
             raise BadRequestError(
+                "Choose a different available unit",
+                code="UNIT_UNAVAILABLE",
+            )
+        if prop.type == "HOTEL":
+            if new_unit.type not in (UnitType.ROOM.value, UnitType.SUITE.value):
+                raise BadRequestError(
+                    "Hotel room changes require a room or suite",
+                    code="INVALID_UNIT_TYPE",
+                )
+            party_size = (
+                max(
+                    assignment.stay_record.guest_count,
+                    len(assignment.stay_record.additional_guests) + 1,
+                )
+                if assignment.stay_record
+                else 1
+            )
+            if new_unit.capacity < party_size:
+                raise BadRequestError(
+                    f"The selected room must fit all {party_size} occupants",
+                    code="OCCUPANT_CAPACITY_EXCEEDED",
+                )
+        elif new_unit.type != unit.type:
+            raise BadRequestError(
                 "Choose a different available unit of the same type",
                 code="UNIT_UNAVAILABLE",
+            )
+        if has_open_unit_assignment(db, {new_unit.id}):
+            raise ConflictError(
+                "The selected unit already has an active or reserved assignment",
+                code="UNIT_ALREADY_ASSIGNED",
             )
         rate = (
             new_unit.default_recurring_monthly_rate
@@ -1179,7 +1740,11 @@ def schedule_stay_room_change_endpoint(
             is_active=False,
             notes=(
                 f"Scheduled room change from {assignment.id}; "
-                "stay starts in the next calendar month."
+                + (
+                    "hotel party moves after one day."
+                    if prop.type == "HOTEL"
+                    else "stay starts in the next calendar month."
+                )
             ),
         )
         new_unit.status = UnitStatus.RESERVED.value
@@ -1196,7 +1761,7 @@ def schedule_stay_room_change_endpoint(
             "assignmentId": assignment.id,
             "currentUnitId": unit.id,
             "newUnitId": payload.new_unit_id,
-            "effectiveDate": next_month.isoformat(),
+            "effectiveDate": effective_date.isoformat(),
             "scheduledCheckOut": scheduled_checkout.isoformat(),
             "nextAssignmentId": next_assignment.id if next_assignment else None,
         },
@@ -1259,9 +1824,9 @@ def update_stay_occupants_endpoint(
     _scoped_property(db, actor, assignment.unit.property_id, property_scope)
     if assignment.status != AssignmentStatus.CHECKED_IN.value or not assignment.stay_record:
         raise ConflictError("Occupants can only be updated for an active checked-in stay")
-    if len(payload.occupants) > assignment.unit.capacity:
+    if len(payload.occupants) + 1 > assignment.unit.capacity:
         raise BadRequestError(
-            f"This unit can have at most {assignment.unit.capacity} occupant(s)",
+            f"This unit can have at most {assignment.unit.capacity} guest(s), including the primary customer",
             code="OCCUPANT_CAPACITY_EXCEEDED",
         )
 
@@ -1272,9 +1837,50 @@ def update_stay_occupants_endpoint(
     if any(occupant_id not in existing_by_id for occupant_id in submitted_ids):
         raise BadRequestError("One or more occupants do not belong to this stay")
 
+    profiles = get_owned_occupant_profiles(
+        db,
+        assignment.user_id,
+        [
+            occupant.profile_id
+            for occupant in payload.occupants
+            if occupant.profile_id
+        ],
+    )
+    profiles_by_id = {profile.id: profile for profile in profiles}
     updated_occupants: list[StayOccupant] = []
     for submitted in payload.occupants:
         existing = existing_by_id.get(submitted.id) if submitted.id else None
+        if submitted.profile_id:
+            profile = profiles_by_id[submitted.profile_id]
+            guest_user = get_or_create_guest_account_from_profile(
+                db, profile, assignment.unit.property_id
+            )
+            if guest_user.id == assignment.user_id:
+                raise BadRequestError(
+                    "The main guest cannot also be listed as an additional guest",
+                    code="DUPLICATE_STAY_OCCUPANT",
+                )
+            profile_snapshot = stay_occupant_from_profile(
+                profile, assignment.stay_record, guest_user.id
+            )
+            occupant = existing or profile_snapshot
+            occupant.guest_user_id = guest_user.id
+            occupant.profile_id = profile.id
+            occupant.full_name = profile_snapshot.full_name
+            occupant.date_of_birth = profile_snapshot.date_of_birth
+            occupant.age = profile_snapshot.age
+            occupant.gender = profile_snapshot.gender
+            occupant.email = profile_snapshot.email
+            occupant.phone = profile_snapshot.phone
+            occupant.permanent_address = profile_snapshot.permanent_address
+            occupant.id_document_type = profile_snapshot.id_document_type
+            occupant.id_document_number_encrypted = (
+                profile_snapshot.id_document_number_encrypted
+            )
+            occupant.id_document_last4 = profile_snapshot.id_document_last4
+            updated_occupants.append(occupant)
+            continue
+
         document_type = submitted.id_document_type or (
             existing.id_document_type if existing else None
         )
@@ -1296,6 +1902,7 @@ def update_stay_occupants_endpoint(
         occupant = existing or StayOccupant(stay_record=assignment.stay_record)
         occupant.full_name = submitted.full_name
         occupant.date_of_birth = submitted.date_of_birth
+        occupant.age = submitted.age
         occupant.gender = submitted.gender
         occupant.email = submitted.email
         occupant.phone = submitted.phone
@@ -1303,10 +1910,18 @@ def update_stay_occupants_endpoint(
         occupant.id_document_type = document_type
         occupant.id_document_number_encrypted = encrypted_document
         occupant.id_document_last4 = document_last4
+        if not existing:
+            db.add(occupant)
+        sync_profile_from_stay_occupant(
+            db,
+            assignment.user_id,
+            occupant,
+            document_number,
+        )
         updated_occupants.append(occupant)
 
     assignment.stay_record.additional_guests = updated_occupants
-    assignment.stay_record.guest_count = max(1, len(updated_occupants))
+    assignment.stay_record.guest_count = 1 + len(updated_occupants)
     write_audit_log(
         db,
         action="STAY_OCCUPANTS_UPDATED",
@@ -1731,6 +2346,14 @@ def update_unit_status_endpoint(
     if unit.type == UnitType.ROOM.value and any(child.status == UnitStatus.OCCUPIED.value for child in unit.children):
         raise BadRequestError("A room with occupied beds cannot have its status changed", code="INVALID_TRANSITION")
     before = unit.status
+    if (
+        payload.status == UnitStatus.AVAILABLE
+        and has_open_unit_assignment(db, {unit.id})
+    ):
+        raise ConflictError(
+            "A unit with an active or reserved assignment cannot be marked available",
+            code="UNIT_ALREADY_ASSIGNED",
+        )
     if before == payload.status.value:
         return _unit_response(unit, reveal_internal=True)
     unit.status = payload.status.value
